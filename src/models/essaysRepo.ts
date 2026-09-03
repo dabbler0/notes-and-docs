@@ -106,10 +106,10 @@ export async function revertToVersion(node: EssayNode, versionId: string): Promi
   await saveNode(node)
 }
 
-export async function addComment(node: EssayNode, versionId: string, anchorText: string, body: string): Promise<Comment> {
+export async function addComment(node: EssayNode, versionId: string, anchorText: string, body: string, commentId?: string): Promise<Comment> {
   const version = node.versions.find((v) => v.id === versionId)
   if (!version) throw new Error('version not found')
-  const comment: Comment = { id: id(), anchorText, body, resolved: false, createdAt: Date.now() }
+  const comment: Comment = { id: commentId ?? id(), anchorText, body, resolved: false, createdAt: Date.now() }
   version.comments.push(comment)
   await saveNode(node)
   return comment

@@ -1,4 +1,5 @@
-import type { BibtexEntry } from '../models/types'
+import type { BibtexEntry, Source } from '../models/types'
+import { escapeAttr } from './html'
 
 /**
  * Small, permissive BibTeX parser: supports `{ }` and `" "` delimited field
@@ -133,4 +134,20 @@ export function displayAuthors(entry: BibtexEntry): string {
 
 export function emptyEntry(key: string): BibtexEntry {
   return { type: 'article', key, fields: {} }
+}
+
+/**
+ * The inline citation chip inserted by "Cite," "Quote from PDF," and "Link
+ * to source": a `<cite>` when the source has no URL to point at, or an
+ * `<a>` wearing the same `.citation` styling when it does — either way
+ * tagged `data-source-id` so export and citation-picking can find the
+ * source it points to.
+ */
+export function citationHtml(source: Source, opts: { page?: number } = {}): string {
+  const label = citationLabel(source.bibtex) + (opts.page ? `, p. ${opts.page}` : '')
+  const url = source.bibtex.fields.url
+  if (url) {
+    return `<a class="citation" data-source-id="${source.id}" href="${escapeAttr(url)}" target="_blank" rel="noopener noreferrer">${label}</a>`
+  }
+  return `<cite class="citation" data-source-id="${source.id}">${label}</cite>`
 }

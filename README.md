@@ -37,8 +37,10 @@ npm run build:onefile  # produces dist/index.html: everything inlined, open it f
 - `src/lib/` — BibTeX parsing, PDF text extraction/rendering (pdf.js), DOM
   Range helpers used by the editor's citation/quote/split actions,
   `childMarkers.ts` (how a node's content embeds its subsections — see
-  below), and `treeNumbering.ts` ("Section 2.3.1"-style placeholder titles
-  for newly split-off sections).
+  below), `treeNumbering.ts` ("Section 2.3.1"-style placeholder titles for
+  newly split-off sections), and `export.ts` (Markdown/LaTeX conversion for
+  the export dialog — see below; the LaTeX path is zipped up with the
+  `jszip` package, the one runtime dependency added purely for export).
 - `src/components/sources/` and `src/components/essays/` — the UI.
   `EssayWorkspace.tsx` is the whole document: a sticky toolbar acting on
   "whichever section currently has the cursor," plus a recursive
@@ -120,6 +122,53 @@ Commenting itself happens in a small popover anchored right under the
 selection (`.comment-widget` in `EssayWorkspace.tsx`) rather than a modal,
 so the document stays visible and in place behind it; clicking anywhere
 outside the widget or pressing Escape dismisses it without commenting.
+
+Once added, a comment shows up in the margin to the right of the document,
+vertically aligned with its own `<mark class="comment-anchor" data-comment-id>`
+in the text — like Google Docs — rather than in a flat, unordered list
+(`CommentsPanel.tsx`). That column doesn't scroll on its own: it's a
+fixed-height window over a tall inner canvas shifted up by the *document's*
+own scroll offset, so a card tracks its anchor as the document scrolls
+without the two ever needing to share one scrolling element. Cards that
+would overlap (two comments anchored close together) get pushed down just
+enough to stay legible, closest-anchor-first. Adding a comment wraps its
+anchor text in a `<mark>` right there in the draft, which would normally
+read as an unsaved change against the version comment mode just froze —
+that's folded straight back into the same version's own content instead of
+triggering *another* freeze (and a fresh version) the next time a comment
+gets added in that section, since an anchor mark is metadata about where a
+comment points, not a new revision of the prose.
+
+**Linking to a source.** "🔗 Link to source" wraps the current selection
+(or, with nothing selected, the source's own title) in a real hyperlink to
+that source's URL — picked from the same source-search dialog citations
+use, filtered down to sources that actually have one — and always tacks on
+a citation right after it, so a reader can tell which source a bare link
+points to without following it. A source's URL is one of the optional
+fields (alongside DOI, journal/venue, and a note) in the "Add a source"
+dialog's manual-entry fields; when a source has a URL, its citation chip
+becomes a real link to it too (`citationHtml()` in `lib/bibtex.ts`) instead
+of the inert `<cite>` used when there's nowhere to send you.
+
+**Exporting a draft.** The topbar's "⬇ Export" opens a dialog with three
+paths (`lib/export.ts`, `ExportDialog.tsx`), all walking the node tree the
+same way the editor renders it — `parseSegments()` on each node's own
+`draftContent`, recursing into embedded children in document order — so
+what's exported matches what's on screen rather than some separately
+versioned snapshot:
+- **Markdown** — headings by depth, bold/italic, links, and blockquotes;
+  citations keep their plain visible label text rather than becoming
+  footnotes.
+- **PDF** — the exact same Markdown, rendered back to a printable HTML
+  page in a new tab, which then opens the browser's own print dialog;
+  "Save as PDF" there is the actual PDF-generation step, so this needs no
+  PDF-writing library of its own.
+- **LaTeX project** — a `main.tex` using `\section`/`\subsection`/
+  `\subsubsection` and, past that depth, `\paragraph`/`\subparagraph`, with
+  citations rendered as `\cite` or `\footcite` (a dialog toggle — the
+  latter switches the preamble to `biblatex`/`\printbibliography` instead
+  of `natbib`/`\bibliography`) plus a `references.bib` built from exactly
+  the sources actually cited in the essay, zipped together with JSZip.
 
 **Making a new version.** Clicking a section's version pill (`vN`) is a
 single explicit action, not a dialog: it freezes the current text into a

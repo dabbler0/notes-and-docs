@@ -10,6 +10,10 @@ export function AddSourceDialog({ onClose, onCreated }: { onClose: () => void; o
   const [manualTitle, setManualTitle] = useState('')
   const [manualAuthor, setManualAuthor] = useState('')
   const [manualYear, setManualYear] = useState('')
+  const [manualUrl, setManualUrl] = useState('')
+  const [manualDoi, setManualDoi] = useState('')
+  const [manualJournal, setManualJournal] = useState('')
+  const [manualNote, setManualNote] = useState('')
   const [comment, setComment] = useState('')
   const [file, setFile] = useState<File | null>(null)
   const [busy, setBusy] = useState(false)
@@ -29,6 +33,10 @@ export function AddSourceDialog({ onClose, onCreated }: { onClose: () => void; o
         if (manualTitle) entry.fields.title = manualTitle
         if (manualAuthor) entry.fields.author = manualAuthor
         if (manualYear) entry.fields.year = manualYear
+        if (manualUrl) entry.fields.url = manualUrl
+        if (manualDoi) entry.fields.doi = manualDoi
+        if (manualJournal) entry.fields.journal = manualJournal
+        if (manualNote) entry.fields.note = manualNote
       }
 
       let pageTexts: string[] = []
@@ -74,6 +82,24 @@ export function AddSourceDialog({ onClose, onCreated }: { onClose: () => void; o
             <div className="field">
               <label>Author(s) — separate with " and "</label>
               <input value={manualAuthor} onInput={(e) => setManualAuthor((e.target as HTMLInputElement).value)} />
+            </div>
+            <div className="field-row">
+              <div className="field">
+                <label>URL (optional)</label>
+                <input placeholder="https://…" value={manualUrl} onInput={(e) => setManualUrl((e.target as HTMLInputElement).value)} />
+              </div>
+              <div className="field">
+                <label>DOI (optional)</label>
+                <input value={manualDoi} onInput={(e) => setManualDoi((e.target as HTMLInputElement).value)} />
+              </div>
+            </div>
+            <div className="field">
+              <label>Journal / venue (optional)</label>
+              <input value={manualJournal} onInput={(e) => setManualJournal((e.target as HTMLInputElement).value)} />
+            </div>
+            <div className="field">
+              <label>Note (optional)</label>
+              <input value={manualNote} onInput={(e) => setManualNote((e.target as HTMLInputElement).value)} />
             </div>
           </>
         )}

@@ -1,7 +1,9 @@
 import { useEffect, useRef, useState } from 'preact/hooks'
 import { commitNewVersion, createChildNode, addComment, getEssay, getNode, headVersion, loadNodeMap, moveNode, saveEssay, saveNode } from '../../models/essaysRepo'
-import { citationLabel } from '../../lib/bibtex'
+import { citationHtml, displayTitle } from '../../lib/bibtex'
 import { extractAroundRange, insertHtmlAtRange } from '../../lib/selection'
+import { escapeAttr, escapeHtml } from '../../lib/html'
+import { id } from '../../lib/id'
 import { buildParentMap, isPlaceholderTitle, placeholderTitle } from '../../lib/treeNumbering'
 import { getChildIds, reconstructContent, markerHtml, type MarkerPlacement } from '../../lib/childMarkers'
 import type { Essay, EssayNode, Source } from '../../models/types'
@@ -10,6 +12,7 @@ import { NodeTree } from './NodeTree'
 import { CommentsPanel } from './CommentsPanel'
 import { CitationPickerDialog } from './CitationPickerDialog'
 import { QuoteInsertDialog } from './QuoteInsertDialog'
+import { ExportDialog } from './ExportDialog'
 
 /**
  * The whole essay as one continuous, scrollable document: every section's
@@ -28,6 +31,8 @@ export function EssayWorkspace({ essayId, onBack }: { essayId: string; onBack: (
   const [showComments, setShowComments] = useState(true)
   const [showCitation, setShowCitation] = useState(false)
   const [showQuote, setShowQuote] = useState(false)
+  const [showLink, setShowLink] = useState(false)
+  const [showExport, setShowExport] = useState(false)
   const [pendingComment, setPendingComment] = useState<{ nodeId: string; range: Range; text: string; anchorRect: { top: number; bottom: number; left: number; right: number } } | null>(null)
   const commentWidgetRef = useRef<HTMLDivElement>(null)
   const [focusTitleId, setFocusTitleId] = useState<string | null>(null)
@@ -35,6 +40,7 @@ export function EssayWorkspace({ essayId, onBack }: { essayId: string; onBack: (
   const activeNodeId = useRef<string | null>(null)
   const activeEditorEl = useRef<HTMLDivElement | null>(null)
   const savedRange = useRef<Range | null>(null)
+  const docScrollRef = useRef<HTMLDivElement>(null)
 
   async function reload() {
     const e = await getEssay(essayId)
@@ -113,7 +119,7 @@ export function EssayWorkspace({ essayId, onBack }: { essayId: string; onBack: (
     const node = activeNode()
     if (!range || !el || !node) return
     el.focus()
-    insertHtmlAtRange(range, `<cite class="citation" data-source-id="${source.id}">${citationLabel(source.bibtex)}</cite>&nbsp;`)
+    insertHtmlAtRange(range, `${citationHtml(source)}&nbsp;`)
     await persistActiveNode(node)
     reload()
   }
@@ -125,7 +131,33 @@ export function EssayWorkspace({ essayId, onBack }: { essayId: string; onBack: (
     const node = activeNode()
     if (!range || !el || !node) return
     el.focus()
-    const html = `<blockquote class="quote" data-source-id="${source.id}" data-page="${page}">${escapeHtml(quote)}</blockquote><p><cite class="citation" data-source-id="${source.id}">${citationLabel(source.bibtex)}, p. ${page}</cite></p>`
+    const html = `<blockquote class="quote" data-source-id="${source.id}" data-page="${page}">${escapeHtml(quote)}</blockquote><p>${citationHtml(source, { page })}</p>`
+    insertHtmlAtRange(range, html)
+    await persistActiveNode(node)
+    reload()
+  }
+
+  /**
+   * The "Link to source" tool: wraps the current selection (or, with
+   * nothing selected, the source's own title) in a real hyperlink to that
+   * source's URL, then — per the same rule a citation follows a quote —
+   * always tacks on a citation right after it, so a reader can tell which
+   * source a bare link actually points to without having to visit it.
+   */
+  async function insertSourceLink(source: Source) {
+    setShowLink(false)
+    const range = savedRange.current
+    const el = activeEditorEl.current
+    const node = activeNode()
+    if (!range || !el || !node) return
+    const url = source.bibtex.fields.url
+    if (!url) {
+      alert('This source has no URL — add one from the Sources tab, or pick a different source.')
+      return
+    }
+    el.focus()
+    const linkText = range.collapsed ? displayTitle(source.bibtex) : range.toString()
+    const html = `<a class="source-link" data-source-id="${source.id}" href="${escapeAttr(url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(linkText)}</a>&nbsp;${citationHtml(source)}&nbsp;`
     insertHtmlAtRange(range, html)
     await persistActiveNode(node)
     reload()
@@ -175,9 +207,14 @@ export function EssayWorkspace({ essayId, onBack }: { essayId: string; onBack: (
     if (!pendingComment) return
     const node = nodeMap.get(pendingComment.nodeId)
     if (!node) return
+    // Generated up front so the mark can carry it — that id is how the
+    // margin view finds *this* comment's own anchor in the DOM afterward,
+    // rather than just the nearest one.
+    const commentId = id()
     try {
       const mark = document.createElement('mark')
       mark.className = 'comment-anchor'
+      mark.dataset.commentId = commentId
       const contents = pendingComment.range.extractContents()
       mark.appendChild(contents)
       pendingComment.range.insertNode(mark)
@@ -185,7 +222,16 @@ export function EssayWorkspace({ essayId, onBack }: { essayId: string; onBack: (
     } catch {
       /* fall back to just recording the comment without an inline mark */
     }
-    await addComment(node, headVersion(node).id, pendingComment.text, body)
+    // Comment mode already froze this section into a version before the
+    // widget opened, but wrapping the anchor text in a <mark> just now
+    // changed the draft again — fold that straight back into the same
+    // version's own content rather than leaving it "dirty," so it isn't
+    // mistaken for unsaved prose that needs *another* freeze (and a fresh
+    // version) the next time a comment gets added here. A comment's anchor
+    // mark is metadata about where the comment points, not a new revision.
+    const head = headVersion(node)
+    head.content = node.draftContent
+    await addComment(node, head.id, pendingComment.text, body, commentId)
     setPendingComment(null)
     reload()
   }
@@ -272,6 +318,9 @@ export function EssayWorkspace({ essayId, onBack }: { essayId: string; onBack: (
           onBlur={saveEssayTitle}
           style={{ border: 'none', outline: 'none', background: 'transparent', fontSize: 16, fontWeight: 700, flex: 1 }}
         />
+        <button className="btn btn-ghost btn-sm" onClick={() => setShowExport(true)}>
+          ⬇ Export
+        </button>
       </div>
 
       <div className="workspace">
@@ -316,6 +365,16 @@ export function EssayWorkspace({ essayId, onBack }: { essayId: string; onBack: (
             >
               “ ” Quote from PDF
             </button>
+            <button
+              className="btn btn-sm"
+              onMouseDown={(e) => {
+                e.preventDefault()
+                captureRange()
+              }}
+              onClick={() => setShowLink(true)}
+            >
+              🔗 Link to source
+            </button>
             <button className="btn btn-sm" onClick={beginSplit}>
               ✂ Split into subsection
             </button>
@@ -325,7 +384,7 @@ export function EssayWorkspace({ essayId, onBack }: { essayId: string; onBack: (
             <div className="spacer" />
           </div>
 
-          <div className="editor-scroll doc-scroll" onMouseUp={handleMouseUpForComments}>
+          <div className="editor-scroll doc-scroll" ref={docScrollRef} onMouseUp={handleMouseUpForComments}>
             <SectionBlock
               node={rootNode}
               nodeMap={nodeMap}
@@ -347,7 +406,7 @@ export function EssayWorkspace({ essayId, onBack }: { essayId: string; onBack: (
             <button className="panel-edge-toggle right" onClick={() => setShowComments(false)} title="Collapse comments">
               ›
             </button>
-            <CommentsPanel nodeMap={nodeMap} onChanged={reload} />
+            <CommentsPanel nodeMap={nodeMap} onChanged={reload} scrollRef={docScrollRef} />
           </div>
         ) : (
           <button className="panel-edge-tab right" onClick={() => setShowComments(true)} title="Show comments">
@@ -369,6 +428,8 @@ export function EssayWorkspace({ essayId, onBack }: { essayId: string; onBack: (
 
       {showCitation && <CitationPickerDialog onClose={() => setShowCitation(false)} onSelect={insertCitation} />}
       {showQuote && <QuoteInsertDialog onClose={() => setShowQuote(false)} onInsert={insertQuote} />}
+      {showLink && <CitationPickerDialog title="Link to a source" requireUrl onClose={() => setShowLink(false)} onSelect={insertSourceLink} />}
+      {showExport && <ExportDialog essay={essay} nodeMap={nodeMap} onClose={() => setShowExport(false)} />}
     </div>
   )
 }
@@ -423,10 +484,4 @@ function commentWidgetStyle(rect: { top: number; bottom: number; left: number; r
     style.top = `${rect.bottom + 8}px`
   }
   return style
-}
-
-function escapeHtml(s: string): string {
-  const div = document.createElement('div')
-  div.textContent = s
-  return div.innerHTML
 }
