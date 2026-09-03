@@ -74,11 +74,13 @@ function rangeOuterHtml(range: Range): string {
 
 /**
  * Rebuilds a node's stored content string by walking its *live* rendered
- * DOM (found via `[data-node-id]` + the `.section-body` wrapper below it) —
- * every `.node-content` shard contributes its current (possibly just-
- * edited) innerHTML, and every nested `.section-block` contributes a fresh
- * marker for that child. Two optional edits can be folded in at the same
- * time, so a single DOM read stays the source of truth for the save:
+ * DOM (found via `[data-node-id]` + the `.live-pane .section-body` wrapper
+ * below it — `.live-pane` is always present, comparing-versions or not, so
+ * this doesn't care which mode the section is in) — every `.node-content`
+ * shard contributes its current (possibly just-edited) innerHTML, and every
+ * nested `.section-block` contributes a fresh marker for that child. Two
+ * optional edits can be folded in at the same time, so a single DOM read
+ * stays the source of truth for the save:
  *  - `replace`: substitute a specific child's marker with different HTML
  *    outright (used by "demote", which inlines the child's own text).
  *  - `insertAfter`: splice extra HTML in right after a given live element
@@ -90,7 +92,7 @@ function rangeOuterHtml(range: Range): string {
  */
 export function reconstructContent(nodeId: string, opts?: { replace?: Map<string, string>; insertAfter?: { el: Element; html: string } }): string | null {
   const root = document.querySelector(`[data-node-id="${cssEscape(nodeId)}"]`)
-  const wrapper = root?.querySelector(':scope > .section-body')
+  const wrapper = root?.querySelector(':scope > .section-content-row > .live-pane > .section-body')
   if (!wrapper) return null
   const parts: string[] = []
   for (const child of Array.from(wrapper.children)) {
@@ -105,6 +107,26 @@ export function reconstructContent(nodeId: string, opts?: { replace?: Map<string
     }
   }
   return parts.join('')
+}
+
+/**
+ * For a *frozen* version being shown for reference (not live-editable):
+ * swaps each subsection marker for a small readable chip naming that
+ * section, instead of an invisible empty div or (worse) silently
+ * rendering that child's current live content as if it were part of this
+ * historical snapshot.
+ */
+export function withChildLabels(html: string, nodeMap: Map<string, { title: string }>): string {
+  const doc = new DOMParser().parseFromString(html || '', 'text/html')
+  doc.querySelectorAll('[data-child-id]').forEach((el) => {
+    const childId = el.getAttribute('data-child-id')!
+    const title = nodeMap.get(childId)?.title ?? 'Untitled section'
+    const span = doc.createElement('span')
+    span.className = 'child-embed-chip'
+    span.textContent = `→ ${title}`
+    el.replaceWith(span)
+  })
+  return doc.body.innerHTML
 }
 
 function cssEscape(s: string): string {

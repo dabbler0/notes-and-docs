@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks'
-import { deleteNodeOnly, headVersion, saveNode } from '../../models/essaysRepo'
-import { parseSegments, reconstructContent } from '../../lib/childMarkers'
-import type { EssayNode } from '../../models/types'
+import { commitNewVersion, deleteNodeOnly, headVersion, revertToVersion, saveNode } from '../../models/essaysRepo'
+import { parseSegments, reconstructContent, withChildLabels } from '../../lib/childMarkers'
+import type { EssayNode, NodeVersion } from '../../models/types'
 
 const HEADING_SIZES = [21, 18, 16.5, 15, 14.5]
 function headingSize(depth: number) {
@@ -17,7 +17,6 @@ export function SectionBlock({
   onToggleCollapse,
   onActivate,
   onCaptureRange,
-  onOpenVersions,
   onDemote,
   onTitleChanged,
   focusTitleId,
@@ -31,7 +30,6 @@ export function SectionBlock({
   onToggleCollapse: (id: string) => void
   onActivate: (nodeId: string, el: HTMLDivElement) => void
   onCaptureRange: () => void
-  onOpenVersions: (nodeId: string) => void
   /** Present only when this block is someone's child — collapses it back into that parent's own text. */
   onDemote?: () => void
   onTitleChanged: () => void
@@ -44,6 +42,12 @@ export function SectionBlock({
   const [title, setTitle] = useState(node.title)
   const head = headVersion(node)
   const [dirty, setDirty] = useState(node.draftContent !== head.content)
+  // Set right after clicking the version number: the id of the version we
+  // just froze the old content into, which the editor now shows side by
+  // side with this node's (freshly emptied) live editing surface. Local UI
+  // state only — closing it just stops showing the comparison, it doesn't
+  // change any data.
+  const [comparingVersionId, setComparingVersionId] = useState<string | null>(null)
 
   // Recomputed whenever the node's own saved content changes (switching to
   // a different node, or an external mutation like a version revert). Not
@@ -65,6 +69,10 @@ export function SectionBlock({
   useEffect(() => {
     setTitle(node.title)
   }, [node.id, node.title])
+
+  useEffect(() => {
+    setComparingVersionId(null)
+  }, [node.id])
 
   // Push the freshly-parsed segments' text into their shard DOM elements,
   // but only when the node's saved content actually changed underneath us
@@ -145,7 +153,72 @@ export function SectionBlock({
     onTitleChanged()
   }
 
+  /**
+   * "Make a new version": freezes whatever's here right now, then clears
+   * the node so there's a blank page to write the new version on — with
+   * the just-frozen one kept in view alongside it, not tucked behind a
+   * history list, for as long as that's useful. This orphans any current
+   * subsections (their markers were part of the text that just got
+   * cleared) until/unless the frozen version is reverted to; they aren't
+   * deleted, just unreferenced in the meantime.
+   */
+  async function handleMakeNewVersion() {
+    window.clearTimeout(saveTimer.current)
+    const html = reconstructContent(node.id) ?? node.draftContent
+    node.draftContent = html
+    const frozen = await commitNewVersion(node)
+    node.draftContent = ''
+    await saveNode(node)
+    setComparingVersionId(frozen.id)
+    onTitleChanged()
+  }
+
+  async function handleRevertToComparing() {
+    if (!comparingVersionId) return
+    await revertToVersion(node, comparingVersionId)
+    setComparingVersionId(null)
+    onTitleChanged()
+  }
+
   const openComments = head.comments.filter((c) => !c.resolved).length
+  const comparingVersion: NodeVersion | undefined = comparingVersionId ? node.versions.find((v) => v.id === comparingVersionId) : undefined
+
+  const liveEditor = (
+    <div className="section-body" ref={wrapperRef} hidden={isCollapsed}>
+      {segments.map((seg, i) =>
+        seg.kind === 'text' ? (
+          <div
+            key={`text-${i}`}
+            className={`node-content${isRoot ? '' : ' leaf-outline'}`}
+            contentEditable
+            onFocus={(e) => onActivate(node.id, e.currentTarget as HTMLDivElement)}
+            onMouseUp={(e) => {
+              onActivate(node.id, e.currentTarget as HTMLDivElement)
+              onCaptureRange()
+            }}
+            onInput={handleShardInput}
+            onKeyUp={onCaptureRange}
+          />
+        ) : nodeMap.has(seg.childId) ? (
+          <SectionBlock
+            key={seg.childId}
+            node={nodeMap.get(seg.childId)!}
+            nodeMap={nodeMap}
+            depth={depth + 1}
+            isRoot={false}
+            collapsed={collapsed}
+            onToggleCollapse={onToggleCollapse}
+            onActivate={onActivate}
+            onCaptureRange={onCaptureRange}
+            onDemote={() => demoteChild(seg.childId)}
+            onTitleChanged={onTitleChanged}
+            focusTitleId={focusTitleId}
+            onTitleFocused={onTitleFocused}
+          />
+        ) : null,
+      )}
+    </div>
+  )
 
   return (
     <div className="section-block" style={{ paddingLeft: Math.min(depth, 6) * 16 }} data-node-id={node.id}>
@@ -156,7 +229,7 @@ export function SectionBlock({
         <div className="section-header root-header">
           <span style={{ flex: 1 }} />
           {dirty && <span className="version-pill">unsaved</span>}
-          <button className="version-pill version-pill-btn" onClick={() => onOpenVersions(node.id)}>
+          <button className="version-pill version-pill-btn" onClick={handleMakeNewVersion} title="Make a new version: freezes the current text and starts a blank one, side by side">
             v{node.versions.length}
           </button>
           {openComments > 0 && <span className="chip comment-count-chip">💬 {openComments}</span>}
@@ -175,7 +248,7 @@ export function SectionBlock({
             onBlur={saveTitle}
           />
           {dirty && <span className="version-pill">unsaved</span>}
-          <button className="version-pill version-pill-btn" onClick={() => onOpenVersions(node.id)}>
+          <button className="version-pill version-pill-btn" onClick={handleMakeNewVersion} title="Make a new version: freezes the current text and starts a blank one, side by side">
             v{node.versions.length}
           </button>
           {openComments > 0 && <span className="chip comment-count-chip">💬 {openComments}</span>}
@@ -187,43 +260,51 @@ export function SectionBlock({
         </div>
       )}
 
-      {/* Hidden (not unmounted) on collapse, so the live editable DOM — and
-          whatever the user typed into it — survives being folded away. */}
-      <div className="section-body" ref={wrapperRef} hidden={isCollapsed}>
-        {segments.map((seg, i) =>
-          seg.kind === 'text' ? (
-            <div
-              key={`text-${i}`}
-              className={`node-content${isRoot ? '' : ' leaf-outline'}`}
-              contentEditable
-              onFocus={(e) => onActivate(node.id, e.currentTarget as HTMLDivElement)}
-              onMouseUp={(e) => {
-                onActivate(node.id, e.currentTarget as HTMLDivElement)
-                onCaptureRange()
-              }}
-              onInput={handleShardInput}
-              onKeyUp={onCaptureRange}
-            />
-          ) : nodeMap.has(seg.childId) ? (
-            <SectionBlock
-              key={seg.childId}
-              node={nodeMap.get(seg.childId)!}
-              nodeMap={nodeMap}
-              depth={depth + 1}
-              isRoot={false}
-              collapsed={collapsed}
-              onToggleCollapse={onToggleCollapse}
-              onActivate={onActivate}
-              onCaptureRange={onCaptureRange}
-              onOpenVersions={onOpenVersions}
-              onDemote={() => demoteChild(seg.childId)}
-              onTitleChanged={onTitleChanged}
-              focusTitleId={focusTitleId}
-              onTitleFocused={onTitleFocused}
-            />
-          ) : null,
-        )}
+      {/* `.section-content-row` and the "live" pane inside it are always
+          *mounted* at the same position with the same key, comparing or
+          collapsed or not — only the `hidden` attribute and the "frozen"
+          pane's presence toggle. Unmounting this on collapse (like the
+          "frozen" pane can safely do) would tear down the live editable
+          DOM too, silently discarding whatever the user had just typed but
+          not yet saved; conditionally *nesting* the live editor deeper
+          (rather than just adding a sibling next to it) has the same
+          failure mode, since Preact remounts anything moved to a different
+          parent. */}
+      <div className={`section-content-row${comparingVersion ? ' comparing' : ''}`} hidden={isCollapsed}>
+          {comparingVersion && (
+            <div className="version-split-pane" key="frozen">
+              <div className="version-split-label">Previous version — {new Date(comparingVersion.createdAt).toLocaleString()}</div>
+              <div
+                className={`node-content version-split-frozen${isRoot ? '' : ' leaf-outline'}`}
+                dangerouslySetInnerHTML={{ __html: withChildLabels(comparingVersion.content, nodeMap) || '<span class="muted">(empty)</span>' }}
+              />
+              {comparingVersion.comments.length > 0 && (
+                <div className="version-split-comments">
+                  {comparingVersion.comments.map((c) => (
+                    <div className={`comment-item${c.resolved ? ' resolved' : ''}`} key={c.id}>
+                      <div className="anchor">“{c.anchorText}”</div>
+                      {c.body}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+          <div className="version-split-pane live-pane" key="live">
+            {comparingVersion && <div className="version-split-label">New version — editing</div>}
+            {liveEditor}
+          </div>
       </div>
+      {!isCollapsed && comparingVersion && (
+        <div className="version-split-actions">
+          <button className="btn btn-sm btn-danger" onClick={handleRevertToComparing}>
+            ↺ Revert to previous version
+          </button>
+          <button className="btn btn-sm btn-primary" onClick={() => setComparingVersionId(null)}>
+            ✓ Done comparing
+          </button>
+        </div>
+      )}
     </div>
   )
 }

@@ -10,7 +10,6 @@ import { NodeTree } from './NodeTree'
 import { CommentsPanel } from './CommentsPanel'
 import { CitationPickerDialog } from './CitationPickerDialog'
 import { QuoteInsertDialog } from './QuoteInsertDialog'
-import { VersionDialog } from './VersionDialog'
 
 /**
  * The whole essay as one continuous, scrollable document: every section's
@@ -28,7 +27,6 @@ export function EssayWorkspace({ essayId, onBack }: { essayId: string; onBack: (
   const [showComments, setShowComments] = useState(true)
   const [showCitation, setShowCitation] = useState(false)
   const [showQuote, setShowQuote] = useState(false)
-  const [showVersionsFor, setShowVersionsFor] = useState<string | null>(null)
   const [pendingComment, setPendingComment] = useState<{ nodeId: string; range: Range; text: string } | null>(null)
   const [focusTitleId, setFocusTitleId] = useState<string | null>(null)
 
@@ -227,8 +225,6 @@ export function EssayWorkspace({ essayId, onBack }: { essayId: string; onBack: (
   const rootNode = essay ? nodeMap.get(essay.rootNodeId) : undefined
   if (!essay || !rootNode) return <div className="page-pad">Loading…</div>
 
-  const versionNode = showVersionsFor ? nodeMap.get(showVersionsFor) : null
-
   return (
     <div>
       <div className="topbar" style={{ borderBottom: '1px solid var(--border)', padding: '10px 20px' }}>
@@ -296,7 +292,6 @@ export function EssayWorkspace({ essayId, onBack }: { essayId: string; onBack: (
               onToggleCollapse={toggleCollapse}
               onActivate={onActivate}
               onCaptureRange={captureRange}
-              onOpenVersions={setShowVersionsFor}
               onTitleChanged={reload}
               focusTitleId={focusTitleId}
               onTitleFocused={() => setFocusTitleId(null)}
@@ -319,7 +314,6 @@ export function EssayWorkspace({ essayId, onBack }: { essayId: string; onBack: (
 
       {showCitation && <CitationPickerDialog onClose={() => setShowCitation(false)} onSelect={insertCitation} />}
       {showQuote && <QuoteInsertDialog onClose={() => setShowQuote(false)} onInsert={insertQuote} />}
-      {versionNode && <VersionDialog node={versionNode} nodeMap={nodeMap} onClose={() => setShowVersionsFor(null)} onChanged={reload} />}
     </div>
   )
 }

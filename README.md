@@ -110,6 +110,22 @@ no unsaved changes relative to its head version, since a comment is meant
 to anchor to a real, committed version rather than to a state that has no
 version yet.
 
+**Making a new version.** Clicking a section's version pill (`vN`) is a
+single explicit action, not a dialog: it freezes the current text into a
+new version, clears the section back to blank, and opens an inline split
+screen — the whole width the section normally occupies splits into the
+frozen old version on the left (read-only, but with full formatting:
+citations, quotes, embedded-subsection markers shown as named chips) and
+the section's own live, fully-featured editing surface on the right,
+right in the document flow rather than a modal. "Revert to previous
+version" restores the old text (`revertToVersion`, unchanged from before);
+"Done comparing" just stops showing the comparison and keeps whatever's
+been written on the right. Because a subsection is just a marker embedded
+in its parent's text (see above), clearing a section's text also clears
+whatever markers were in it — its subsections become unreferenced (not
+deleted — their own node records and history are untouched) until either
+reverting restores the old markers or new ones get split off the new text.
+
 ## What's stubbed / simplified in this prototype
 
 - The Google Drive backend is an interface skeleton only (see above) —
