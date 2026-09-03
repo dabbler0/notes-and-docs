@@ -7,7 +7,9 @@ document rather than a file tree — with an explicit per-section version
 history, inline commenting, and inline citation/quote insertion.
 
 Runs entirely in the browser — no server, no account. Data lives in
-**IndexedDB** (structured records) and **OPFS** (PDF blobs).
+**IndexedDB**, both structured records and PDF blobs (see the storage note
+below for why blobs aren't in OPFS despite that being the more obvious
+fit).
 
 ## Quick start
 
@@ -22,11 +24,13 @@ npm run build:onefile  # produces dist/index.html: everything inlined, open it f
 
 ## How it's organized
 
-- `src/storage/` — the only layer that touches IndexedDB/OPFS. Everything
-  else talks to the `Backend` interface (`docs` for JSON records, `blobs`
-  for PDFs). `googleDriveBackend.ts` is an unimplemented skeleton showing
-  how a Drive-backed `Backend` would slot in without touching any other
-  module — see the comment at the top of that file.
+- `src/storage/` — the only layer that touches IndexedDB. Everything else
+  talks to the `Backend` interface (`docs` for JSON records, `blobs` for
+  PDFs — both IndexedDB-backed; see the comment on `IndexedDbBlobStore` in
+  `localBackend.ts` for why blobs live there rather than OPFS).
+  `googleDriveBackend.ts` is an unimplemented skeleton showing how a
+  Drive-backed `Backend` would slot in without touching any other module —
+  see the comment at the top of that file.
 - `src/models/` — data types plus repository functions (`sourcesRepo.ts`,
   `essaysRepo.ts`) that implement the actual domain logic on top of the
   storage layer.

@@ -1,8 +1,9 @@
 import type { Backend, BlobStore, DocStore } from './types'
 
 const DB_NAME = 'marginal'
-const DB_VERSION = 1
+const DB_VERSION = 2
 const STORE = 'docs'
+const BLOB_STORE = 'blobs'
 
 function openDb(): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
@@ -11,6 +12,9 @@ function openDb(): Promise<IDBDatabase> {
       const db = req.result
       if (!db.objectStoreNames.contains(STORE)) {
         db.createObjectStore(STORE) // keyed by `${collection}/${id}`
+      }
+      if (!db.objectStoreNames.contains(BLOB_STORE)) {
+        db.createObjectStore(BLOB_STORE) // keyed by blob id
       }
     }
     req.onsuccess = () => resolve(req.result)
@@ -83,63 +87,50 @@ class IndexedDbDocStore implements DocStore {
 }
 
 /**
- * OPFS-backed blob store for PDF files. Falls back to an in-memory Map if
- * OPFS is unavailable (e.g. some browsers' private-browsing modes) so the
- * app degrades instead of crashing.
+ * IndexedDB-backed blob store for PDF files.
+ *
+ * This used to be backed by OPFS, which sounds like the more natural fit
+ * for "a folder of PDF files" — but OPFS turns out to be unreliable in
+ * exactly the kind of sandboxed/embedded browsing context this prototype
+ * often runs in (e.g. published as an embedded artifact): granting access
+ * can silently fail, and the code here fell back to an in-memory Map when
+ * it did, which then quietly loses every PDF on the next page load even
+ * though the rest of the app (IndexedDB-backed) survives fine. IndexedDB
+ * supports storing Blobs directly and has much broader, more consistent
+ * support across embedded/sandboxed contexts, so blobs now live in a
+ * second object store in the same database as everything else — one
+ * storage mechanism for the whole app, and no silent fallback to lose data
+ * to.
  */
-class OpfsBlobStore implements BlobStore {
-  private root: Promise<FileSystemDirectoryHandle | null>
-  private memFallback = new Map<string, Blob>()
-
-  constructor() {
-    this.root = (async () => {
-      try {
-        const opfsRoot = await navigator.storage.getDirectory()
-        return await opfsRoot.getDirectoryHandle('marginal-blobs', { create: true })
-      } catch {
-        return null
-      }
-    })()
-  }
-
-  private fname(id: string) {
-    return `${id}.blob`
-  }
-
+class IndexedDbBlobStore implements BlobStore {
   async put(id: string, blob: Blob): Promise<void> {
-    const dir = await this.root
-    if (!dir) {
-      this.memFallback.set(id, blob)
-      return
-    }
-    const handle = await dir.getFileHandle(this.fname(id), { create: true })
-    const writable = await handle.createWritable()
-    await writable.write(blob)
-    await writable.close()
+    const conn = await db()
+    return new Promise((resolve, reject) => {
+      const tx = conn.transaction(BLOB_STORE, 'readwrite')
+      tx.objectStore(BLOB_STORE).put(blob, id)
+      tx.oncomplete = () => resolve()
+      tx.onerror = () => reject(tx.error)
+    })
   }
 
   async get(id: string): Promise<Blob | undefined> {
-    const dir = await this.root
-    if (!dir) return this.memFallback.get(id)
-    try {
-      const handle = await dir.getFileHandle(this.fname(id))
-      return await handle.getFile()
-    } catch {
-      return undefined
-    }
+    const conn = await db()
+    return new Promise((resolve, reject) => {
+      const tx = conn.transaction(BLOB_STORE, 'readonly')
+      const req = tx.objectStore(BLOB_STORE).get(id)
+      req.onsuccess = () => resolve(req.result as Blob | undefined)
+      req.onerror = () => reject(req.error)
+    })
   }
 
   async delete(id: string): Promise<void> {
-    const dir = await this.root
-    if (!dir) {
-      this.memFallback.delete(id)
-      return
-    }
-    try {
-      await dir.removeEntry(this.fname(id))
-    } catch {
-      /* already gone */
-    }
+    const conn = await db()
+    return new Promise((resolve, reject) => {
+      const tx = conn.transaction(BLOB_STORE, 'readwrite')
+      tx.objectStore(BLOB_STORE).delete(id)
+      tx.oncomplete = () => resolve()
+      tx.onerror = () => reject(tx.error)
+    })
   }
 
   async has(id: string): Promise<boolean> {
@@ -151,6 +142,6 @@ export function createLocalBackend(): Backend {
   return {
     kind: 'local',
     docs: new IndexedDbDocStore(),
-    blobs: new OpfsBlobStore(),
+    blobs: new IndexedDbBlobStore(),
   }
 }
