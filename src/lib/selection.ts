@@ -45,3 +45,30 @@ export function extractRangeHtml(range: Range): string {
 export function plainTextOfRange(range: Range): string {
   return range.toString()
 }
+
+/**
+ * Splits `container`'s current content into (before, selected, after) HTML
+ * strings around `range`, removing the "selected" and "after" pieces from
+ * the live DOM as it goes (used by the "split into subsection" action: the
+ * leftover before/after text needs to become its own section(s) too, since
+ * a node is only meant to keep its own text as long as nobody has carved a
+ * subsection out of it). `container`'s innerHTML holds exactly the "before"
+ * piece once this returns.
+ */
+export function extractAroundRange(container: HTMLElement, range: Range): { before: string; selected: string; after: string } {
+  let after = ''
+  try {
+    if (container.lastChild) {
+      const afterRange = document.createRange()
+      afterRange.setStart(range.endContainer, range.endOffset)
+      afterRange.setEndAfter(container.lastChild)
+      if (!afterRange.collapsed) after = extractRangeHtml(afterRange)
+    }
+  } catch {
+    /* selection already ran to the end of the container */
+  }
+  const selected = extractRangeHtml(range)
+  const before = container.innerHTML
+  container.innerHTML = ''
+  return { before, selected, after }
+}

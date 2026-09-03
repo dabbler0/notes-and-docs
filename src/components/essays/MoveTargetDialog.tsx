@@ -1,6 +1,6 @@
 import { Modal } from '../Modal'
 import type { EssayNode } from '../../models/types'
-import { flattenTree } from './NodeTree'
+import { flattenTree } from '../../lib/treeNumbering'
 
 export function MoveTargetDialog({
   nodeMap,
