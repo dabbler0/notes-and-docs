@@ -1,6 +1,6 @@
 import { backend } from '../storage'
 import { id } from '../lib/id'
-import { getChildIds } from '../lib/childMarkers'
+import { getChildIds, insertMarkerInContent, removeMarkerFromContent, type MarkerPlacement } from '../lib/childMarkers'
 import type { Comment, Essay, EssayNode, NodeVersion } from './types'
 
 const ESSAYS = 'essays'
@@ -132,6 +132,30 @@ export async function setCommentResolved(node: EssayNode, versionId: string, com
  */
 export async function deleteNodeOnly(nodeId: string): Promise<void> {
   await backend.docs.delete(NODES, nodeId)
+}
+
+/**
+ * Moves `nodeId` from being a child of `fromParentId` to `placement` under
+ * `toParentId` (which may be the same node, for a same-parent reorder).
+ * Purely a structural edit — versions and their history are untouched, on
+ * either the moved node or either parent, by design: dragging a section
+ * around is not itself a version-worthy change to anyone's text.
+ */
+export async function moveNode(nodeId: string, fromParentId: string, toParentId: string, placement: MarkerPlacement): Promise<void> {
+  const fromParent = await getNode(fromParentId)
+  if (!fromParent) return
+  const withoutNode = removeMarkerFromContent(fromParent.draftContent, nodeId)
+  if (fromParentId === toParentId) {
+    fromParent.draftContent = insertMarkerInContent(withoutNode, nodeId, placement)
+    await saveNode(fromParent)
+    return
+  }
+  fromParent.draftContent = withoutNode
+  await saveNode(fromParent)
+  const toParent = await getNode(toParentId)
+  if (!toParent) return
+  toParent.draftContent = insertMarkerInContent(toParent.draftContent, nodeId, placement)
+  await saveNode(toParent)
 }
 
 /** Loads the whole node tree for an essay into a flat map, for rendering. */

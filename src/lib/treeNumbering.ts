@@ -40,3 +40,15 @@ export function placeholderTitle(nodeMap: Map<string, EssayNode>, parentMap: Map
 export function isPlaceholderTitle(title: string): boolean {
   return PLACEHOLDER_RE.test(title)
 }
+
+/** True if `candidateId` is `ancestorId` itself or lies anywhere in its subtree — used to reject drag-and-drop moves that would drop a section into itself or one of its own subsections. */
+export function isSelfOrDescendant(nodeMap: Map<string, EssayNode>, ancestorId: string, candidateId: string): boolean {
+  const stack = [ancestorId]
+  while (stack.length) {
+    const id = stack.pop()!
+    if (id === candidateId) return true
+    const node = nodeMap.get(id)
+    if (node) stack.push(...getChildIds(node.draftContent))
+  }
+  return false
+}

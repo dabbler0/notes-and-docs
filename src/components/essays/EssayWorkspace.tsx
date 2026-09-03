@@ -1,11 +1,12 @@
 import { useEffect, useRef, useState } from 'preact/hooks'
-import { createChildNode, addComment, getEssay, getNode, headVersion, loadNodeMap, saveEssay, saveNode } from '../../models/essaysRepo'
+import { createChildNode, addComment, getEssay, getNode, headVersion, loadNodeMap, moveNode, saveEssay, saveNode } from '../../models/essaysRepo'
 import { citationLabel } from '../../lib/bibtex'
 import { extractAroundRange, insertHtmlAtRange } from '../../lib/selection'
 import { buildParentMap, isPlaceholderTitle, placeholderTitle } from '../../lib/treeNumbering'
-import { getChildIds, reconstructContent, markerHtml } from '../../lib/childMarkers'
+import { getChildIds, reconstructContent, markerHtml, type MarkerPlacement } from '../../lib/childMarkers'
 import type { Essay, EssayNode, Source } from '../../models/types'
 import { SectionBlock } from './SectionBlock'
+import { NodeTree } from './NodeTree'
 import { CommentsPanel } from './CommentsPanel'
 import { CitationPickerDialog } from './CitationPickerDialog'
 import { QuoteInsertDialog } from './QuoteInsertDialog'
@@ -159,10 +160,10 @@ export function EssayWorkspace({ essayId, onBack }: { essayId: string; onBack: (
   /**
    * The only way new subsections get created: the current selection is
    * lifted out into a new child node, right where it was — like promoting
-   * a run of text into its own element. Text before the selection stays on
-   * this node; text after it becomes a second new trailing child, since
-   * this node's own text always renders before its children and the tail
-   * can't stay in place without reordering things.
+   * a run of text into its own element. Whatever came before and after the
+   * selection is simply left alone, still this node's own text, now with
+   * the new subsection's marker sitting between the two halves of it (or
+   * before/after all of it, if the selection ran to one end).
    */
   function beginSplit() {
     captureRange()
@@ -173,33 +174,27 @@ export function EssayWorkspace({ essayId, onBack }: { essayId: string; onBack: (
       alert('Click into a section, then select the text you want to split into a subsection.')
       return
     }
+    // "before" and "after" both stay this node's own text — only the
+    // selection itself gets promoted — but they need pulling apart as
+    // separate strings so the new marker can land between them instead of
+    // them silently re-merging into one run with the marker tacked on at
+    // the end of it.
     const { before, selected, after } = extractAroundRange(el, range)
     el.innerHTML = before
     ;(async () => {
-      // Titles get numbered from where the new section(s) actually land,
-      // which can be in the middle of existing children (splitting text
-      // that comes before an earlier subsection) — so create the node(s)
-      // first, splice the markers in, and only then compute each one's
-      // real position for its placeholder title.
       // "Section 0: Untitled" is a throwaway placeholder — it just needs to
       // match isPlaceholderTitle() so the renumbering pass below (which
       // computes the real number from final position) rewrites it.
       const midChild = await createChildNode(essay.id, 'Section 0: Untitled', selected)
-      let afterChildId: string | null = null
-      if (after.trim()) {
-        const afterChild = await createChildNode(essay.id, 'Section 0: Untitled', after)
-        afterChildId = afterChild.id
-      }
 
-      const insertedHtml = markerHtml(midChild.id) + (afterChildId ? markerHtml(afterChildId) : '')
-      const html = reconstructContent(node.id, { insertAfter: { el, html: insertedHtml } })
+      const html = reconstructContent(node.id, { insertAfter: { el, html: markerHtml(midChild.id) + after } })
       if (html != null) {
         node.draftContent = html
         await saveNode(node)
       }
 
       // Number every still-placeholder-titled child by its actual position
-      // (not just the new one(s)) — splitting text that precedes an earlier
+      // (not just the new one) — splitting text that precedes an earlier
       // subsection shifts that subsection along, and a stale "Section 1"
       // sitting next to the new section it displaced would just be
       // confusing. A child the user has already renamed is left alone.
@@ -218,6 +213,15 @@ export function EssayWorkspace({ essayId, onBack }: { essayId: string; onBack: (
       setFocusTitleId(midChild.id)
       reload()
     })()
+  }
+
+  async function handleMove(nodeId: string, fromParentId: string, toParentId: string, placement: MarkerPlacement) {
+    await moveNode(nodeId, fromParentId, toParentId, placement)
+    reload()
+  }
+
+  function scrollToNode(nodeId: string) {
+    document.querySelector(`[data-node-id="${nodeId}"]`)?.scrollIntoView({ behavior: 'smooth', block: 'start' })
   }
 
   const rootNode = essay ? nodeMap.get(essay.rootNodeId) : undefined
@@ -240,6 +244,8 @@ export function EssayWorkspace({ essayId, onBack }: { essayId: string; onBack: (
       </div>
 
       <div className="workspace">
+        <NodeTree nodeMap={nodeMap} rootId={essay.rootNodeId} essayTitle={essayTitle} collapsed={collapsed} onToggleCollapse={toggleCollapse} onScrollTo={scrollToNode} onMove={handleMove} />
+
         <div className="editor-panel">
           <div className="editor-toolbar doc-toolbar">
             <button className="btn btn-sm" onMouseDown={(e) => e.preventDefault()} onClick={() => exec('bold')}>

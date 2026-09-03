@@ -49,11 +49,12 @@ export function plainTextOfRange(range: Range): string {
 /**
  * Splits `container`'s current content into (before, selected, after) HTML
  * strings around `range`, removing the "selected" and "after" pieces from
- * the live DOM as it goes (used by the "split into subsection" action: the
- * leftover before/after text needs to become its own section(s) too, since
- * a node is only meant to keep its own text as long as nobody has carved a
- * subsection out of it). `container`'s innerHTML holds exactly the "before"
- * piece once this returns.
+ * the live DOM as it goes. Used by "split into subsection": the text after
+ * the split point can't just get silently merged back in next to the text
+ * before it — a marker is about to land between them — so the caller needs
+ * "before" and "after" as two separate strings to put back on either side
+ * of it. `container`'s innerHTML holds exactly the "before" piece once this
+ * returns.
  */
 export function extractAroundRange(container: HTMLElement, range: Range): { before: string; selected: string; after: string } {
   // Extract the user's own selection first, while its boundary points are

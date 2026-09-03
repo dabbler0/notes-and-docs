@@ -69,23 +69,39 @@ The live editor never mounts a marker literally — `SectionBlock` parses a
 node's content into a (text, child, text, child, …) sequence and renders
 each text run as its own small `contentEditable` shard with a recursive
 `SectionBlock` for each embedded child mounted in between, in the same
-order they appear in the markup. Saving reverses this: it walks the *live*
-DOM (`reconstructContent` in `childMarkers.ts`) and rebuilds the content
-string from whatever's actually in the shards and which children are
-mounted where — which is also how "split" and "demote" work:
+order they appear in the markup. With nothing collapsed, this is deliberately
+styled to read like one piece of ordinary prose — no placeholder copy, no
+faint borders except a subtle one on hover — the section headings are the
+only seams. Saving reverses the parse: it walks the *live* DOM
+(`reconstructContent` in `childMarkers.ts`) and rebuilds the content string
+from whatever's actually in the shards and which children are mounted
+where. There are three structural actions, and all three only ever move
+already-written text — nothing is duplicated or discarded:
 - **Split into subsection** (select text, click Split) — the only way new
   subsections get created — lifts the selection into a new child node
   right where it was, like promoting a run of text into its own element.
-  Text after the selection becomes a second new trailing child (a node's
-  own text always precedes its subsections, so leftover trailing text
-  can't stay in place without reordering things); text before it is simply
-  left alone.
+  Whatever came before and after the selection is simply left alone as
+  this node's own text, now with the new subsection's marker sitting
+  between the two halves (or before/after all of it, if the selection ran
+  to one end). There's no dedicated way to add *interstitial* text between
+  two existing subsections — short of demoting one back out — since that
+  would need inventing text from nothing; splitting only ever redistributes
+  text that's already there.
 - **Demote** (the ⤴ button in a subsection's header) is the only removal
   action, and it's non-destructive: it un-wraps the section, splicing its
   own current text directly back into its parent's content at the marker's
   position. Any grandchildren embedded in it come along for free, since
   they're just more markers inside that same content string — nothing but
   the now-redundant node record itself goes away.
+- **Drag-and-drop** in the restored tree sidebar (`NodeTree.tsx`) reorders
+  siblings (drop on the top/bottom edge of a row) or reparents a section
+  under a different one (drop on the middle of a row) — dropping is
+  rejected if the target is the dragged section itself or one of its own
+  subsections, which would create a cycle. This only ever moves an
+  existing marker from one content string to another (`moveNode` in
+  `essaysRepo.ts`); it never touches any node's version history, on
+  purpose — dragging a section around isn't itself a version-worthy edit
+  to anyone's text.
 
 **Comments.** Comments attach to a specific version's own content (so they
 show up in that version's history entry and in the version-compare view),
@@ -102,9 +118,9 @@ version yet.
 - The rich-text editor is a plain `contenteditable` with a small toolbar
   (bold/italic, citation, quote, split); no autosave conflict resolution,
   undo stack beyond the browser's native one, or collaborative editing.
-  There's no dedicated "move text to a different section" action beyond
-  the browser's own cut/paste — split (create) and demote (un-wrap) are
-  the only structural actions, per the current design brief.
+  Split, demote, and drag-and-drop are the only structural actions — moving
+  a run of *text* (rather than a whole section) to a different section is
+  just the browser's own cut/paste.
 - Placeholder section titles ("Section 2.3.1: Untitled") are numbered from
   where a split lands at the moment it happens; splitting again earlier in
   the document renumbers any sibling that still has its auto-generated

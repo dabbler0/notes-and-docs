@@ -196,7 +196,6 @@ export function SectionBlock({
               key={`text-${i}`}
               className={`node-content${isRoot ? '' : ' leaf-outline'}`}
               contentEditable
-              data-placeholder={isRoot ? "Start writing, or select some text and split it into a subsection…" : 'Write this section…'}
               onFocus={(e) => onActivate(node.id, e.currentTarget as HTMLDivElement)}
               onMouseUp={(e) => {
                 onActivate(node.id, e.currentTarget as HTMLDivElement)

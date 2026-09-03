@@ -110,3 +110,36 @@ export function reconstructContent(nodeId: string, opts?: { replace?: Map<string
 function cssEscape(s: string): string {
   return typeof CSS !== 'undefined' && CSS.escape ? CSS.escape(s) : s.replace(/["\\]/g, '\\$&')
 }
+
+/**
+ * Structural moves (drag-and-drop reordering/reparenting in the tree nav)
+ * work purely on the saved content *string*, unlike split/demote — a drag
+ * can target a node that's currently collapsed or off in another part of
+ * the tree, so there's no guarantee the relevant DOM is even mounted. This
+ * is safe because a marker's serialized form is always byte-identical
+ * (markerHtml() is a pure function of the id), so it can be found and
+ * spliced with a plain string search instead of a DOM parse.
+ */
+export function removeMarkerFromContent(html: string, childId: string): string {
+  return html.split(markerHtml(childId)).join('')
+}
+
+export type MarkerPlacement = { beforeId: string } | { afterId: string } | { atStart: true } | { atEnd: true }
+
+export function insertMarkerInContent(html: string, childId: string, placement: MarkerPlacement): string {
+  const token = markerHtml(childId)
+  if ('atStart' in placement) return token + html
+  if ('beforeId' in placement) {
+    const anchor = markerHtml(placement.beforeId)
+    const idx = html.indexOf(anchor)
+    if (idx === -1) return html + token
+    return html.slice(0, idx) + token + html.slice(idx)
+  }
+  if ('afterId' in placement) {
+    const anchor = markerHtml(placement.afterId)
+    const idx = html.indexOf(anchor)
+    if (idx === -1) return html + token
+    return html.slice(0, idx + anchor.length) + token + html.slice(idx + anchor.length)
+  }
+  return html + token
+}
