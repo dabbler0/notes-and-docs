@@ -556,6 +556,7 @@ select {
   font-size: 16px;
   line-height: 1.7;
   min-height: 1.7em;
+  max-width: 760px;
 }
 
 .node-content cite.citation {
@@ -591,8 +592,17 @@ select {
   z-index: 5;
 }
 
+/* Deliberately no max-width here: this is the whole editor-panel's
+   scrolling area, and it should use all the room the panel actually has
+   (which grows when the tree/comments panels are collapsed). Ordinary
+   reading width instead comes from .node-content's own max-width below —
+   the version-compare grid (.section-content-row.comparing) has no such
+   cap, so with the side panels tucked away it genuinely gets the full
+   width to spread its two columns across, rather than being squeezed
+   into a fixed-width reading column regardless of how much space is
+   actually available. */
 .doc-scroll {
-  max-width: 820px;
+  width: 100%;
 }
 
 .section-block {
@@ -604,6 +614,7 @@ select {
   align-items: center;
   gap: 8px;
   margin: 18px 0 4px;
+  max-width: 760px;
 }
 
 .section-block:first-child .section-header {
