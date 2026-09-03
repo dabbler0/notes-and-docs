@@ -563,9 +563,32 @@ select {
   min-height: 0;
 }
 
-.add-subsection-btn {
-  margin-top: 10px;
+.child-embed-chip {
+  display: inline-block;
+  font-size: 12px;
+  font-weight: 700;
   color: var(--ink-dim);
+  background: var(--surface);
+  border: 1px dashed var(--border);
+  border-radius: 999px;
+  padding: 2px 10px;
+  margin: 2px 0;
+}
+
+/* Only ever appears in a raw, non-live preview (VersionDialog's editable
+   draft pane) — the live document always substitutes a real subsection in
+   a marker's place. Shown as a small chip rather than an invisible div. */
+.child-embed {
+  display: inline-block;
+  font-size: 12px;
+  color: var(--ink-dim);
+  background: var(--surface-2);
+  border-radius: 6px;
+  padding: 2px 8px;
+  margin: 2px 0;
+}
+.child-embed::before {
+  content: '⧉ subsection';
 }
 
 .comment-section-label {

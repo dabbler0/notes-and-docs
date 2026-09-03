@@ -1,5 +1,6 @@
 import { backend } from '../storage'
 import { id } from '../lib/id'
+import { getChildIds } from '../lib/childMarkers'
 import type { Comment, Essay, EssayNode, NodeVersion } from './types'
 
 const ESSAYS = 'essays'
@@ -39,7 +40,6 @@ export async function createEssay(title: string): Promise<Essay> {
     id: id(),
     essayId: '', // filled below
     title: title || 'Untitled essay',
-    childIds: [],
     versions: [rootVersion],
     headVersionId: rootVersion.id,
     draftContent: '',
@@ -61,7 +61,7 @@ export async function deleteEssay(essayId: string): Promise<void> {
     const nid = stack.pop()!
     const node = await getNode(nid)
     if (!node) continue
-    stack.push(...node.childIds)
+    stack.push(...getChildIds(node.draftContent))
     await backend.docs.delete(NODES, nid)
   }
   await backend.docs.delete(ESSAYS, essayId)
@@ -78,7 +78,6 @@ export async function createChildNode(essayId: string, title: string, initialCon
     id: id(),
     essayId,
     title: title || 'Untitled section',
-    childIds: [],
     versions: [version],
     headVersionId: version.id,
     draftContent: initialContent,
@@ -124,26 +123,18 @@ export async function setCommentResolved(node: EssayNode, versionId: string, com
   await saveNode(node)
 }
 
-/** Detaches `childId` from `parent.childIds` without deleting the child node itself. */
-export async function detachChild(parent: EssayNode, childId: string): Promise<void> {
-  parent.childIds = parent.childIds.filter((c) => c !== childId)
-  await saveNode(parent)
+/**
+ * Deletes just this node's own record — used when "demoting" a subsection:
+ * its content gets spliced back into its parent's content (grandchildren's
+ * markers travel along with it automatically, since they're literally part
+ * of that content string), so nothing but this one now-redundant record
+ * needs to go away.
+ */
+export async function deleteNodeOnly(nodeId: string): Promise<void> {
+  await backend.docs.delete(NODES, nodeId)
 }
 
-export async function attachChild(parent: EssayNode, childId: string, index?: number): Promise<void> {
-  parent.childIds = parent.childIds.filter((c) => c !== childId)
-  if (index == null) parent.childIds.push(childId)
-  else parent.childIds.splice(index, 0, childId)
-  await saveNode(parent)
-}
-
-/** Moves a child from one parent to another (used by the "move subsection" UI). */
-export async function moveChild(fromParent: EssayNode, toParent: EssayNode, childId: string): Promise<void> {
-  await detachChild(fromParent, childId)
-  await attachChild(toParent, childId)
-}
-
-/** Loads the whole node tree for an essay into a flat map, for tree rendering. */
+/** Loads the whole node tree for an essay into a flat map, for rendering. */
 export async function loadNodeMap(essay: Essay): Promise<Map<string, EssayNode>> {
   const map = new Map<string, EssayNode>()
   const stack = [essay.rootNodeId]
@@ -153,7 +144,7 @@ export async function loadNodeMap(essay: Essay): Promise<Map<string, EssayNode>>
     const node = await getNode(nid)
     if (!node) continue
     map.set(nid, node)
-    stack.push(...node.childIds)
+    stack.push(...getChildIds(node.draftContent))
   }
   return map
 }

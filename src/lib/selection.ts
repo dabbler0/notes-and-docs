@@ -56,18 +56,25 @@ export function plainTextOfRange(range: Range): string {
  * piece once this returns.
  */
 export function extractAroundRange(container: HTMLElement, range: Range): { before: string; selected: string; after: string } {
+  // Extract the user's own selection first, while its boundary points are
+  // still exactly what they clicked-and-dragged — then collapse `range` to
+  // that point and read "after" from there. Doing this the other way round
+  // (extracting the trailing "after" text first) mutates the very text node
+  // `range`'s own end boundary sits in whenever the selection runs right up
+  // against it, which risks corrupting `range` before it's used.
+  const selected = extractRangeHtml(range)
+  range.collapse(true)
   let after = ''
   try {
     if (container.lastChild) {
       const afterRange = document.createRange()
-      afterRange.setStart(range.endContainer, range.endOffset)
+      afterRange.setStart(range.startContainer, range.startOffset)
       afterRange.setEndAfter(container.lastChild)
       if (!afterRange.collapsed) after = extractRangeHtml(afterRange)
     }
   } catch {
     /* selection already ran to the end of the container */
   }
-  const selected = extractRangeHtml(range)
   const before = container.innerHTML
   container.innerHTML = ''
   return { before, selected, after }

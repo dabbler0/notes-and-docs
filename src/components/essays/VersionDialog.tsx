@@ -3,7 +3,21 @@ import { Modal } from '../Modal'
 import { commitNewVersion, headVersion, revertToVersion, saveNode } from '../../models/essaysRepo'
 import type { EssayNode } from '../../models/types'
 
-export function VersionDialog({ node, onClose, onChanged }: { node: EssayNode; onClose: () => void; onChanged: () => void }) {
+/** For the read-only history preview: swap subsection markers for a small readable chip instead of an invisible empty div. */
+function withChildLabels(html: string, nodeMap: Map<string, EssayNode>): string {
+  const doc = new DOMParser().parseFromString(html || '', 'text/html')
+  doc.querySelectorAll('[data-child-id]').forEach((el) => {
+    const childId = el.getAttribute('data-child-id')!
+    const title = nodeMap.get(childId)?.title ?? 'Untitled section'
+    const span = doc.createElement('span')
+    span.className = 'child-embed-chip'
+    span.textContent = `→ ${title}`
+    el.replaceWith(span)
+  })
+  return doc.body.innerHTML
+}
+
+export function VersionDialog({ node, nodeMap, onClose, onChanged }: { node: EssayNode; nodeMap: Map<string, EssayNode>; onClose: () => void; onChanged: () => void }) {
   const sorted = [...node.versions].sort((a, b) => b.createdAt - a.createdAt)
   const [compareId, setCompareId] = useState(headVersion(node).id)
   const [draft, setDraft] = useState(node.draftContent)
@@ -42,7 +56,7 @@ export function VersionDialog({ node, onClose, onChanged }: { node: EssayNode; o
               </option>
             ))}
           </select>
-          <div className="pane-content" dangerouslySetInnerHTML={{ __html: compareVersion.content || '<span class="muted">(empty)</span>' }} />
+          <div className="pane-content" dangerouslySetInnerHTML={{ __html: withChildLabels(compareVersion.content, nodeMap) || '<span class="muted">(empty)</span>' }} />
           {compareVersion.comments.length > 0 && (
             <div style={{ marginTop: 12 }}>
               <h4>Comments on this version</h4>

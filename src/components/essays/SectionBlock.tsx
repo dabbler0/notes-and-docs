@@ -1,5 +1,6 @@
-import { useEffect, useRef, useState } from 'preact/hooks'
-import { headVersion, saveNode } from '../../models/essaysRepo'
+import { useEffect, useMemo, useRef, useState } from 'preact/hooks'
+import { deleteNodeOnly, headVersion, saveNode } from '../../models/essaysRepo'
+import { parseSegments, reconstructContent } from '../../lib/childMarkers'
 import type { EssayNode } from '../../models/types'
 
 const HEADING_SIZES = [21, 18, 16.5, 15, 14.5]
@@ -16,9 +17,8 @@ export function SectionBlock({
   onToggleCollapse,
   onActivate,
   onCaptureRange,
-  onAddChild,
-  onRemove,
   onOpenVersions,
+  onDemote,
   onTitleChanged,
   focusTitleId,
   onTitleFocused,
@@ -31,34 +31,58 @@ export function SectionBlock({
   onToggleCollapse: (id: string) => void
   onActivate: (nodeId: string, el: HTMLDivElement) => void
   onCaptureRange: () => void
-  onAddChild: (parentId: string) => void
-  onRemove: (nodeId: string) => void
   onOpenVersions: (nodeId: string) => void
+  /** Present only when this block is someone's child — collapses it back into that parent's own text. */
+  onDemote?: () => void
   onTitleChanged: () => void
   focusTitleId: string | null
   onTitleFocused: () => void
 }) {
-  const editorRef = useRef<HTMLDivElement>(null)
+  const wrapperRef = useRef<HTMLDivElement>(null)
   const titleRef = useRef<HTMLInputElement>(null)
-  const syncedContent = useRef<{ id: string; html: string }>({ id: '', html: '' })
   const saveTimer = useRef<number | undefined>(undefined)
   const [title, setTitle] = useState(node.title)
-  const [dirty, setDirty] = useState(node.draftContent !== headVersion(node).content)
+  const head = headVersion(node)
+  const [dirty, setDirty] = useState(node.draftContent !== head.content)
 
+  // Recomputed whenever the node's own saved content changes (switching to
+  // a different node, or an external mutation like a version revert). Not
+  // recomputed on every keystroke — typing mutates the shard DOM directly,
+  // and is only reflected back into node.draftContent by scheduleSave.
+  const segments = useMemo(() => parseSegments(node.draftContent), [node.id, node.draftContent])
+
+  // Tracks *which exact node object* (by reference, not just id/content) the
+  // shard DOM was last written from. A reload() always hands SectionBlock a
+  // freshly-fetched node object — even when its content string happens to
+  // match one we already pushed to the DOM ourselves (e.g. right after a
+  // demote, which reshapes segments and can leave freshly (re)mounted shard
+  // elements empty) — so comparing object identity, not just the content
+  // string, is what makes sure a real structural change always gets synced
+  // while ordinary typing (same object, mutated in place) doesn't.
+  const syncedContent = useRef<{ node: EssayNode | null; html: string }>({ node: null, html: '' })
   const isCollapsed = collapsed.has(node.id)
 
   useEffect(() => {
     setTitle(node.title)
   }, [node.id, node.title])
 
+  // Push the freshly-parsed segments' text into their shard DOM elements,
+  // but only when the node's saved content actually changed underneath us
+  // (not on every render) — otherwise this would stomp on in-progress
+  // typing every time an unrelated bit of state changes elsewhere.
   useEffect(() => {
-    if (!editorRef.current) return
-    if (syncedContent.current.id !== node.id || syncedContent.current.html !== node.draftContent) {
-      editorRef.current.innerHTML = node.draftContent
-      syncedContent.current = { id: node.id, html: node.draftContent }
-      setDirty(node.draftContent !== headVersion(node).content)
+    if (syncedContent.current.node === node && syncedContent.current.html === node.draftContent) return
+    const shardEls = wrapperRef.current ? (Array.from(wrapperRef.current.querySelectorAll(':scope > .node-content')) as HTMLDivElement[]) : []
+    let i = 0
+    for (const seg of segments) {
+      if (seg.kind !== 'text') continue
+      const el = shardEls[i]
+      if (el) el.innerHTML = seg.html
+      i++
     }
-  }, [node.id, node.draftContent])
+    syncedContent.current = { node, html: node.draftContent }
+    setDirty(node.draftContent !== head.content)
+  }, [node, node.draftContent, segments])
 
   useEffect(() => {
     if (focusTitleId === node.id && titleRef.current) {
@@ -68,19 +92,32 @@ export function SectionBlock({
     }
   }, [focusTitleId, node.id])
 
+  // Marking `syncedContent` here (rather than leaving it to the effect) is
+  // what stops a debounced save from fighting an already-resumed typing
+  // session: this node object is mutated in place, not replaced, so on the
+  // next render the effect sees the very same object reference and skips
+  // re-touching the shard DOM the user is still typing into. A structural
+  // change (e.g. demoteChild below) always replaces this node via reload()
+  // afterwards, which hands SectionBlock a genuinely different node object
+  // next render — so the effect's object-identity check still catches that
+  // case and resyncs properly, regardless of what this function did here.
+  function persist(html: string) {
+    node.draftContent = html
+    syncedContent.current = { node, html }
+    return saveNode(node)
+  }
+
   function scheduleSave() {
     window.clearTimeout(saveTimer.current)
-    saveTimer.current = window.setTimeout(async () => {
-      if (!editorRef.current) return
-      const html = editorRef.current.innerHTML
-      node.draftContent = html
-      syncedContent.current = { id: node.id, html }
-      await saveNode(node)
+    saveTimer.current = window.setTimeout(() => {
+      const html = reconstructContent(node.id)
+      if (html != null) persist(html)
     }, 500)
   }
 
-  function handleInput() {
-    if (editorRef.current) setDirty(editorRef.current.innerHTML !== headVersion(node).content)
+  function handleShardInput() {
+    const html = reconstructContent(node.id)
+    if (html != null) setDirty(html !== head.content)
     scheduleSave()
   }
 
@@ -91,7 +128,23 @@ export function SectionBlock({
     onTitleChanged()
   }
 
-  const head = headVersion(node)
+  /**
+   * Un-wraps `childId`: splices that child's own current content directly
+   * into this node's content at the marker's position (any grandchildren
+   * embedded in it come along for free, since they're just more markers in
+   * that same content string) and deletes the now-redundant child record.
+   */
+  async function demoteChild(childId: string) {
+    const child = nodeMap.get(childId)
+    if (!child) return
+    if (!confirm(`Fold "${child.title}" back into this section? Its text stays, but it stops being its own subsection.`)) return
+    window.clearTimeout(saveTimer.current)
+    const html = reconstructContent(node.id, { replace: new Map([[childId, child.draftContent]]) })
+    if (html != null) await persist(html)
+    await deleteNodeOnly(childId)
+    onTitleChanged()
+  }
+
   const openComments = head.comments.filter((c) => !c.resolved).length
 
   return (
@@ -126,57 +179,52 @@ export function SectionBlock({
             v{node.versions.length}
           </button>
           {openComments > 0 && <span className="chip comment-count-chip">💬 {openComments}</span>}
-          <button className="icon-btn" title="Remove this section" onClick={() => onRemove(node.id)}>
-            ✕
-          </button>
+          {onDemote && (
+            <button className="icon-btn" title="Demote: fold this section's text back into its parent, removing the subsection but keeping the text" onClick={onDemote}>
+              ⤴
+            </button>
+          )}
         </div>
       )}
 
-      {!isCollapsed && (
-        <>
-          <div
-            ref={editorRef}
-            className={`node-content${isRoot ? '' : ' leaf-outline'}`}
-            contentEditable
-            data-placeholder={isRoot ? "Start writing, or select some text and split it into a subsection…" : 'Write this section…'}
-            onFocus={() => editorRef.current && onActivate(node.id, editorRef.current)}
-            onInput={handleInput}
-            onMouseUp={() => {
-              editorRef.current && onActivate(node.id, editorRef.current)
-              onCaptureRange()
-            }}
-            onKeyUp={onCaptureRange}
-          />
-
-          {node.childIds.map((cid) => {
-            const child = nodeMap.get(cid)
-            if (!child) return null
-            return (
-              <SectionBlock
-                key={cid}
-                node={child}
-                nodeMap={nodeMap}
-                depth={depth + 1}
-                isRoot={false}
-                collapsed={collapsed}
-                onToggleCollapse={onToggleCollapse}
-                onActivate={onActivate}
-                onCaptureRange={onCaptureRange}
-                onAddChild={onAddChild}
-                onRemove={onRemove}
-                onOpenVersions={onOpenVersions}
-                onTitleChanged={onTitleChanged}
-                focusTitleId={focusTitleId}
-                onTitleFocused={onTitleFocused}
-              />
-            )
-          })}
-
-          <button className="btn btn-sm btn-ghost add-subsection-btn" style={{ marginLeft: Math.min(depth, 6) * 16 }} onClick={() => onAddChild(node.id)}>
-            + Add subsection here
-          </button>
-        </>
-      )}
+      {/* Hidden (not unmounted) on collapse, so the live editable DOM — and
+          whatever the user typed into it — survives being folded away. */}
+      <div className="section-body" ref={wrapperRef} hidden={isCollapsed}>
+        {segments.map((seg, i) =>
+          seg.kind === 'text' ? (
+            <div
+              key={`text-${i}`}
+              className={`node-content${isRoot ? '' : ' leaf-outline'}`}
+              contentEditable
+              data-placeholder={isRoot ? "Start writing, or select some text and split it into a subsection…" : 'Write this section…'}
+              onFocus={(e) => onActivate(node.id, e.currentTarget as HTMLDivElement)}
+              onMouseUp={(e) => {
+                onActivate(node.id, e.currentTarget as HTMLDivElement)
+                onCaptureRange()
+              }}
+              onInput={handleShardInput}
+              onKeyUp={onCaptureRange}
+            />
+          ) : nodeMap.has(seg.childId) ? (
+            <SectionBlock
+              key={seg.childId}
+              node={nodeMap.get(seg.childId)!}
+              nodeMap={nodeMap}
+              depth={depth + 1}
+              isRoot={false}
+              collapsed={collapsed}
+              onToggleCollapse={onToggleCollapse}
+              onActivate={onActivate}
+              onCaptureRange={onCaptureRange}
+              onOpenVersions={onOpenVersions}
+              onDemote={() => demoteChild(seg.childId)}
+              onTitleChanged={onTitleChanged}
+              focusTitleId={focusTitleId}
+              onTitleFocused={onTitleFocused}
+            />
+          ) : null,
+        )}
+      </div>
     </div>
   )
 }

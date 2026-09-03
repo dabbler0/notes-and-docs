@@ -1,15 +1,15 @@
 import { useEffect, useRef, useState } from 'preact/hooks'
-import { addComment, attachChild, createChildNode, detachChild, getEssay, headVersion, loadNodeMap, saveEssay, saveNode } from '../../models/essaysRepo'
+import { createChildNode, addComment, getEssay, getNode, headVersion, loadNodeMap, saveEssay, saveNode } from '../../models/essaysRepo'
 import { citationLabel } from '../../lib/bibtex'
-import { extractAroundRange, extractRangeHtml, insertHtmlAtRange } from '../../lib/selection'
-import { buildParentMap, placeholderTitle } from '../../lib/treeNumbering'
+import { extractAroundRange, insertHtmlAtRange } from '../../lib/selection'
+import { buildParentMap, isPlaceholderTitle, placeholderTitle } from '../../lib/treeNumbering'
+import { getChildIds, reconstructContent, markerHtml } from '../../lib/childMarkers'
 import type { Essay, EssayNode, Source } from '../../models/types'
 import { SectionBlock } from './SectionBlock'
 import { CommentsPanel } from './CommentsPanel'
 import { CitationPickerDialog } from './CitationPickerDialog'
 import { QuoteInsertDialog } from './QuoteInsertDialog'
 import { VersionDialog } from './VersionDialog'
-import { MoveTargetDialog } from './MoveTargetDialog'
 
 /**
  * The whole essay as one continuous, scrollable document: every section's
@@ -28,7 +28,6 @@ export function EssayWorkspace({ essayId, onBack }: { essayId: string; onBack: (
   const [showCitation, setShowCitation] = useState(false)
   const [showQuote, setShowQuote] = useState(false)
   const [showVersionsFor, setShowVersionsFor] = useState<string | null>(null)
-  const [moveState, setMoveState] = useState<{ nodeId: string; html: string } | null>(null)
   const [pendingComment, setPendingComment] = useState<{ nodeId: string; range: Range; text: string } | null>(null)
   const [focusTitleId, setFocusTitleId] = useState<string | null>(null)
 
@@ -80,6 +79,13 @@ export function EssayWorkspace({ essayId, onBack }: { essayId: string; onBack: (
     return activeNodeId.current ? (nodeMap.get(activeNodeId.current) ?? null) : null
   }
 
+  /** Reconstructs the active node's content from its live DOM and saves it, falling back to its last-known content if it isn't mounted (shouldn't happen for the active node, but keeps this safe). */
+  async function persistActiveNode(node: EssayNode) {
+    const html = reconstructContent(node.id)
+    if (html != null) node.draftContent = html
+    await saveNode(node)
+  }
+
   function exec(cmd: string) {
     activeEditorEl.current?.focus()
     document.execCommand(cmd)
@@ -93,8 +99,7 @@ export function EssayWorkspace({ essayId, onBack }: { essayId: string; onBack: (
     if (!range || !el || !node) return
     el.focus()
     insertHtmlAtRange(range, `<cite class="citation" data-source-id="${source.id}">${citationLabel(source.bibtex)}</cite>&nbsp;`)
-    node.draftContent = el.innerHTML
-    await saveNode(node)
+    await persistActiveNode(node)
     reload()
   }
 
@@ -107,8 +112,7 @@ export function EssayWorkspace({ essayId, onBack }: { essayId: string; onBack: (
     el.focus()
     const html = `<blockquote class="quote" data-source-id="${source.id}" data-page="${page}">${escapeHtml(quote)}</blockquote><p><cite class="citation" data-source-id="${source.id}">${citationLabel(source.bibtex)}, p. ${page}</cite></p>`
     insertHtmlAtRange(range, html)
-    node.draftContent = el.innerHTML
-    await saveNode(node)
+    await persistActiveNode(node)
     reload()
   }
 
@@ -136,7 +140,6 @@ export function EssayWorkspace({ essayId, onBack }: { essayId: string; onBack: (
   async function submitComment(body: string) {
     if (!pendingComment) return
     const node = nodeMap.get(pendingComment.nodeId)
-    const el = activeEditorEl.current
     if (!node) return
     try {
       const mark = document.createElement('mark')
@@ -144,10 +147,7 @@ export function EssayWorkspace({ essayId, onBack }: { essayId: string; onBack: (
       const contents = pendingComment.range.extractContents()
       mark.appendChild(contents)
       pendingComment.range.insertNode(mark)
-      if (el) {
-        node.draftContent = el.innerHTML
-        await saveNode(node)
-      }
+      await persistActiveNode(node)
     } catch {
       /* fall back to just recording the comment without an inline mark */
     }
@@ -156,29 +156,14 @@ export function EssayWorkspace({ essayId, onBack }: { essayId: string; onBack: (
     reload()
   }
 
-  async function handleAddChild(parentId: string) {
-    if (!essay) return
-    const parent = nodeMap.get(parentId)
-    if (!parent) return
-    const parentMap = buildParentMap(nodeMap, essay.rootNodeId)
-    const title = placeholderTitle(nodeMap, parentMap, essay.rootNodeId, parentId, parent.childIds.length)
-    const child = await createChildNode(essay.id, title)
-    await attachChild(parent, child.id)
-    setFocusTitleId(child.id)
-    reload()
-  }
-
-  async function handleRemove(nodeId: string) {
-    if (!essay || nodeId === essay.rootNodeId) return
-    if (!confirm('Remove this section? Its own text (not its subsections’) will be gone.')) return
-    const parentMap = buildParentMap(nodeMap, essay.rootNodeId)
-    const parentId = parentMap.get(nodeId)
-    const parent = parentId ? nodeMap.get(parentId) : null
-    if (!parent) return
-    await detachChild(parent, nodeId)
-    reload()
-  }
-
+  /**
+   * The only way new subsections get created: the current selection is
+   * lifted out into a new child node, right where it was — like promoting
+   * a run of text into its own element. Text before the selection stays on
+   * this node; text after it becomes a second new trailing child, since
+   * this node's own text always renders before its children and the tail
+   * can't stay in place without reordering things.
+   */
   function beginSplit() {
     captureRange()
     const range = savedRange.current
@@ -189,62 +174,50 @@ export function EssayWorkspace({ essayId, onBack }: { essayId: string; onBack: (
       return
     }
     const { before, selected, after } = extractAroundRange(el, range)
-    // Whatever text preceded the split point stays right where it was, as
-    // this node's own (now shorter) text — moving it too would just be
-    // extra churn for no visual benefit. Anything that came *after* the
-    // split point can't stay on this node, though: this node's own text
-    // always renders before its subsections, so leftover trailing text
-    // needs to become a trailing subsection of its own to keep reading
-    // order intact.
-    node.draftContent = before
+    el.innerHTML = before
     ;(async () => {
-      const parentMap = buildParentMap(nodeMap, essay.rootNodeId)
-      const newIds: string[] = []
-
-      const midTitle = placeholderTitle(nodeMap, parentMap, essay.rootNodeId, node.id, 0)
-      const midChild = await createChildNode(essay.id, midTitle, selected)
-      newIds.push(midChild.id)
-
+      // Titles get numbered from where the new section(s) actually land,
+      // which can be in the middle of existing children (splitting text
+      // that comes before an earlier subsection) — so create the node(s)
+      // first, splice the markers in, and only then compute each one's
+      // real position for its placeholder title.
+      // "Section 0: Untitled" is a throwaway placeholder — it just needs to
+      // match isPlaceholderTitle() so the renumbering pass below (which
+      // computes the real number from final position) rewrites it.
+      const midChild = await createChildNode(essay.id, 'Section 0: Untitled', selected)
+      let afterChildId: string | null = null
       if (after.trim()) {
-        const afterTitle = placeholderTitle(nodeMap, parentMap, essay.rootNodeId, node.id, 1)
-        const afterChild = await createChildNode(essay.id, afterTitle, after)
-        newIds.push(afterChild.id)
+        const afterChild = await createChildNode(essay.id, 'Section 0: Untitled', after)
+        afterChildId = afterChild.id
       }
 
-      for (let i = 0; i < newIds.length; i++) {
-        await attachChild(node, newIds[i], i)
+      const insertedHtml = markerHtml(midChild.id) + (afterChildId ? markerHtml(afterChildId) : '')
+      const html = reconstructContent(node.id, { insertAfter: { el, html: insertedHtml } })
+      if (html != null) {
+        node.draftContent = html
+        await saveNode(node)
       }
-      await saveNode(node)
+
+      // Number every still-placeholder-titled child by its actual position
+      // (not just the new one(s)) — splitting text that precedes an earlier
+      // subsection shifts that subsection along, and a stale "Section 1"
+      // sitting next to the new section it displaced would just be
+      // confusing. A child the user has already renamed is left alone.
+      const parentMap = buildParentMap(nodeMap, essay.rootNodeId)
+      const finalChildIds = getChildIds(node.draftContent)
+      for (let i = 0; i < finalChildIds.length; i++) {
+        const child = await getNode(finalChildIds[i])
+        if (!child || !isPlaceholderTitle(child.title)) continue
+        const wanted = placeholderTitle(nodeMap, parentMap, essay.rootNodeId, node.id, i)
+        if (child.title !== wanted) {
+          child.title = wanted
+          await saveNode(child)
+        }
+      }
+
       setFocusTitleId(midChild.id)
       reload()
     })()
-  }
-
-  function beginMove() {
-    captureRange()
-    const range = savedRange.current
-    const el = activeEditorEl.current
-    const node = activeNode()
-    if (!range || range.collapsed || !el || !node) {
-      alert('Click into a section, then select the text you want to move to another section.')
-      return
-    }
-    const html = extractRangeHtml(range)
-    node.draftContent = el.innerHTML
-    setMoveState({ nodeId: node.id, html })
-  }
-
-  async function finishMove(targetId: string) {
-    if (!moveState || !essay) return
-    const source = nodeMap.get(moveState.nodeId)
-    if (source) await saveNode(source)
-    const target = nodeMap.get(targetId)
-    if (target) {
-      target.draftContent = target.draftContent + moveState.html
-      await saveNode(target)
-    }
-    setMoveState(null)
-    reload()
   }
 
   const rootNode = essay ? nodeMap.get(essay.rootNodeId) : undefined
@@ -298,9 +271,6 @@ export function EssayWorkspace({ essayId, onBack }: { essayId: string; onBack: (
             <button className="btn btn-sm" onClick={beginSplit}>
               ✂ Split into subsection
             </button>
-            <button className="btn btn-sm" onClick={beginMove}>
-              ↪ Move to…
-            </button>
             <button className={`btn btn-sm toolbar-toggle${commentMode ? ' active' : ''}`} onClick={toggleCommentMode}>
               💬 {commentMode ? 'Commenting…' : 'Comment mode'}
             </button>
@@ -320,8 +290,6 @@ export function EssayWorkspace({ essayId, onBack }: { essayId: string; onBack: (
               onToggleCollapse={toggleCollapse}
               onActivate={onActivate}
               onCaptureRange={captureRange}
-              onAddChild={handleAddChild}
-              onRemove={handleRemove}
               onOpenVersions={setShowVersionsFor}
               onTitleChanged={reload}
               focusTitleId={focusTitleId}
@@ -345,8 +313,7 @@ export function EssayWorkspace({ essayId, onBack }: { essayId: string; onBack: (
 
       {showCitation && <CitationPickerDialog onClose={() => setShowCitation(false)} onSelect={insertCitation} />}
       {showQuote && <QuoteInsertDialog onClose={() => setShowQuote(false)} onInsert={insertQuote} />}
-      {versionNode && <VersionDialog node={versionNode} onClose={() => setShowVersionsFor(null)} onChanged={reload} />}
-      {moveState && <MoveTargetDialog nodeMap={nodeMap} rootId={essay.rootNodeId} excludeId={moveState.nodeId} onClose={() => setMoveState(null)} onPick={finishMove} />}
+      {versionNode && <VersionDialog node={versionNode} nodeMap={nodeMap} onClose={() => setShowVersionsFor(null)} onChanged={reload} />}
     </div>
   )
 }

@@ -31,14 +31,15 @@ npm run build:onefile  # produces dist/index.html: everything inlined, open it f
   `essaysRepo.ts`) that implement the actual domain logic on top of the
   storage layer.
 - `src/lib/` — BibTeX parsing, PDF text extraction/rendering (pdf.js), DOM
-  Range helpers used by the editor's citation/quote/split/move actions, and
-  `treeNumbering.ts` (parent lookups + "Section 2.3.1"-style placeholder
-  titles for newly split-off sections).
+  Range helpers used by the editor's citation/quote/split actions,
+  `childMarkers.ts` (how a node's content embeds its subsections — see
+  below), and `treeNumbering.ts` ("Section 2.3.1"-style placeholder titles
+  for newly split-off sections).
 - `src/components/sources/` and `src/components/essays/` — the UI.
   `EssayWorkspace.tsx` is the whole document: a sticky toolbar acting on
   "whichever section currently has the cursor," plus a recursive
-  `SectionBlock.tsx` per section (its own small `contentEditable`, its own
-  collapse state, its own version-history button).
+  `SectionBlock.tsx` per section (its own small `contentEditable` shards,
+  its own collapse state, its own version-history button).
 
 ## Data model notes
 
@@ -52,29 +53,39 @@ subsections). Each node has:
   Ordinary typing only ever touches this; it is *not* versioned.
 - `versions` — an explicit, append-only history. "Make a new version"
   snapshots the current draft; "revert" points the draft/head back at an
-  older snapshot. Reverting a node never touches its parent or children.
-- `childIds` — the node's current subsections. This is **not** versioned:
-  it's deliberately just "whatever is attached right now," independent of
-  which historical version of the parent's own prose is showing. That's
-  what gives the two behaviors from the brief: reverting one node's text
-  can't disturb sibling/parent subtrees (structure isn't part of the
-  history at all), and a new version of a node's text carries no memory of
-  which subsections existed when an older version was written.
+  older snapshot. Reverting a node never touches any other node.
 
-**Presentation vs. structure.** The document is *rendered* as one
-continuous, scrollable flow — each section's own text sits directly above
-its subsections' text, with only a small heading line marking the seam —
-but the underlying data is still the tree above. "Split into subsection"
-(select some text, click Split) makes this concrete: the selection becomes
-a new child node with a placeholder title ("Section 2.3.1: Untitled",
-computed from its position in the tree and left focused for you to type
-over); text before the selection just stays put as the parent's own
-(shorter) text, and text after it becomes a second new trailing child, since
-a node's own text always renders before its subsections and the tail can't
-stay in place without changing the reading order. A section is free to
-still hold its own text even after it has subsections — nothing forces
-text off of non-leaf nodes — the auto-created trailing section is just what
-keeps "split" from silently reordering your prose.
+There is deliberately no separate child-list field. A node's subsections
+are embedded directly inside `draftContent`, modeled on how HTML embeds
+child elements: a subsection is a literal (non-editable) marker element
+sitting wherever the text it was carved out of used to be, with ordinary
+text free to come before, after, or between markers (`src/lib/childMarkers.ts`).
+"What are this node's children, in what order" is simply "whatever markers
+its content currently contains" — so a node is completely free to keep its
+own text after gaining subsections; nothing pushes text off of a node just
+because it has children.
+
+The live editor never mounts a marker literally — `SectionBlock` parses a
+node's content into a (text, child, text, child, …) sequence and renders
+each text run as its own small `contentEditable` shard with a recursive
+`SectionBlock` for each embedded child mounted in between, in the same
+order they appear in the markup. Saving reverses this: it walks the *live*
+DOM (`reconstructContent` in `childMarkers.ts`) and rebuilds the content
+string from whatever's actually in the shards and which children are
+mounted where — which is also how "split" and "demote" work:
+- **Split into subsection** (select text, click Split) — the only way new
+  subsections get created — lifts the selection into a new child node
+  right where it was, like promoting a run of text into its own element.
+  Text after the selection becomes a second new trailing child (a node's
+  own text always precedes its subsections, so leftover trailing text
+  can't stay in place without reordering things); text before it is simply
+  left alone.
+- **Demote** (the ⤴ button in a subsection's header) is the only removal
+  action, and it's non-destructive: it un-wraps the section, splicing its
+  own current text directly back into its parent's content at the marker's
+  position. Any grandchildren embedded in it come along for free, since
+  they're just more markers inside that same content string — nothing but
+  the now-redundant node record itself goes away.
 
 **Comments.** Comments attach to a specific version's own content (so they
 show up in that version's history entry and in the version-compare view),
@@ -89,9 +100,16 @@ version yet.
   wiring up real OAuth + Drive API calls is future work, not needed to
   demonstrate the abstraction boundary.
 - The rich-text editor is a plain `contenteditable` with a small toolbar
-  (bold/italic, citation, quote, split, move); no autosave conflict
-  resolution, undo stack beyond the browser's native one, or collaborative
-  editing.
+  (bold/italic, citation, quote, split); no autosave conflict resolution,
+  undo stack beyond the browser's native one, or collaborative editing.
+  There's no dedicated "move text to a different section" action beyond
+  the browser's own cut/paste — split (create) and demote (un-wrap) are
+  the only structural actions, per the current design brief.
+- Placeholder section titles ("Section 2.3.1: Untitled") are numbered from
+  where a split lands at the moment it happens; splitting again earlier in
+  the document renumbers any sibling that still has its auto-generated
+  title (so numbers don't go stale), but never touches a title you've
+  actually edited.
 - PDF search is a naive substring match over extracted text, not fuzzy or
   ranked.
 - BibTeX parsing/formatting covers the common `@type{key, field = {...}}`
