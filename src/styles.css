@@ -610,6 +610,7 @@ select {
 }
 
 .section-header {
+  position: relative;
   display: flex;
   align-items: center;
   gap: 8px;
@@ -829,6 +830,71 @@ select {
   .section-content-row.comparing {
     grid-template-columns: 1fr;
   }
+}
+
+/* --- version history dropdown --- */
+
+.history-dropdown {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 10;
+  width: 280px;
+  max-height: 340px;
+  overflow-y: auto;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-lift);
+  padding: 10px;
+}
+
+.history-dropdown-title {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--ink-dim);
+  padding: 2px 4px 8px;
+}
+
+.history-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.history-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 7px 8px;
+  border-radius: var(--radius-sm);
+}
+
+.history-row.current {
+  background: var(--green);
+}
+
+.history-row.active {
+  outline: 2px solid var(--accent);
+}
+
+.history-row-info {
+  min-width: 0;
+}
+
+.history-row-label {
+  font-size: 13px;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.history-row-date {
+  font-size: 11.5px;
 }
 
 .comments-panel-shell {

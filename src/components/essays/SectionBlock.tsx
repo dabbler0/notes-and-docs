@@ -49,6 +49,11 @@ export function SectionBlock({
   // state only — closing it just stops showing the comparison, it doesn't
   // change any data.
   const [comparingVersionId, setComparingVersionId] = useState<string | null>(null)
+  // Full version history list, opened from the 🕓 button — separate from
+  // comparingVersionId itself, since browsing history shouldn't have to
+  // also mean "freeze the current text and clear this section," the way
+  // clicking the version pill does.
+  const [showHistory, setShowHistory] = useState(false)
 
   // Recomputed whenever the node's own saved content changes (switching to
   // a different node, or an external mutation like a version revert). Not
@@ -73,6 +78,7 @@ export function SectionBlock({
 
   useEffect(() => {
     setComparingVersionId(null)
+    setShowHistory(false)
   }, [node.id])
 
   // Push the freshly-parsed segments' text into their shard DOM elements,
@@ -181,8 +187,36 @@ export function SectionBlock({
     onTitleChanged()
   }
 
+  /** Non-destructive: just shows an older version side by side with whatever's currently here, without touching any data. */
+  function handleViewVersion(versionId: string) {
+    setComparingVersionId(versionId)
+    setShowHistory(false)
+  }
+
   const openComments = head.comments.filter((c) => !c.resolved).length
   const comparingVersion: NodeVersion | undefined = comparingVersionId ? node.versions.find((v) => v.id === comparingVersionId) : undefined
+  const sortedVersions = [...node.versions].sort((a, b) => b.createdAt - a.createdAt)
+
+  const historyDropdown = showHistory && (
+    <div className="history-dropdown">
+      <div className="history-dropdown-title">Version history</div>
+      <div className="history-list">
+        {sortedVersions.map((v) => (
+          <div className={`history-row${v.id === node.headVersionId ? ' current' : ''}${v.id === comparingVersionId ? ' active' : ''}`} key={v.id}>
+            <div className="history-row-info">
+              <div className="history-row-label">
+                {v.id === node.headVersionId && <span className="chip">current</span>} {v.label || 'Version'}
+              </div>
+              <div className="history-row-date muted">{new Date(v.createdAt).toLocaleString()}</div>
+            </div>
+            <button className="btn btn-sm" onClick={() => handleViewVersion(v.id)}>
+              View
+            </button>
+          </div>
+        ))}
+      </div>
+    </div>
+  )
 
   const liveEditor = (
     <div className="section-body" ref={wrapperRef} hidden={isCollapsed}>
@@ -233,7 +267,11 @@ export function SectionBlock({
           <button className="version-pill version-pill-btn" onClick={handleMakeNewVersion} title="Make a new version: freezes the current text and starts a blank one, side by side">
             v{node.versions.length}
           </button>
+          <button className="icon-btn" onClick={() => setShowHistory((v) => !v)} title="Version history">
+            🕓
+          </button>
           {openComments > 0 && <span className="chip comment-count-chip">💬 {openComments}</span>}
+          {historyDropdown}
         </div>
       ) : (
         <div className="section-header">
@@ -252,12 +290,16 @@ export function SectionBlock({
           <button className="version-pill version-pill-btn" onClick={handleMakeNewVersion} title="Make a new version: freezes the current text and starts a blank one, side by side">
             v{node.versions.length}
           </button>
+          <button className="icon-btn" onClick={() => setShowHistory((v) => !v)} title="Version history">
+            🕓
+          </button>
           {openComments > 0 && <span className="chip comment-count-chip">💬 {openComments}</span>}
           {onDemote && (
             <button className="icon-btn" title="Demote: fold this section's text back into its parent, removing the subsection but keeping the text" onClick={onDemote}>
               ⤴
             </button>
           )}
+          {historyDropdown}
         </div>
       )}
 
@@ -274,7 +316,10 @@ export function SectionBlock({
       <div className={`section-content-row${comparingVersion ? ' comparing' : ''}`} hidden={isCollapsed}>
           {comparingVersion && (
             <div className="version-split-pane frozen-pane" key="frozen">
-              <div className="version-split-label">Previous version — {new Date(comparingVersion.createdAt).toLocaleString()}</div>
+              <div className="version-split-label">
+                {comparingVersion.label || 'Version'} — {new Date(comparingVersion.createdAt).toLocaleString()}
+                {comparingVersion.id === node.headVersionId && ' (current)'}
+              </div>
               <FrozenPreview content={comparingVersion.content} nodeMap={nodeMap} depth={0} isRoot />
               {comparingVersion.comments.length > 0 && (
                 <div className="version-split-comments">
@@ -289,14 +334,14 @@ export function SectionBlock({
             </div>
           )}
           <div className="version-split-pane live-pane" key="live">
-            {comparingVersion && <div className="version-split-label">New version — editing</div>}
+            {comparingVersion && <div className="version-split-label">Current draft — editing</div>}
             {liveEditor}
           </div>
       </div>
       {!isCollapsed && comparingVersion && (
         <div className="version-split-actions">
           <button className="btn btn-sm btn-danger" onClick={handleRevertToComparing}>
-            ↺ Revert to previous version
+            ↺ Revert to this version
           </button>
           <button className="btn btn-sm btn-primary" onClick={() => setComparingVersionId(null)}>
             ✓ Done comparing

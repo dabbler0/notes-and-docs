@@ -128,17 +128,26 @@ same way the live editor does — there's no separate frozen snapshot of a
 whole subtree, only this one node's own text was ever versioned, so
 "what it currently contains" is the closest thing to "what this looked
 like" and is what makes the two sides genuinely comparable rather than a
-sea of "→ Section Title" placeholders. "Revert to previous version"
-restores the old text (`revertToVersion`, unchanged from before); "Done
-comparing" just stops showing the comparison and keeps whatever's been
-written on the right. Because a subsection is just a marker embedded in
-its parent's text (see above), clearing a section's text also clears
-whatever markers were in it — its subsections become unreferenced (not
-deleted — their own node records and history are untouched, and
-`loadNodeMap` deliberately still walks every version's content, not just
-the live draft, so an orphaned section stays resolvable for exactly this
-kind of frozen-version display) until either reverting restores the old
-markers or new ones get split off the new text.
+sea of "→ Section Title" placeholders. "Revert to this version" restores
+the old text (`revertToVersion`, unchanged from before); "Done comparing"
+just stops showing the comparison and keeps whatever's been written on
+the right. Because a subsection is just a marker embedded in its parent's
+text (see above), clearing a section's text also clears whatever markers
+were in it — its subsections become unreferenced (not deleted — their own
+node records and history are untouched, and `loadNodeMap` deliberately
+still walks every version's content, not just the live draft, so an
+orphaned section stays resolvable for exactly this kind of frozen-version
+display) until either reverting restores the old markers or new ones get
+split off the new text.
+
+Every version a section has ever had is kept — nothing is pruned — and
+the 🕓 button next to the version pill opens the full list (newest first,
+current one marked), each with its own non-destructive "View" that shows
+it side by side with whatever's currently there without freezing or
+clearing anything. That's the only difference from clicking the version
+pill itself: browsing history is just look-don't-touch, so reverting to
+something several versions back doesn't require re-living every version
+in between the way the version-pill's freeze-and-clear action would.
 
 ## What's stubbed / simplified in this prototype
 
