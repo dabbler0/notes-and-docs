@@ -20,6 +20,47 @@
   font-family: 'Segoe UI', ui-sans-serif, system-ui, -apple-system, Helvetica, Arial, sans-serif;
 }
 
+/* Dark palette — same roles, warm-charcoal ground instead of a naive
+   inversion, so the terracotta accent and the yellow/green/blue/pink/purple
+   tag colors keep working as spot color on a dark surface. */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) {
+    --bg: #1c1a17;
+    --surface: #262320;
+    --surface-2: #302c27;
+    --ink: #efe9df;
+    --ink-dim: #a6a096;
+    --border: #3c3630;
+    --accent: #e0855f;
+    --accent-ink: #241108;
+    --yellow: #4a4326;
+    --green: #253a2c;
+    --blue: #223140;
+    --pink: #3d2530;
+    --purple: #2f2a41;
+    --shadow-soft: 0 1px 2px rgba(0, 0, 0, 0.2), 0 6px 20px rgba(0, 0, 0, 0.28);
+    --shadow-lift: 0 10px 30px rgba(0, 0, 0, 0.4);
+  }
+}
+
+:root[data-theme='dark'] {
+  --bg: #1c1a17;
+  --surface: #262320;
+  --surface-2: #302c27;
+  --ink: #efe9df;
+  --ink-dim: #a6a096;
+  --border: #3c3630;
+  --accent: #e0855f;
+  --accent-ink: #241108;
+  --yellow: #4a4326;
+  --green: #253a2c;
+  --blue: #223140;
+  --pink: #3d2530;
+  --purple: #2f2a41;
+  --shadow-soft: 0 1px 2px rgba(0, 0, 0, 0.2), 0 6px 20px rgba(0, 0, 0, 0.28);
+  --shadow-lift: 0 10px 30px rgba(0, 0, 0, 0.4);
+}
+
 * {
   box-sizing: border-box;
 }
