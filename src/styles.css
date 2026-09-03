@@ -374,6 +374,37 @@ select {
   margin-top: 18px;
 }
 
+/* --- comment widget (context popover, not a modal) --- */
+
+.comment-widget {
+  position: fixed;
+  background: var(--surface);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-lift);
+  border: 1px solid var(--border);
+  padding: 14px;
+  z-index: 100;
+}
+
+.comment-widget-quote {
+  margin: 0 0 10px;
+  font-size: 13px;
+  color: var(--ink-dim);
+  font-style: italic;
+  max-height: 4.5em;
+  overflow: auto;
+}
+
+.comment-widget .field {
+  margin-bottom: 10px;
+}
+
+.comment-widget-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
 /* --- essay workspace --- */
 
 .workspace {

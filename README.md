@@ -109,10 +109,17 @@ already-written text — nothing is duplicated or discarded:
 
 **Comments.** Comments attach to a specific version's own content (so they
 show up in that version's history entry and in the version-compare view),
-with a resolved checkbox. Comment mode is only enabled when the draft has
-no unsaved changes relative to its head version, since a comment is meant
-to anchor to a real, committed version rather than to a state that has no
-version yet.
+with a resolved checkbox. Selecting text in comment mode always works
+immediately, even in a section with unsaved changes: rather than blocking
+with "save first," it silently makes a new version out of whatever's
+currently there — unlike the version pill's own freeze action, this one
+does *not* clear the section afterward, since the point is to keep writing
+and comment on live text, not to open a compare view — and anchors the
+comment to that version, same as if it had already been committed.
+Commenting itself happens in a small popover anchored right under the
+selection (`.comment-widget` in `EssayWorkspace.tsx`) rather than a modal,
+so the document stays visible and in place behind it; clicking anywhere
+outside the widget or pressing Escape dismisses it without commenting.
 
 **Making a new version.** Clicking a section's version pill (`vN`) is a
 single explicit action, not a dialog: it freezes the current text into a

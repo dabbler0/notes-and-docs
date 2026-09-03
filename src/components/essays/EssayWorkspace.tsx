@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'preact/hooks'
-import { createChildNode, addComment, getEssay, getNode, headVersion, loadNodeMap, moveNode, saveEssay, saveNode } from '../../models/essaysRepo'
+import { commitNewVersion, createChildNode, addComment, getEssay, getNode, headVersion, loadNodeMap, moveNode, saveEssay, saveNode } from '../../models/essaysRepo'
 import { citationLabel } from '../../lib/bibtex'
 import { extractAroundRange, insertHtmlAtRange } from '../../lib/selection'
 import { buildParentMap, isPlaceholderTitle, placeholderTitle } from '../../lib/treeNumbering'
@@ -28,7 +28,8 @@ export function EssayWorkspace({ essayId, onBack }: { essayId: string; onBack: (
   const [showComments, setShowComments] = useState(true)
   const [showCitation, setShowCitation] = useState(false)
   const [showQuote, setShowQuote] = useState(false)
-  const [pendingComment, setPendingComment] = useState<{ nodeId: string; range: Range; text: string } | null>(null)
+  const [pendingComment, setPendingComment] = useState<{ nodeId: string; range: Range; text: string; anchorRect: { top: number; bottom: number; left: number; right: number } } | null>(null)
+  const commentWidgetRef = useRef<HTMLDivElement>(null)
   const [focusTitleId, setFocusTitleId] = useState<string | null>(null)
 
   const activeNodeId = useRef<string | null>(null)
@@ -47,6 +48,20 @@ export function EssayWorkspace({ essayId, onBack }: { essayId: string; onBack: (
   useEffect(() => {
     reload()
   }, [essayId])
+
+  // Dismiss the comment widget on an outside click, same as the old modal's
+  // backdrop click — but there's no backdrop element to hang the handler on
+  // anymore, so listen on the document instead.
+  useEffect(() => {
+    if (!pendingComment) return
+    function onDown(e: MouseEvent) {
+      if (commentWidgetRef.current && !commentWidgetRef.current.contains(e.target as Node)) {
+        setPendingComment(null)
+      }
+    }
+    document.addEventListener('mousedown', onDown, true)
+    return () => document.removeEventListener('mousedown', onDown, true)
+  }, [pendingComment])
 
   async function saveEssayTitle() {
     if (!essay) return
@@ -120,7 +135,17 @@ export function EssayWorkspace({ essayId, onBack }: { essayId: string; onBack: (
     setCommentMode((v) => !v)
   }
 
-  function handleMouseUpForComments() {
+  /**
+   * Comment mode is meant to let you start commenting immediately: a
+   * comment always anchors to a specific *version*, so a section with
+   * unsaved changes needs one made for it first, but that shouldn't be a
+   * separate manual step the user has to remember before they're allowed
+   * to comment. This freezes the current text into a new version in
+   * place — unlike the version pill's own action, it does *not* clear the
+   * section afterward, since the text needs to still be right there to
+   * anchor a comment to and to keep editing normally.
+   */
+  async function handleMouseUpForComments() {
     if (!commentMode) return
     const sel = document.getSelection()
     const el = activeEditorEl.current
@@ -128,13 +153,22 @@ export function EssayWorkspace({ essayId, onBack }: { essayId: string; onBack: (
     if (!sel || sel.isCollapsed || !el || !node) return
     const range = sel.getRangeAt(0)
     if (!el.contains(range.commonAncestorContainer)) return
-    if (node.draftContent !== headVersion(node).content) {
-      alert('This section has unsaved changes. Save it as a version before commenting on it.')
-      return
-    }
     const text = range.toString().trim()
     if (!text) return
-    setPendingComment({ nodeId: node.id, range: range.cloneRange(), text })
+
+    if (node.draftContent !== headVersion(node).content) {
+      node.draftContent = reconstructContent(node.id) ?? node.draftContent
+      await commitNewVersion(node)
+      reload()
+    }
+
+    const rect = range.getBoundingClientRect()
+    setPendingComment({
+      nodeId: node.id,
+      range: range.cloneRange(),
+      text,
+      anchorRect: { top: rect.top, bottom: rect.bottom, left: rect.left, right: rect.right },
+    })
   }
 
   async function submitComment(body: string) {
@@ -323,12 +357,13 @@ export function EssayWorkspace({ essayId, onBack }: { essayId: string; onBack: (
       </div>
 
       {pendingComment && (
-        <div className="modal-backdrop" onMouseDown={(e) => e.target === e.currentTarget && setPendingComment(null)}>
-          <div className="modal" style={{ maxWidth: 380 }}>
-            <h2>Add comment</h2>
-            <p className="muted">On: “{pendingComment.text}”</p>
-            <CommentComposer onCancel={() => setPendingComment(null)} onSubmit={submitComment} />
-          </div>
+        <div
+          ref={commentWidgetRef}
+          className="comment-widget"
+          style={commentWidgetStyle(pendingComment.anchorRect)}
+        >
+          <p className="comment-widget-quote">“{pendingComment.text}”</p>
+          <CommentComposer onCancel={() => setPendingComment(null)} onSubmit={submitComment} />
         </div>
       )}
 
@@ -343,9 +378,17 @@ function CommentComposer({ onCancel, onSubmit }: { onCancel: () => void; onSubmi
   return (
     <>
       <div className="field">
-        <textarea autoFocus rows={3} value={body} onInput={(e) => setBody((e.target as HTMLTextAreaElement).value)} />
+        <textarea
+          autoFocus
+          rows={3}
+          value={body}
+          onInput={(e) => setBody((e.target as HTMLTextAreaElement).value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Escape') onCancel()
+          }}
+        />
       </div>
-      <div className="modal-actions">
+      <div className="comment-widget-actions">
         <button className="btn btn-ghost" onClick={onCancel}>
           Cancel
         </button>
@@ -355,6 +398,31 @@ function CommentComposer({ onCancel, onSubmit }: { onCancel: () => void; onSubmi
       </div>
     </>
   )
+}
+
+/**
+ * Positions the comment widget just below the selection it's anchored to,
+ * clamped so it never runs off the right or bottom edge of the viewport —
+ * the anchorRect comes from `range.getBoundingClientRect()`, i.e. viewport
+ * (not document) coordinates, so `position: fixed` is what we want here.
+ */
+function commentWidgetStyle(rect: { top: number; bottom: number; left: number; right: number }) {
+  const width = 320
+  const margin = 12
+  const maxLeft = Math.max(margin, window.innerWidth - width - margin)
+  const left = Math.min(Math.max(rect.left, margin), maxLeft)
+  const spaceBelow = window.innerHeight - rect.bottom
+  const openUpward = spaceBelow < 220 && rect.top > 220
+  const style: Record<string, string> = {
+    left: `${left}px`,
+    width: `${width}px`,
+  }
+  if (openUpward) {
+    style.bottom = `${window.innerHeight - rect.top + 8}px`
+  } else {
+    style.top = `${rect.bottom + 8}px`
+  }
+  return style
 }
 
 function escapeHtml(s: string): string {
