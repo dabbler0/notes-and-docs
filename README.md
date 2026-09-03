@@ -114,17 +114,27 @@ version yet.
 single explicit action, not a dialog: it freezes the current text into a
 new version, clears the section back to blank, and opens an inline split
 screen — the whole width the section normally occupies splits into the
-frozen old version on the left (read-only, but with full formatting:
-citations, quotes, embedded-subsection markers shown as named chips) and
-the section's own live, fully-featured editing surface on the right,
-right in the document flow rather than a modal. "Revert to previous
-version" restores the old text (`revertToVersion`, unchanged from before);
-"Done comparing" just stops showing the comparison and keeps whatever's
-been written on the right. Because a subsection is just a marker embedded
-in its parent's text (see above), clearing a section's text also clears
+frozen old version on the left and the section's own live, fully-featured
+editing surface on the right, right in the document flow rather than a
+modal. The left side is read-only, but otherwise deliberately looks like
+the real document rather than a stripped-down preview: `FrozenPreview.tsx`
+mirrors SectionBlock's own markup (same headings, same citation/quote
+styling) and recurses into embedded subsections' *current* content the
+same way the live editor does — there's no separate frozen snapshot of a
+whole subtree, only this one node's own text was ever versioned, so
+"what it currently contains" is the closest thing to "what this looked
+like" and is what makes the two sides genuinely comparable rather than a
+sea of "→ Section Title" placeholders. "Revert to previous version"
+restores the old text (`revertToVersion`, unchanged from before); "Done
+comparing" just stops showing the comparison and keeps whatever's been
+written on the right. Because a subsection is just a marker embedded in
+its parent's text (see above), clearing a section's text also clears
 whatever markers were in it — its subsections become unreferenced (not
-deleted — their own node records and history are untouched) until either
-reverting restores the old markers or new ones get split off the new text.
+deleted — their own node records and history are untouched, and
+`loadNodeMap` deliberately still walks every version's content, not just
+the live draft, so an orphaned section stays resolvable for exactly this
+kind of frozen-version display) until either reverting restores the old
+markers or new ones get split off the new text.
 
 ## What's stubbed / simplified in this prototype
 

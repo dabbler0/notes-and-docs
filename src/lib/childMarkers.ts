@@ -109,26 +109,6 @@ export function reconstructContent(nodeId: string, opts?: { replace?: Map<string
   return parts.join('')
 }
 
-/**
- * For a *frozen* version being shown for reference (not live-editable):
- * swaps each subsection marker for a small readable chip naming that
- * section, instead of an invisible empty div or (worse) silently
- * rendering that child's current live content as if it were part of this
- * historical snapshot.
- */
-export function withChildLabels(html: string, nodeMap: Map<string, { title: string }>): string {
-  const doc = new DOMParser().parseFromString(html || '', 'text/html')
-  doc.querySelectorAll('[data-child-id]').forEach((el) => {
-    const childId = el.getAttribute('data-child-id')!
-    const title = nodeMap.get(childId)?.title ?? 'Untitled section'
-    const span = doc.createElement('span')
-    span.className = 'child-embed-chip'
-    span.textContent = `→ ${title}`
-    el.replaceWith(span)
-  })
-  return doc.body.innerHTML
-}
-
 function cssEscape(s: string): string {
   return typeof CSS !== 'undefined' && CSS.escape ? CSS.escape(s) : s.replace(/["\\]/g, '\\$&')
 }

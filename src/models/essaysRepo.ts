@@ -158,7 +158,14 @@ export async function moveNode(nodeId: string, fromParentId: string, toParentId:
   await saveNode(toParent)
 }
 
-/** Loads the whole node tree for an essay into a flat map, for rendering. */
+/**
+ * Loads the whole node tree for an essay into a flat map, for rendering.
+ * Walks every version's content, not just the live draft — a node that
+ * "make a new version" just orphaned (its marker was part of the text that
+ * got cleared) is still sitting right there in the *previous* version's
+ * content, and the version-compare split screen needs to find it in this
+ * map to render it, even though the live document no longer references it.
+ */
 export async function loadNodeMap(essay: Essay): Promise<Map<string, EssayNode>> {
   const map = new Map<string, EssayNode>()
   const stack = [essay.rootNodeId]
@@ -169,6 +176,9 @@ export async function loadNodeMap(essay: Essay): Promise<Map<string, EssayNode>>
     if (!node) continue
     map.set(nid, node)
     stack.push(...getChildIds(node.draftContent))
+    for (const version of node.versions) {
+      stack.push(...getChildIds(version.content))
+    }
   }
   return map
 }

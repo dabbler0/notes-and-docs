@@ -619,21 +619,11 @@ select {
   border-left-color: var(--border);
 }
 
-.child-embed-chip {
-  display: inline-block;
-  font-size: 12px;
-  font-weight: 700;
-  color: var(--ink-dim);
-  background: var(--surface);
-  border: 1px dashed var(--border);
-  border-radius: 999px;
-  padding: 2px 10px;
-  margin: 2px 0;
-}
-
-/* Only ever appears in a raw, non-live preview (VersionDialog's editable
-   draft pane) — the live document always substitutes a real subsection in
-   a marker's place. Shown as a small chip rather than an invisible div. */
+/* Defensive fallback only — every real rendering path (the live editor and
+   FrozenPreview alike) parses markers out via parseSegments() and renders
+   an actual subsection in their place, so a raw marker div should never
+   actually reach the screen. Shown as a small chip rather than an
+   invisible div, just in case. */
 .child-embed {
   display: inline-block;
   font-size: 12px;
@@ -719,8 +709,31 @@ select {
   margin-bottom: 10px;
 }
 
-.version-split-frozen {
+/* FrozenPreview reuses the live editor's own classes (.section-block,
+   .section-header, .node-content, .leaf-outline) so the two sides read as
+   the same kind of document — these just mute it slightly and turn off
+   the few interaction cues (hover rule, pointer cursor) that would
+   otherwise wrongly suggest it's editable. */
+.frozen-pane {
   color: var(--ink-dim);
+}
+
+.frozen-block .section-header {
+  cursor: default;
+}
+
+.frozen-title {
+  font-weight: 700;
+  color: var(--ink);
+  padding: 2px 4px;
+}
+
+.frozen-content {
+  cursor: default;
+}
+
+.frozen-content.leaf-outline:hover {
+  border-left-color: transparent;
 }
 
 .version-split-comments {

@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks'
 import { commitNewVersion, deleteNodeOnly, headVersion, revertToVersion, saveNode } from '../../models/essaysRepo'
-import { parseSegments, reconstructContent, withChildLabels } from '../../lib/childMarkers'
+import { parseSegments, reconstructContent } from '../../lib/childMarkers'
+import { FrozenPreview } from './FrozenPreview'
 import type { EssayNode, NodeVersion } from '../../models/types'
 
 const HEADING_SIZES = [21, 18, 16.5, 15, 14.5]
@@ -272,12 +273,9 @@ export function SectionBlock({
           parent. */}
       <div className={`section-content-row${comparingVersion ? ' comparing' : ''}`} hidden={isCollapsed}>
           {comparingVersion && (
-            <div className="version-split-pane" key="frozen">
+            <div className="version-split-pane frozen-pane" key="frozen">
               <div className="version-split-label">Previous version — {new Date(comparingVersion.createdAt).toLocaleString()}</div>
-              <div
-                className={`node-content version-split-frozen${isRoot ? '' : ' leaf-outline'}`}
-                dangerouslySetInnerHTML={{ __html: withChildLabels(comparingVersion.content, nodeMap) || '<span class="muted">(empty)</span>' }}
-              />
+              <FrozenPreview content={comparingVersion.content} nodeMap={nodeMap} depth={0} isRoot />
               {comparingVersion.comments.length > 0 && (
                 <div className="version-split-comments">
                   {comparingVersion.comments.map((c) => (
