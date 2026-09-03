@@ -142,6 +142,19 @@ markers or new ones get split off the new text.
 
 ## What's stubbed / simplified in this prototype
 
+- `src/lib/pdf.ts` points pdf.js's `cMapUrl`/`standardFontDataUrl` at a
+  jsDelivr CDN build matching the pinned `pdfjs-dist` version, rather than
+  bundling those (large, many-small-files) resources into the single HTML
+  file. A PDF using an embedded CJK/Type0 font or a non-embedded standard
+  font needs one of these to render correctly; left unset, pdf.js fetches
+  them by filename from a path relative to the page, which — for a
+  double-clicked local file — resolves against its own `file://` location
+  and can be refused outright by the browser (each `file://` URL is a
+  unique, opaque origin), not just render with a fallback glyph. This only
+  matters for a PDF that actually needs one of those files; opening the
+  file directly needs internet access for that specific case (the hosted
+  preview's own sandbox blocks the request via CSP either way, which just
+  means degraded fonts there, not a crash).
 - The Google Drive backend is an interface skeleton only (see above) —
   wiring up real OAuth + Drive API calls is future work, not needed to
   demonstrate the abstraction boundary.
