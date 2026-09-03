@@ -1,0 +1,25 @@
+{
+  "name": "notes-and-docs",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc -b && vite build",
+    "build:onefile": "tsc -b && vite build --mode singlefile",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "idb-keyval": "^6.3.0",
+    "pdfjs-dist": "^4.9.155",
+    "preact": "^10.29.8"
+  },
+  "devDependencies": {
+    "@preact/preset-vite": "^2.10.6",
+    "@types/node": "^24.13.3",
+    "playwright": "^1.62.1",
+    "typescript": "~6.0.2",
+    "vite": "^8.2.2",
+    "vite-plugin-singlefile": "^2.3.3"
+  }
+}
