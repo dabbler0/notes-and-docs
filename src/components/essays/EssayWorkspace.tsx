@@ -24,6 +24,7 @@ export function EssayWorkspace({ essayId, onBack }: { essayId: string; onBack: (
   const [essayTitle, setEssayTitle] = useState('')
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set())
   const [commentMode, setCommentMode] = useState(false)
+  const [showTree, setShowTree] = useState(true)
   const [showComments, setShowComments] = useState(true)
   const [showCitation, setShowCitation] = useState(false)
   const [showQuote, setShowQuote] = useState(false)
@@ -240,7 +241,18 @@ export function EssayWorkspace({ essayId, onBack }: { essayId: string; onBack: (
       </div>
 
       <div className="workspace">
-        <NodeTree nodeMap={nodeMap} rootId={essay.rootNodeId} essayTitle={essayTitle} collapsed={collapsed} onToggleCollapse={toggleCollapse} onScrollTo={scrollToNode} onMove={handleMove} />
+        {showTree ? (
+          <div className="tree-panel-shell">
+            <NodeTree nodeMap={nodeMap} rootId={essay.rootNodeId} essayTitle={essayTitle} collapsed={collapsed} onToggleCollapse={toggleCollapse} onScrollTo={scrollToNode} onMove={handleMove} />
+            <button className="panel-edge-toggle left" onClick={() => setShowTree(false)} title="Collapse outline">
+              ‹
+            </button>
+          </div>
+        ) : (
+          <button className="panel-edge-tab left" onClick={() => setShowTree(true)} title="Show outline">
+            ›
+          </button>
+        )}
 
         <div className="editor-panel">
           <div className="editor-toolbar doc-toolbar">
@@ -277,9 +289,6 @@ export function EssayWorkspace({ essayId, onBack }: { essayId: string; onBack: (
               💬 {commentMode ? 'Commenting…' : 'Comment mode'}
             </button>
             <div className="spacer" />
-            <button className="btn btn-sm" onClick={() => setShowComments((v) => !v)}>
-              {showComments ? 'Hide comments' : 'Show comments'}
-            </button>
           </div>
 
           <div className="editor-scroll doc-scroll" onMouseUp={handleMouseUpForComments}>
@@ -299,7 +308,18 @@ export function EssayWorkspace({ essayId, onBack }: { essayId: string; onBack: (
           </div>
         </div>
 
-        {showComments && <CommentsPanel nodeMap={nodeMap} onChanged={reload} />}
+        {showComments ? (
+          <div className="comments-panel-shell">
+            <button className="panel-edge-toggle right" onClick={() => setShowComments(false)} title="Collapse comments">
+              ›
+            </button>
+            <CommentsPanel nodeMap={nodeMap} onChanged={reload} />
+          </div>
+        ) : (
+          <button className="panel-edge-tab right" onClick={() => setShowComments(true)} title="Show comments">
+            ‹
+          </button>
+        )}
       </div>
 
       {pendingComment && (
