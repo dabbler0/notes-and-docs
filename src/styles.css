@@ -321,6 +321,43 @@ select {
   max-width: 1100px;
 }
 
+/* --- mobile: every modal is a full-screen view instead --- */
+
+.modal-page {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  background: var(--bg);
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+}
+
+.modal-page-back {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  flex-shrink: 0;
+  width: 100%;
+  text-align: left;
+  padding: 14px 16px;
+  border: none;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--ink);
+  font-weight: 600;
+  font-size: 15px;
+}
+
+.modal-page-content {
+  padding: 18px 20px 48px;
+}
+
+.modal-page-content .modal-actions {
+  /* The "Cancel" a centered modal needs is just this "← Back" bar now. */
+  justify-content: flex-end;
+}
+
 .modal h2 {
   margin: 0 0 16px;
   font-size: 19px;
@@ -877,6 +914,13 @@ select {
 
 .version-split-pane {
   min-width: 0;
+  /* Independent scrolling per side (asked for explicitly even in the
+     desktop, side-by-side orientation): each pane is its own bounded,
+     separately-scrolling box rather than the two growing together and
+     scrolling as part of the surrounding document. */
+  max-height: 65vh;
+  overflow-y: auto;
+  padding-right: 4px;
 }
 
 .version-split-label {
@@ -930,8 +974,41 @@ select {
 }
 
 @media (max-width: 720px) {
+  /* Side-by-side becomes top-and-bottom on a narrow screen — each pane
+     keeps its own independent scroll (set above, unconditionally), just
+     stacked vertically instead of side by side. */
   .section-content-row.comparing {
     grid-template-columns: 1fr;
+  }
+  .version-split-pane {
+    max-height: 40vh;
+  }
+
+  .topbar {
+    padding: 10px 14px;
+    gap: 10px;
+  }
+
+  .tabs {
+    gap: 2px;
+  }
+
+  .tab {
+    padding: 7px 12px;
+    font-size: 13.5px;
+  }
+
+  .page-pad {
+    padding: 18px 14px 40px;
+  }
+
+  .editor-scroll {
+    padding: 18px 16px 60px;
+  }
+
+  .editor-toolbar {
+    padding: 8px 12px;
+    gap: 4px;
   }
 }
 
@@ -1043,6 +1120,14 @@ select {
   top: 0;
   left: 0;
   width: 100%;
+}
+
+.comments-list-view {
+  padding: 4px 2px;
+}
+
+.comments-list-view .comment-item {
+  margin-bottom: 10px;
 }
 
 .comment-item {

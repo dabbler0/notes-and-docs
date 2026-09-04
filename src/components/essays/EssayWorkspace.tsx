@@ -13,6 +13,8 @@ import { CommentsPanel } from './CommentsPanel'
 import { CitationPickerDialog } from './CitationPickerDialog'
 import { QuoteInsertDialog } from './QuoteInsertDialog'
 import { ExportDialog } from './ExportDialog'
+import { Modal } from '../Modal'
+import { useIsMobile } from '../../lib/useIsMobile'
 
 /**
  * The whole essay as one continuous, scrollable document: every section's
@@ -29,6 +31,13 @@ export function EssayWorkspace({ essayId, onBack }: { essayId: string; onBack: (
   const [commentMode, setCommentMode] = useState(false)
   const [showTree, setShowTree] = useState(true)
   const [showComments, setShowComments] = useState(true)
+  const isMobile = useIsMobile()
+  // On mobile the outline and comments aren't collapsible side columns —
+  // there's no room for them to coexist with the document at all — they're
+  // separate full-screen views, opened and closed independently of the
+  // desktop-only showTree/showComments column state above.
+  const [mobileTreeOpen, setMobileTreeOpen] = useState(false)
+  const [mobileCommentsOpen, setMobileCommentsOpen] = useState(false)
   const [showCitation, setShowCitation] = useState(false)
   const [showQuote, setShowQuote] = useState(false)
   const [showLink, setShowLink] = useState(false)
@@ -324,21 +333,35 @@ export function EssayWorkspace({ essayId, onBack }: { essayId: string; onBack: (
       </div>
 
       <div className="workspace">
-        {showTree ? (
-          <div className="tree-panel-shell">
-            <NodeTree nodeMap={nodeMap} rootId={essay.rootNodeId} essayTitle={essayTitle} collapsed={collapsed} onToggleCollapse={toggleCollapse} onScrollTo={scrollToNode} onMove={handleMove} />
-            <button className="panel-edge-toggle left" onClick={() => setShowTree(false)} title="Collapse outline">
-              ‹
+        {/* On mobile there's no room for the outline as a persistent side
+            column, so it isn't rendered as one at all — "☰ Outline" below
+            opens it as its own full-screen view instead. */}
+        {!isMobile &&
+          (showTree ? (
+            <div className="tree-panel-shell">
+              <NodeTree nodeMap={nodeMap} rootId={essay.rootNodeId} essayTitle={essayTitle} collapsed={collapsed} onToggleCollapse={toggleCollapse} onScrollTo={scrollToNode} onMove={handleMove} />
+              <button className="panel-edge-toggle left" onClick={() => setShowTree(false)} title="Collapse outline">
+                ‹
+              </button>
+            </div>
+          ) : (
+            <button className="panel-edge-tab left" onClick={() => setShowTree(true)} title="Show outline">
+              ›
             </button>
-          </div>
-        ) : (
-          <button className="panel-edge-tab left" onClick={() => setShowTree(true)} title="Show outline">
-            ›
-          </button>
-        )}
+          ))}
 
         <div className="editor-panel">
           <div className="editor-toolbar doc-toolbar">
+            {isMobile && (
+              <>
+                <button className="btn btn-sm" onClick={() => setMobileTreeOpen(true)}>
+                  ☰ Outline
+                </button>
+                <button className="btn btn-sm" onClick={() => setMobileCommentsOpen(true)}>
+                  💬 Comments
+                </button>
+              </>
+            )}
             <button className="btn btn-sm" onMouseDown={(e) => e.preventDefault()} onClick={() => exec('bold')}>
               <b>B</b>
             </button>
@@ -401,19 +424,56 @@ export function EssayWorkspace({ essayId, onBack }: { essayId: string; onBack: (
           </div>
         </div>
 
-        {showComments ? (
-          <div className="comments-panel-shell">
-            <button className="panel-edge-toggle right" onClick={() => setShowComments(false)} title="Collapse comments">
-              ›
+        {!isMobile &&
+          (showComments ? (
+            <div className="comments-panel-shell">
+              <button className="panel-edge-toggle right" onClick={() => setShowComments(false)} title="Collapse comments">
+                ›
+              </button>
+              <CommentsPanel nodeMap={nodeMap} onChanged={reload} scrollRef={docScrollRef} />
+            </div>
+          ) : (
+            <button className="panel-edge-tab right" onClick={() => setShowComments(true)} title="Show comments">
+              ‹
             </button>
-            <CommentsPanel nodeMap={nodeMap} onChanged={reload} scrollRef={docScrollRef} />
-          </div>
-        ) : (
-          <button className="panel-edge-tab right" onClick={() => setShowComments(true)} title="Show comments">
-            ‹
-          </button>
-        )}
+          ))}
       </div>
+
+      {mobileTreeOpen && (
+        <Modal onClose={() => setMobileTreeOpen(false)}>
+          <h2 style={{ marginTop: 0 }}>Outline</h2>
+          <NodeTree
+            nodeMap={nodeMap}
+            rootId={essay.rootNodeId}
+            essayTitle={essayTitle}
+            collapsed={collapsed}
+            onToggleCollapse={toggleCollapse}
+            onScrollTo={(nodeId) => {
+              setMobileTreeOpen(false)
+              // The target section needs to actually be in the DOM before
+              // scrollIntoView can find it — closing the view first can
+              // leave that a frame behind, so give it one.
+              requestAnimationFrame(() => scrollToNode(nodeId))
+            }}
+            onMove={handleMove}
+          />
+        </Modal>
+      )}
+
+      {mobileCommentsOpen && (
+        <Modal onClose={() => setMobileCommentsOpen(false)}>
+          <CommentsPanel
+            nodeMap={nodeMap}
+            onChanged={reload}
+            scrollRef={docScrollRef}
+            mode="list"
+            onJumpTo={(nodeId) => {
+              setMobileCommentsOpen(false)
+              requestAnimationFrame(() => scrollToNode(nodeId))
+            }}
+          />
+        </Modal>
+      )}
 
       {pendingComment && (
         <div
@@ -468,8 +528,8 @@ function CommentComposer({ onCancel, onSubmit }: { onCancel: () => void; onSubmi
  * (not document) coordinates, so `position: fixed` is what we want here.
  */
 function commentWidgetStyle(rect: { top: number; bottom: number; left: number; right: number }) {
-  const width = 320
   const margin = 12
+  const width = Math.min(320, window.innerWidth - margin * 2)
   const maxLeft = Math.max(margin, window.innerWidth - width - margin)
   const left = Math.min(Math.max(rect.left, margin), maxLeft)
   const spaceBelow = window.innerHeight - rect.bottom

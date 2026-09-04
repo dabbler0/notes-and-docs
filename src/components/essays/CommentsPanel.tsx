@@ -19,7 +19,21 @@ interface Row {
  * scrolled) — a value that stays correct at any scroll offset, since the
  * transform below re-applies that same offset in the other direction.
  */
-export function CommentsPanel({ nodeMap, onChanged, scrollRef }: { nodeMap: Map<string, EssayNode>; onChanged: () => void; scrollRef: { current: HTMLDivElement | null } }) {
+export function CommentsPanel({
+  nodeMap,
+  onChanged,
+  scrollRef,
+  mode = 'margin',
+  onJumpTo,
+}: {
+  nodeMap: Map<string, EssayNode>
+  onChanged: () => void
+  scrollRef: { current: HTMLDivElement | null }
+  /** 'list' is the mobile rendering: comments aren't visible next to the document there (it's a separate full-screen view), so there's no anchor to line a card up with — just a plain scrollable list, same as the pre-margin design. */
+  mode?: 'margin' | 'list'
+  /** list mode only: jump back to a comment's own section in the document (and, on mobile, close this view). */
+  onJumpTo?: (nodeId: string) => void
+}) {
   const panelRef = useRef<HTMLDivElement>(null)
   const innerRef = useRef<HTMLDivElement>(null)
   const [positions, setPositions] = useState<Map<string, number>>(new Map())
@@ -37,6 +51,7 @@ export function CommentsPanel({ nodeMap, onChanged, scrollRef }: { nodeMap: Map<
   const openCount = rows.filter((r) => !r.comment.resolved).length
 
   function recompute() {
+    if (mode !== 'margin') return
     const scrollEl = scrollRef.current
     const panelEl = panelRef.current
     if (!scrollEl || !panelEl) return
@@ -79,6 +94,7 @@ export function CommentsPanel({ nodeMap, onChanged, scrollRef }: { nodeMap: Map<
   }
 
   useEffect(() => {
+    if (mode !== 'margin') return
     recompute()
     const scrollEl = scrollRef.current
     if (!scrollEl) return
@@ -102,11 +118,33 @@ export function CommentsPanel({ nodeMap, onChanged, scrollRef }: { nodeMap: Map<
     // Re-measure whenever the node map changes (new/edited comments,
     // reverts, etc.) — a fresh nodeMap is handed down on every reload().
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [nodeMap])
+  }, [nodeMap, mode])
 
   async function toggle(row: Row, resolved: boolean) {
     await setCommentResolved(row.node, headVersion(row.node).id, row.comment.id, resolved)
     onChanged()
+  }
+
+  if (mode === 'list') {
+    return (
+      <div className="comments-list-view">
+        <h2 style={{ marginTop: 0 }}>Comments ({openCount} open)</h2>
+        {rows.length === 0 && <p className="muted">No comments yet. Turn on Comment mode and select some text to leave one.</p>}
+        {rows.map((row) => (
+          <div className={`comment-item${row.comment.resolved ? ' resolved' : ''}`} key={row.comment.id}>
+            <div className="comment-section-label" onClick={() => onJumpTo?.(row.node.id)}>
+              {row.node.title || 'Untitled section'}
+            </div>
+            <div className="anchor">“{row.comment.anchorText}”</div>
+            <div>{row.comment.body}</div>
+            <label className="comment-checkbox-row">
+              <input type="checkbox" checked={row.comment.resolved} onChange={(e) => toggle(row, (e.target as HTMLInputElement).checked)} />
+              <span className="muted">Dealt with</span>
+            </label>
+          </div>
+        ))}
+      </div>
+    )
   }
 
   return (
