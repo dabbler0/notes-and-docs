@@ -18,6 +18,13 @@ export interface Source {
   pageTexts: string[]
   createdAt: number
   updatedAt: number
+  /**
+   * Tombstone rather than a hard local delete, so a deletion is itself a
+   * change with a newer `updatedAt` that sync can propagate to other
+   * devices — every list/read in sourcesRepo filters these out, so nothing
+   * elsewhere in the app needs to know this field exists.
+   */
+  deleted?: boolean
 }
 
 // ---- Essays / drafts -----------------------------------------------------
@@ -58,6 +65,8 @@ export interface EssayNode {
   draftContent: string
   createdAt: number
   updatedAt: number
+  /** Tombstone — see the note on Source.deleted. */
+  deleted?: boolean
 }
 
 export interface Essay {
@@ -66,6 +75,8 @@ export interface Essay {
   rootNodeId: string
   createdAt: number
   updatedAt: number
+  /** Tombstone — see the note on Source.deleted. */
+  deleted?: boolean
 }
 
 /**

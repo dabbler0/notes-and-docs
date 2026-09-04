@@ -6,10 +6,13 @@ citations) and a draft editor — presented as one continuous, collapsible
 document rather than a file tree — with an explicit per-section version
 history, inline commenting, and inline citation/quote insertion.
 
-Runs entirely in the browser — no server, no account. Data lives in
-**IndexedDB**, both structured records and PDF blobs (see the storage note
-below for why blobs aren't in OPFS despite that being the more obvious
-fit).
+Runs entirely in the browser, local-first — no server of its own. Data
+lives in **IndexedDB** on every device, both structured records and PDF
+blobs (see the storage note below for why blobs aren't in OPFS despite that
+being the more obvious fit); an optional, rudimentary sync layer (see
+"Syncing across devices" below) can reconcile that local copy with your own
+Firebase project, encrypting anything sensitive before it ever leaves the
+device.
 
 ## Quick start
 
@@ -46,6 +49,14 @@ npm run build:onefile  # produces dist/index.html: everything inlined, open it f
   "whichever section currently has the cursor," plus a recursive
   `SectionBlock.tsx` per section (its own small `contentEditable` shards,
   its own collapse state, its own version-history button).
+- `src/sync/` and `src/components/sync/` — the optional cross-device sync
+  layer: `syncEngine.ts` (the actual push/pull pass), `account.ts` and
+  `firebaseConfig.ts` (what's stored locally to make sync possible at all),
+  `autoSync.ts` (the polling loop), `qr.ts` (pairing-code generation), and
+  `SyncSettingsDialog.tsx`/`QrScanner.tsx` for the UI. See "Syncing across
+  devices" below for the full design and setup steps.
+- `src/lib/useIsMobile.ts` plus the mobile branches inside `Modal.tsx` and
+  `EssayWorkspace.tsx` — see "Mobile layout" below.
 
 ## Data model notes
 
@@ -205,6 +216,161 @@ pill itself: browsing history is just look-don't-touch, so reverting to
 something several versions back doesn't require re-living every version
 in between the way the version-pill's freeze-and-clear action would.
 
+## Mobile layout
+
+Below a 720px viewport width, three things change; nothing else does —
+splitting, versioning, comments, citations, and export all work exactly
+the same way on mobile as on desktop.
+
+- **Every modal is a full-screen view instead.** `Modal.tsx` is the one
+  place every dialog in the app goes through (add/detail source, the
+  citation/quote/link pickers, export, sync settings), so this is a single
+  branch there: below the breakpoint it renders as `position: fixed; inset:
+  0` with a pinned "← Back" bar, instead of a backdrop behind a centered
+  card. No dialog anywhere had to change its own code for this.
+- **The outline and comments aren't side columns.** There's no room for
+  them to coexist with the document on a phone screen, so on mobile they
+  simply aren't rendered as persistent columns at all — two toolbar buttons
+  ("☰ Outline," "💬 Comments") open them as their own full-screen views
+  (through the same `Modal`). Comments there render as a plain scrollable
+  list (`CommentsPanel`'s `mode="list"`) rather than the desktop's
+  margin-aligned cards, since there's no document visible alongside them to
+  align a card against; tapping a row jumps back into the document at that
+  section.
+- **The version-compare split screen stacks vertically instead of
+  side-by-side**, and — on both orientations, not just mobile — each pane
+  scrolls independently rather than growing together with the surrounding
+  page, so comparing a long old version against a long new one doesn't mean
+  scrolling the whole page just to read the bottom of one side.
+
+## Syncing across devices
+
+Sync is opt-in and rudimentary by design: no realtime updates, no
+conflict-resolution UI, one polling interval. What it does do: every
+device keeps a full local copy of everything in IndexedDB (nothing here
+changes that — sync is a reconciliation pass layered on top, not a
+replacement for local storage), PDFs and essay drafts are encrypted before
+they ever leave the device, and there's no password or server-side
+signup — an account *is* an encryption key plus a random id, and moving
+that pair to a new device is what "logging in" means.
+
+**Setting up your own Firebase project.** This is a single static HTML
+file with no server of its own, so it can't ship a working sync backend
+out of the box — each install points at *your own* Firebase project:
+
+1. Create a Firebase project (free tier is enough) and enable
+   **Firestore** and **Storage**, and enable **Anonymous** sign-in under
+   Authentication (this is only so Firestore/Storage rules have a
+   `request.auth` to check — see the security note below, it has nothing
+   to do with the app's own account system).
+2. Set these Firestore rules (`accounts/{userId}` is the app's own account
+   id, not Firebase's):
+   ```
+   rules_version = '2';
+   service cloud.firestore {
+     match /databases/{database}/documents {
+       match /accounts/{userId}/{collection}/{docId} {
+         allow read, write: if request.auth != null;
+       }
+     }
+   }
+   ```
+   and this for Storage:
+   ```
+   rules_version = '2';
+   service firebase.storage {
+     match /b/{bucket}/o {
+       match /accounts/{userId}/blobs/{blobId} {
+         allow read, write: if request.auth != null;
+       }
+     }
+   }
+   ```
+3. In Project settings → "Your apps," add a web app and copy its config
+   object. Paste that into the app's Sync settings (🔄 Sync in the topbar)
+   — it's stored in this browser's `localStorage`, not baked into the
+   build, since there is no build-time secret to bake in (a Firebase web
+   config is meant to be public; see below for what actually guards the
+   data).
+
+**Creating and transferring an account.** Sync settings offers "Create
+account" (generates a fresh AES-256 key and a random id, right there in
+the browser) or "Use an existing account," which accepts the same bundle
+three ways: scanning another device's QR code, uploading its downloaded
+key file, or pasting the key JSON directly. The QR/file/paste payload is
+just `{ userId, key, v }` — literally the whole account. Camera-based QR
+scanning needs a secure context (`https://`, or `localhost`) to get camera
+access at all; a copy of this app opened straight from disk over `file://`
+can't get there, so it falls back to a plain message and the key-file/paste
+paths, which work everywhere.
+
+**What's encrypted, what isn't.** A node's `draftContent` and its full
+`versions` array (so: the actual prose, and every comment attached to any
+version) are AES-256-GCM encrypted client-side before being written to
+Firestore, as one `_enc: {iv, data}` field; PDF bytes are encrypted the
+same way before upload to Storage, with the IV kept in the object's own
+`customMetadata` (Storage has no per-field encryption of its own). Left as
+plaintext metadata: essay/section titles, timestamps, a source's BibTeX
+fields and free-text note, and which node has which parent (implicit in
+`draftContent`'s markers, which — being inside a node's own content — are
+covered by the same encryption as the prose). This split is deliberate, not
+just laziness: it's what lets a device list your essays/sources and know
+what's changed without decrypting everything, and keeps sync payloads
+small. It also means a source's comment field and a essay's title are
+readable by anyone who can read your Firestore data, encryption or not —
+worth knowing if either would contain something sensitive.
+
+**How sync actually decides what to send.** Every local record already
+carries an `updatedAt`; each pass pushes anything newer than the last push,
+and pulls anything remote newer than the last pull, applying a remote
+change locally only if it's newer than what's already there
+(last-write-wins, no merge). A PDF is pushed once, the first time a pass
+notices it hasn't been uploaded yet (blob ids are never reused for a
+different file, so there's no need to compare timestamps there). Deletion
+is a tombstone (`deleted: true` plus a fresh `updatedAt` on the essay,
+source, or node record — see the `deleted` field's own doc comment in
+`models/types.ts`), not a hard delete, specifically so a deletion is itself
+a synchronizable *change*; every list/read in `essaysRepo`/`sourcesRepo`
+filters tombstoned records out, so nothing else in the app needs to know
+this exists. Sync runs automatically every 30 seconds while the app is
+open (toggle in Sync settings) and on demand via "Sync now."
+
+**The security model, stated plainly.** There's no real per-account access
+control here — the Firestore/Storage rules above allow *any* anonymously
+authenticated client to read or write *any* account's path, if it knows
+the id. What actually protects your data is that the id is an
+unguessable random UUID (rules out casual discovery) and that anything
+worth reading is encrypted with a key that never reaches Firebase at all
+(rules out a compromised or curious server operator, and rules out someone
+who does guess or leak an id from reading anything but ciphertext). A real
+product would instead mint a Firebase custom auth token server-side, bound
+to the account id, and write rules like `request.auth.uid == userId` — but
+that needs a backend able to hold a service-account secret, which a
+single static HTML file fundamentally can't do without reintroducing a
+server. This tradeoff is the whole reason the account system stays
+"rudimentary": it's exactly as much account system as a purely
+client-side app can honestly implement.
+
+**Known gaps.** No realtime listeners — a change on another device shows
+up on the next 30-second tick or manual sync, not immediately. No
+conflict UI — a genuine simultaneous edit on two devices just keeps
+whichever timestamp is later, silently. Deleting a source removes its
+Storage object's *local* reference immediately but doesn't delete the
+remote copy (a minor, unreclaimed storage cost, not a correctness issue).
+And — since this sandbox's network policy blocks reaching Firebase's own
+domains at all — the actual push/pull pass against a live project could
+not be exercised end-to-end while building this; what's verified directly
+is the encryption round-trip (AES-GCM encrypt/decrypt, including that the
+wrong key correctly fails to decrypt), every account-management UI flow
+(create, export via QR/key-file, import via paste/file, forget), tombstone
+deletion (a deleted record is confirmed to persist locally as
+`{deleted: true}` rather than vanishing), and that a sync attempt against
+an unreachable project fails safely into a visible error rather than
+hanging the UI or throwing past the try/catch. The push/pull logic itself
+is implemented directly against the documented Firestore/Storage SDK
+semantics, but hasn't been watched moving real data between two real
+devices.
+
 ## What's stubbed / simplified in this prototype
 
 - `src/lib/pdf.ts` points pdf.js's `cMapUrl`/`standardFontDataUrl` at a
@@ -238,3 +404,12 @@ in between the way the version-pill's freeze-and-clear action would.
   ranked.
 - BibTeX parsing/formatting covers the common `@type{key, field = {...}}`
   shape (also `"..."` values); it isn't a full BibTeX-grammar parser.
+- Bundling the Firebase SDK for the optional sync feature adds real weight
+  to the single-file build (roughly 900KB → 1.1MB gzipped) even for
+  someone who never turns sync on — an acceptable tradeoff for "sync is
+  built in and just needs your own Firebase project," but worth knowing if
+  file size matters more than that convenience.
+- The PDF viewer's drag-to-select-a-quote interaction (used by "Quote from
+  PDF") is mouse-drag-shaped and hasn't been adapted for touch; quoting
+  from a PDF on mobile is the one editor feature that's meaningfully more
+  awkward there than on desktop.

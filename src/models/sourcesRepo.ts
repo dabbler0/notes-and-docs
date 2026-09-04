@@ -7,7 +7,7 @@ const COLLECTION = 'sources'
 
 export async function listSources(): Promise<Source[]> {
   const sources = await backend.docs.list<Source>(COLLECTION)
-  return sources.sort((a, b) => b.updatedAt - a.updatedAt)
+  return sources.filter((s) => !s.deleted).sort((a, b) => b.updatedAt - a.updatedAt)
 }
 
 export async function getSource(sourceId: string): Promise<Source | undefined> {
@@ -38,10 +38,21 @@ export async function updateSource(source: Source): Promise<void> {
   await backend.docs.put(COLLECTION, source)
 }
 
+/**
+ * Tombstones the source rather than deleting it outright, so sync can
+ * propagate the deletion to other devices (see the `deleted` field note on
+ * the Source type) — but the local PDF copy is removed for real right away,
+ * same as before, since there's no reason to keep it taking up space on
+ * *this* device once its source is gone. The now-orphaned encrypted copy in
+ * Storage (if this ever synced) is left behind; cleaning that up remotely
+ * isn't implemented, a known gap for this rudimentary a sync setup.
+ */
 export async function deleteSource(sourceId: string): Promise<void> {
   const source = await getSource(sourceId)
-  if (source?.pdfBlobId) await backend.blobs.delete(source.pdfBlobId)
-  await backend.docs.delete(COLLECTION, sourceId)
+  if (!source) return
+  if (source.pdfBlobId) await backend.blobs.delete(source.pdfBlobId)
+  source.deleted = true
+  await updateSource(source)
 }
 
 export async function getSourcePdfBlob(source: Source): Promise<Blob | undefined> {

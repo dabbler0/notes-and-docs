@@ -8,7 +8,7 @@ const NODES = 'nodes'
 
 export async function listEssays(): Promise<Essay[]> {
   const essays = await backend.docs.list<Essay>(ESSAYS)
-  return essays.sort((a, b) => b.updatedAt - a.updatedAt)
+  return essays.filter((e) => !e.deleted).sort((a, b) => b.updatedAt - a.updatedAt)
 }
 
 export async function getEssay(essayId: string): Promise<Essay | undefined> {
@@ -53,6 +53,13 @@ export async function createEssay(title: string): Promise<Essay> {
   return essay
 }
 
+/**
+ * Tombstones the essay and every node in it, rather than deleting the
+ * records outright — a deletion needs to be a *change* (with a newer
+ * `updatedAt`) for sync to propagate it to other devices at all, and
+ * hard-deleting it locally first would leave nothing to actually push. See
+ * the `deleted` field on Essay/EssayNode/Source and the note there.
+ */
 export async function deleteEssay(essayId: string): Promise<void> {
   const essay = await getEssay(essayId)
   if (!essay) return
@@ -60,11 +67,13 @@ export async function deleteEssay(essayId: string): Promise<void> {
   while (stack.length) {
     const nid = stack.pop()!
     const node = await getNode(nid)
-    if (!node) continue
+    if (!node || node.deleted) continue
     stack.push(...getChildIds(node.draftContent))
-    await backend.docs.delete(NODES, nid)
+    node.deleted = true
+    await saveNode(node)
   }
-  await backend.docs.delete(ESSAYS, essayId)
+  essay.deleted = true
+  await saveEssay(essay)
 }
 
 export function headVersion(node: EssayNode): NodeVersion {
@@ -131,7 +140,10 @@ export async function setCommentResolved(node: EssayNode, versionId: string, com
  * needs to go away.
  */
 export async function deleteNodeOnly(nodeId: string): Promise<void> {
-  await backend.docs.delete(NODES, nodeId)
+  const node = await getNode(nodeId)
+  if (!node) return
+  node.deleted = true
+  await saveNode(node)
 }
 
 /**
@@ -173,7 +185,7 @@ export async function loadNodeMap(essay: Essay): Promise<Map<string, EssayNode>>
     const nid = stack.pop()!
     if (map.has(nid)) continue
     const node = await getNode(nid)
-    if (!node) continue
+    if (!node || node.deleted) continue
     map.set(nid, node)
     stack.push(...getChildIds(node.draftContent))
     for (const version of node.versions) {

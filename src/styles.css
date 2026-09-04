@@ -637,7 +637,7 @@ select {
   flex-wrap: wrap;
 }
 
-.editor-toolbar .spacer {
+.spacer {
   flex: 1;
 }
 
@@ -1298,4 +1298,68 @@ select {
 .icon-btn:hover {
   background: var(--border);
   color: var(--ink);
+}
+
+/* --- sync settings dialog --- */
+
+.sync-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin: 10px 0;
+}
+
+.sync-account-setup h3 {
+  margin-top: 0;
+}
+
+.sync-import-tabs {
+  display: flex;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.sync-qr-block {
+  text-align: center;
+  background: var(--surface-2);
+  border-radius: var(--radius-md);
+  padding: 16px;
+  margin: 12px 0;
+}
+
+.sync-qr-block img {
+  border-radius: var(--radius-sm);
+  background: #fff;
+  padding: 8px;
+}
+
+.sync-qr-block p {
+  max-width: 420px;
+  margin: 10px auto;
+}
+
+.qr-scanner {
+  margin: 10px 0;
+}
+
+.qr-scanner-video {
+  width: 100%;
+  max-width: 360px;
+  border-radius: var(--radius-md);
+  background: #000;
+}
+
+.error-text {
+  color: #b3392a;
+  font-size: 13px;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) .error-text {
+    color: #f0897a;
+  }
+}
+:root[data-theme='dark'] .error-text {
+  color: #f0897a;
 }
