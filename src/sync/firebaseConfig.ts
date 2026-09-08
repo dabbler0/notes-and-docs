@@ -78,7 +78,14 @@ export function clearFirebaseConfig(): void {
   localStorage.removeItem(STORAGE_KEY)
 }
 
-let detectPromise: Promise<FirebaseWebConfig | null> | null = null
+export type HostingDetectResult =
+  | { status: 'found'; config: FirebaseWebConfig }
+  /** No /__/firebase/init.json at all (or it didn't parse) — this page isn't served by Firebase Hosting, or Hosting isn't set up for a project yet. Not an error; this is the normal case for npm run dev, a downloaded file, or any other host. */
+  | { status: 'not-hosted' }
+  /** init.json exists but is missing something the app actually needs — surfaced explicitly (rather than just falling back silently) so whatever's misconfigured in the Firebase project is obvious instead of a mystery. */
+  | { status: 'invalid'; error: string; raw: unknown }
+
+let detectPromise: Promise<HostingDetectResult> | null = null
 
 /**
  * Firebase Hosting automatically serves a project's own default web-app
@@ -92,13 +99,27 @@ let detectPromise: Promise<FirebaseWebConfig | null> | null = null
  * fetch 404s or fails outright, and the manual-paste path in Sync
  * settings is what's left. Cached for the life of the page — the result
  * can't meaningfully change without a full reload anyway.
+ *
+ * Firebase's own init.json also carries fields this app doesn't use at all
+ * (`databaseURL`, for the Realtime Database — a different product from the
+ * Firestore/Storage this app actually talks to) which can come back empty
+ * with no effect on anything here; only a genuinely missing field from
+ * REQUIRED_FIELDS above (most often `storageBucket`, if Cloud Storage
+ * hasn't been provisioned for the project yet) makes this resolve to
+ * 'invalid' instead of 'found'.
  */
-export function detectHostingConfig(): Promise<FirebaseWebConfig | null> {
+export function detectHostingConfig(): Promise<HostingDetectResult> {
   if (!detectPromise) {
     detectPromise = fetch('/__/firebase/init.json')
-      .then((res) => (res.ok ? res.json() : null))
-      .then((json) => (json && !validateFirebaseConfig(json) ? (json as FirebaseWebConfig) : null))
-      .catch(() => null)
+      .then(async (res) => {
+        if (!res.ok) return { status: 'not-hosted' } as const
+        const json = await res.json().catch(() => null)
+        if (!json) return { status: 'not-hosted' } as const
+        const error = validateFirebaseConfig(json)
+        if (error) return { status: 'invalid', error, raw: json } as const
+        return { status: 'found', config: json as FirebaseWebConfig } as const
+      })
+      .catch(() => ({ status: 'not-hosted' }) as const)
   }
   return detectPromise
 }

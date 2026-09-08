@@ -15,6 +15,7 @@ type SyncStatus = { kind: 'idle' | 'running' | 'ok' | 'error'; message: string }
 export function SyncSettingsDialog({ onClose }: { onClose: () => void }) {
   const [stored, setStored] = useState<StoredFirebaseConfig | null>(() => getStoredFirebaseConfig())
   const [detecting, setDetecting] = useState(!stored)
+  const [detectError, setDetectError] = useState<{ error: string; raw: unknown } | null>(null)
   const [forceManualForm, setForceManualForm] = useState(false)
   const [account, setAccount] = useState<Account | null>(null)
   const [loadingAccount, setLoadingAccount] = useState(true)
@@ -33,10 +34,17 @@ export function SyncSettingsDialog({ onClose }: { onClose: () => void }) {
   useEffect(() => {
     if (stored) return
     setDetecting(true)
-    detectHostingConfig().then((detected) => {
-      if (detected) {
-        setFirebaseConfig(detected, 'auto')
-        setStored({ config: detected, source: 'auto' })
+    detectHostingConfig().then((result) => {
+      if (result.status === 'found') {
+        setFirebaseConfig(result.config, 'auto')
+        setStored({ config: result.config, source: 'auto' })
+      } else if (result.status === 'invalid') {
+        // Found init.json, but it's missing something this app needs —
+        // surfaced explicitly rather than just silently falling back, so
+        // whatever's misconfigured in the Firebase project is obvious
+        // instead of a mystery (this is what previously made a config
+        // problem indistinguishable from "not hosted on Firebase at all").
+        setDetectError({ error: result.error, raw: result.raw })
       }
       setDetecting(false)
     })
@@ -55,15 +63,31 @@ export function SyncSettingsDialog({ onClose }: { onClose: () => void }) {
       {showManualForm ? (
         <>
           {detecting && <p className="muted">Checking whether this page's own Firebase Hosting already has a project config for it…</p>}
-          <FirebaseConfigForm
-            initialText={stored ? JSON.stringify(stored.config, null, 2) : ''}
-            onSaved={(cfg) => {
-              setFirebaseConfig(cfg, 'manual')
-              setStored({ config: cfg, source: 'manual' })
-              setForceManualForm(false)
-            }}
-            onCancel={stored ? () => setForceManualForm(false) : undefined}
-          />
+          {detectError && (
+            <p className="error-text">
+              Found this page's own Firebase Hosting config, but it's missing something this app needs: <b>{detectError.error}</b> — most often this means Cloud Storage hasn't been provisioned yet for this project (open{' '}
+              <b>Storage</b> in the Firebase console and click <b>Get started</b> once), then reload this page. In the meantime, or if you'd rather point at a different project, you can fix it up and paste it below.
+            </p>
+          )}
+          {/* Not rendered while `detecting` is still in flight: the form's
+              own text state only ever seeds itself from `initialText` once,
+              on mount — mounting it early with an empty prefill and then
+              trying to fill it in once detection resolves wouldn't do
+              anything, since a later prop change doesn't reseed a
+              component's own useState. Waiting the extra moment for
+              detection to settle first means it always mounts already
+              knowing whether there's something to prefill. */}
+          {!detecting && (
+            <FirebaseConfigForm
+              initialText={stored ? JSON.stringify(stored.config, null, 2) : detectError ? JSON.stringify(detectError.raw, null, 2) : ''}
+              onSaved={(cfg) => {
+                setFirebaseConfig(cfg, 'manual')
+                setStored({ config: cfg, source: 'manual' })
+                setForceManualForm(false)
+              }}
+              onCancel={stored ? () => setForceManualForm(false) : undefined}
+            />
+          )}
         </>
       ) : (
         <>

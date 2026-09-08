@@ -29,8 +29,11 @@ export function App() {
     // happens to auto-serve.
     const stored = getStoredFirebaseConfig()
     if (stored?.source === 'manual') return
-    detectHostingConfig().then((detected) => {
-      if (detected) setFirebaseConfig(detected, 'auto')
+    detectHostingConfig().then((result) => {
+      if (result.status === 'found') setFirebaseConfig(result.config, 'auto')
+      // 'invalid' is surfaced in the Sync settings dialog itself (it needs
+      // the diagnostic message on screen, not just a console log) rather
+      // than handled here.
     })
   }, [])
 
