@@ -532,6 +532,17 @@ function AccountPanel({ uid, onKeyForgotten }: { uid: string; onKeyForgotten: ()
     }
   }
 
+  async function handleForceResync() {
+    if (
+      !confirm(
+        "Re-check every remote item against this device's local copy, ignoring what's already been synced before? This is safe (it can't lose data — anything already up to date here is simply skipped again) but re-reads everything, which counts against your Firestore quota faster than a normal sync.",
+      )
+    )
+      return
+    resetSyncState()
+    await handleSync()
+  }
+
   async function handleShowQr() {
     const bundle = exportBundleFor(uid)
     if (!bundle) return
@@ -597,6 +608,12 @@ function AccountPanel({ uid, onKeyForgotten }: { uid: string; onKeyForgotten: ()
       </div>
 
       {status.kind !== 'idle' && <p className={status.kind === 'error' ? 'error-text' : 'muted'}>{status.message}</p>}
+
+      <p className="sync-reset-toggle">
+        <button className="btn-link-muted" disabled={status.kind === 'running'} onClick={handleForceResync}>
+          Not seeing something you expect? Force a full resync
+        </button>
+      </p>
     </div>
   )
 }

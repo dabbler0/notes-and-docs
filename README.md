@@ -450,7 +450,23 @@ fresh device seeds its own local demo essay/source (see `seed.ts`) before
 it ever syncs, so the first sync from a second fresh device will carry its
 own separate copy of that same demo content in as a genuinely distinct
 essay — harmless, just occasionally a mildly confusing duplicate the first
-time two brand-new installs meet each other.
+time two brand-new installs meet each other. A device's local `pulledAt`
+cursor (the "only ask Firestore for what's newer than this" watermark)
+advances to "now" at the end of every sync pass, even one that pulls
+nothing — so a doc whose `updatedAt` predates that cursor is invisible to
+the normal incremental pull even if this device has never actually seen
+it. This can genuinely happen, not just in theory: restoring an old local
+backup (see "Backup & restore" below) deliberately preserves each record's
+original `updatedAt` rather than bumping it to "now" (so a merge-mode
+restore can't overwrite newer local work with older backup content) —
+push that restored data from one device, and any other device whose
+cursor already advanced past that old timestamp for an unrelated reason
+will silently never pull it. Sync settings' "Force a full resync" button
+(next to "Sync now") is the escape hatch: it clears this device's local
+cursors so the next pass re-pulls (and re-pushes) everything regardless of
+timestamps, safely — nothing already up to date is overwritten, since the
+per-doc last-write-wins check still applies underneath — just at the cost
+of reading everything instead of only what changed.
 
 This was verified end-to-end against a real `firebase emulators:start`
 Firestore + Auth instance (not just unit-level pieces), across three

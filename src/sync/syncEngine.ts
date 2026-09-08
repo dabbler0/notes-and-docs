@@ -96,9 +96,24 @@ function savePushedBlobIds(ids: Set<string>) {
 
 /**
  * Resets this device's notion of "what's already been synced," so the next
- * pass re-pushes every bit of local data from scratch — used after
- * resetting an account (accountMeta.ts's wipeRemoteAccountData), since the
- * remote copy is gone and everything needs re-uploading under the new key.
+ * pass re-pushes every local doc and re-pulls every remote one from
+ * scratch, regardless of either cursor. Two callers:
+ *  - After resetting an account (accountMeta.ts's wipeRemoteAccountData),
+ *    since the remote copy is gone and everything needs re-uploading under
+ *    the new key.
+ *  - The "Force a full resync" button in Sync settings, for the case where
+ *    this device's `pulledAt` cursor has already advanced past the
+ *    `updatedAt` on something it never actually saw — e.g. another device
+ *    restored an old local backup (which deliberately preserves each
+ *    record's original `updatedAt` rather than bumping it to "now," so a
+ *    merge-mode restore can't clobber newer local work with older backup
+ *    content) and pushed it; this device's own last-pull timestamp can
+ *    already be newer than that, so the normal incremental `where
+ *    ('updatedAt' > cursors.pulledAt)` pull silently excludes it forever.
+ *    Re-pulling everything sidesteps the stale cursor; it's safe (nothing
+ *    already up to date locally is overwritten, since the per-doc
+ *    last-write-wins check in the pull loop still applies) but costs a
+ *    full read of every remote doc instead of just what changed.
  */
 export function resetSyncState(): void {
   localStorage.removeItem(CURSORS_KEY)
