@@ -69,6 +69,15 @@ html,
 body,
 #app {
   height: 100%;
+  /* All scrolling happens inside .main-area (or a panel's own scroll
+     container within it) — never the page itself. Without this, any
+     descendant that's even a pixel taller than expected (a long line with
+     no break opportunity, a browser's own scrollbar-width quirk, mobile
+     Safari's dynamic toolbar resizing the viewport under load) makes the
+     *page* scroll instead, which drags the topbar off the top of the
+     screen with it. .topbar is also pinned with `position: sticky` below
+     as a second, independent guard against that same failure mode. */
+  overflow: hidden;
 }
 
 body {
@@ -101,6 +110,10 @@ select {
   padding: 14px 28px;
   background: var(--surface);
   border-bottom: 1px solid var(--border);
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  flex-shrink: 0;
 }
 
 .brand {
@@ -498,9 +511,40 @@ select {
 
 /* --- essay workspace --- */
 
+/* Fills whatever height .main-area actually has to give (100vh minus the
+   app's own topbar, computed live by the outer flex layout) rather than
+   assuming a fixed pixel figure for "everything above .workspace" the way
+   `height: calc(100vh - 62px)` used to on .workspace itself — that number
+   only ever accounted for this component's own header row, never the
+   app-level topbar above it too, so the real total was taller than the
+   viewport by however tall that outer topbar actually rendered: exactly
+   the "screen is slightly too tall" symptom, with .main-area forced to
+   scroll a few dozen pixels to reveal the rest of a workspace that should
+   have fit exactly. Flexbox sizing everything relative to its actual
+   parent, all the way up, doesn't have a magic number left to drift out
+   of sync with actual header heights (icons/labels changing size, a
+   future denser toolbar, etc.). */
+.essay-workspace-root {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+/* This reuses .topbar for its visual styling (background, flex layout)
+   but isn't the app's own title bar .topbar's own `position: sticky`
+   guards against losing — .main-area (its actual scrolling ancestor) no
+   longer overflows now that .essay-workspace-root/.workspace size
+   themselves off of it exactly, so there's nothing left to stick against;
+   pinning it too would just put a second sticky element in the same
+   stacking context as the real one for no reason. */
+.essay-header {
+  position: static;
+}
+
 .workspace {
   display: flex;
-  height: calc(100vh - 62px);
+  flex: 1;
+  min-height: 0;
 }
 
 .tree-panel-shell {
@@ -998,6 +1042,28 @@ select {
     gap: 10px;
   }
 
+  /* The essay workspace's own header (back / title / comment mode /
+     export) is already tight for room on a phone-width screen — drop
+     each button's text label and keep just its icon so the title field
+     in the middle still gets enough room to be readable/editable instead
+     of everything clipping at the right edge. Same reasoning for the
+     app-level topbar's own Backup/Sync buttons, competing with three tab
+     labels for the same narrow row. */
+  .essay-header .btn-label,
+  .topbar > .btn .btn-label {
+    display: none;
+  }
+
+  /* An icon-only button doesn't need the same generous horizontal padding
+     a text label does — shrinking it back down is most of what actually
+     closes the gap that used to make the app-level topbar's own Backup/
+     Sync buttons (and the essay header's Comment mode/Export) overflow
+     off the right edge of a narrow phone screen. */
+  .essay-header .btn,
+  .topbar > .btn {
+    padding: 8px 9px;
+  }
+
   .tabs {
     gap: 2px;
   }
@@ -1307,6 +1373,57 @@ select {
 .icon-btn:hover {
   background: var(--border);
   color: var(--ink);
+}
+
+/* Any button carrying an <Icon> plus a text label (Comment mode, Export,
+   Backup, Sync, …) — lines the two up on one baseline with a small gap,
+   instead of the icon sitting a few px off from the text next to it. */
+.btn svg {
+  vertical-align: -3px;
+  margin-right: 5px;
+}
+
+/* Icon-only toolbar buttons (cite/quote/link/subsection/bold/italic/…) —
+   no text label, so no reason for the icon's own small right-margin from
+   the rule above; centered square button instead. */
+.icon-btn-toolbar {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 8px;
+}
+
+.icon-btn-toolbar svg {
+  margin-right: 0;
+  vertical-align: middle;
+}
+
+.toolbar-divider {
+  width: 1px;
+  align-self: stretch;
+  margin: 4px 2px;
+  background: var(--border);
+}
+
+/* Comment mode's static section heading — same size/weight/position as
+   the editable .section-title-input it replaces, so toggling comment
+   mode doesn't shift the layout, just removes the editing affordance. */
+.section-title-static {
+  font-weight: 700;
+  flex: 1;
+  min-width: 0;
+  padding: 2px 4px;
+}
+
+/* Comment mode: closer to a print view — no hover cue inviting a click to
+   edit (there's nothing to edit), sections read as plain flowing text. */
+.doc-scroll.comment-mode .node-content.leaf-outline:hover,
+.doc-scroll.comment-mode .node-content.leaf-outline:focus {
+  border-left-color: transparent;
+}
+
+.doc-scroll.comment-mode .node-content {
+  cursor: text;
 }
 
 /* --- sync settings dialog --- */

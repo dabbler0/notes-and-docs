@@ -7,6 +7,7 @@ import { id } from '../../lib/id'
 import { buildParentMap, isPlaceholderTitle, placeholderTitle } from '../../lib/treeNumbering'
 import { getChildIds, reconstructContent, markerHtml, type MarkerPlacement } from '../../lib/childMarkers'
 import type { Essay, EssayNode, Source } from '../../models/types'
+import { Icon } from '../Icon'
 import { SectionBlock } from './SectionBlock'
 import { NodeTree } from './NodeTree'
 import { CommentsPanel } from './CommentsPanel'
@@ -172,19 +173,48 @@ export function EssayWorkspace({ essayId, onBack }: { essayId: string; onBack: (
     reload()
   }
 
-  function toggleCommentMode() {
-    setCommentMode((v) => !v)
+  /**
+   * Comment mode is meant to let you start commenting *anywhere in the
+   * document* immediately: a comment always anchors to a specific
+   * *version*, so any section with unsaved draft changes needs one made
+   * for it first. Freezing only the section you happen to click into
+   * first (which is what used to happen, in handleMouseUpForComments
+   * below) left every *other* dirty section still un-versioned — visibly
+   * so, since it'd still show its "unsaved" pill — until you separately
+   * selected text in each one too. Entering comment mode now freezes
+   * every dirty section across the whole essay up front, in one pass, so
+   * "unsaved" disappears everywhere the moment you turn it on rather than
+   * one section at a time. Like the per-section freeze it replaces here,
+   * this does *not* clear any section afterward — the text stays right
+   * there to anchor comments to and keep reading normally.
+   */
+  async function toggleCommentMode() {
+    const entering = !commentMode
+    setCommentMode(entering)
+    if (!entering) return
+    let anyFrozen = false
+    for (const node of nodeMap.values()) {
+      // The currently-focused section's draftContent may be behind
+      // in-progress DOM edits that haven't been debounce-saved yet —
+      // reconstruct it from the live DOM first so its frozen version
+      // actually captures what's on screen. Every other node's
+      // draftContent is already authoritative.
+      if (node.id === activeNodeId.current) {
+        const html = reconstructContent(node.id)
+        if (html != null) node.draftContent = html
+      }
+      if (node.draftContent === headVersion(node).content) continue
+      await commitNewVersion(node)
+      anyFrozen = true
+    }
+    if (anyFrozen) reload()
   }
 
   /**
-   * Comment mode is meant to let you start commenting immediately: a
-   * comment always anchors to a specific *version*, so a section with
-   * unsaved changes needs one made for it first, but that shouldn't be a
-   * separate manual step the user has to remember before they're allowed
-   * to comment. This freezes the current text into a new version in
-   * place — unlike the version pill's own action, it does *not* clear the
-   * section afterward, since the text needs to still be right there to
-   * anchor a comment to and to keep editing normally.
+   * Selecting text in comment mode still freezes its own section first if
+   * comment mode somehow left it dirty (e.g. typed after entering comment
+   * mode, before selecting) — a safety net on top of toggleCommentMode's
+   * own upfront freeze above, not the primary mechanism anymore.
    */
   async function handleMouseUpForComments() {
     if (!commentMode) return
@@ -316,19 +346,22 @@ export function EssayWorkspace({ essayId, onBack }: { essayId: string; onBack: (
   if (!essay || !rootNode) return <div className="page-pad">Loading…</div>
 
   return (
-    <div>
-      <div className="topbar" style={{ borderBottom: '1px solid var(--border)', padding: '10px 20px' }}>
+    <div className="essay-workspace-root">
+      <div className="topbar essay-header" style={{ borderBottom: '1px solid var(--border)', padding: '10px 20px' }}>
         <button className="btn btn-ghost btn-sm" onClick={onBack}>
-          ← All drafts
+          ← <span className="btn-label">All drafts</span>
         </button>
         <input
           value={essayTitle}
           onInput={(e) => setEssayTitle((e.target as HTMLInputElement).value)}
           onBlur={saveEssayTitle}
-          style={{ border: 'none', outline: 'none', background: 'transparent', fontSize: 16, fontWeight: 700, flex: 1 }}
+          style={{ border: 'none', outline: 'none', background: 'transparent', fontSize: 16, fontWeight: 700, flex: 1, minWidth: 0 }}
         />
+        <button className={`btn btn-ghost btn-sm toolbar-toggle${commentMode ? ' active' : ''}`} onClick={toggleCommentMode}>
+          <Icon name="comment" /> <span className="btn-label">{commentMode ? 'Commenting…' : 'Comment mode'}</span>
+        </button>
         <button className="btn btn-ghost btn-sm" onClick={() => setShowExport(true)}>
-          ⬇ Export
+          <Icon name="export" /> <span className="btn-label">Export</span>
         </button>
       </div>
 
@@ -358,56 +391,75 @@ export function EssayWorkspace({ essayId, onBack }: { essayId: string; onBack: (
                   ☰ Outline
                 </button>
                 <button className="btn btn-sm" onClick={() => setMobileCommentsOpen(true)}>
-                  💬 Comments
+                  <Icon name="comment" /> Comments
                 </button>
               </>
             )}
-            <button className="btn btn-sm" onMouseDown={(e) => e.preventDefault()} onClick={() => exec('bold')}>
-              <b>B</b>
-            </button>
-            <button className="btn btn-sm" onMouseDown={(e) => e.preventDefault()} onClick={() => exec('italic')}>
-              <i>I</i>
-            </button>
-            <button
-              className="btn btn-sm"
-              onMouseDown={(e) => {
-                e.preventDefault()
-                captureRange()
-              }}
-              onClick={() => setShowCitation(true)}
-            >
-              🔖 Cite
-            </button>
-            <button
-              className="btn btn-sm"
-              onMouseDown={(e) => {
-                e.preventDefault()
-                captureRange()
-              }}
-              onClick={() => setShowQuote(true)}
-            >
-              “ ” Quote from PDF
-            </button>
-            <button
-              className="btn btn-sm"
-              onMouseDown={(e) => {
-                e.preventDefault()
-                captureRange()
-              }}
-              onClick={() => setShowLink(true)}
-            >
-              🔗 Link to source
-            </button>
-            <button className="btn btn-sm" onClick={beginSplit}>
-              ✂ Split into subsection
-            </button>
-            <button className={`btn btn-sm toolbar-toggle${commentMode ? ' active' : ''}`} onClick={toggleCommentMode}>
-              💬 {commentMode ? 'Commenting…' : 'Comment mode'}
-            </button>
+            {/* Comment mode is meant to read close to a print view — nearly
+                every text-editing affordance below only applies to a live
+                draft, so they're hidden rather than just disabled while
+                commenting (selecting text to comment on still works fully;
+                see SectionBlock's own contentEditable={!commentMode}). */}
+            {!commentMode && (
+              <>
+                <button className="btn btn-sm icon-btn-toolbar" title="Bold" onMouseDown={(e) => e.preventDefault()} onClick={() => exec('bold')}>
+                  <Icon name="bold" />
+                </button>
+                <button className="btn btn-sm icon-btn-toolbar" title="Italic" onMouseDown={(e) => e.preventDefault()} onClick={() => exec('italic')}>
+                  <Icon name="italic" />
+                </button>
+                <button className="btn btn-sm icon-btn-toolbar" title="Underline" onMouseDown={(e) => e.preventDefault()} onClick={() => exec('underline')}>
+                  <Icon name="underline" />
+                </button>
+                <button className="btn btn-sm icon-btn-toolbar" title="Bulleted list" onMouseDown={(e) => e.preventDefault()} onClick={() => exec('insertUnorderedList')}>
+                  <Icon name="list-ul" />
+                </button>
+                <button className="btn btn-sm icon-btn-toolbar" title="Numbered list" onMouseDown={(e) => e.preventDefault()} onClick={() => exec('insertOrderedList')}>
+                  <Icon name="list-ol" />
+                </button>
+                <span className="toolbar-divider" />
+                <button
+                  className="btn btn-sm icon-btn-toolbar"
+                  title="Cite a source"
+                  onMouseDown={(e) => {
+                    e.preventDefault()
+                    captureRange()
+                  }}
+                  onClick={() => setShowCitation(true)}
+                >
+                  <Icon name="cite" />
+                </button>
+                <button
+                  className="btn btn-sm icon-btn-toolbar"
+                  title="Quote from a PDF"
+                  onMouseDown={(e) => {
+                    e.preventDefault()
+                    captureRange()
+                  }}
+                  onClick={() => setShowQuote(true)}
+                >
+                  <Icon name="quote" />
+                </button>
+                <button
+                  className="btn btn-sm icon-btn-toolbar"
+                  title="Link to a source"
+                  onMouseDown={(e) => {
+                    e.preventDefault()
+                    captureRange()
+                  }}
+                  onClick={() => setShowLink(true)}
+                >
+                  <Icon name="link" />
+                </button>
+                <button className="btn btn-sm icon-btn-toolbar" title="Split into subsection" onClick={beginSplit}>
+                  <Icon name="subsection" />
+                </button>
+              </>
+            )}
             <div className="spacer" />
           </div>
 
-          <div className="editor-scroll doc-scroll" ref={docScrollRef} onMouseUp={handleMouseUpForComments}>
+          <div className={`editor-scroll doc-scroll${commentMode ? ' comment-mode' : ''}`} ref={docScrollRef} onMouseUp={handleMouseUpForComments}>
             <SectionBlock
               node={rootNode}
               nodeMap={nodeMap}
@@ -420,6 +472,7 @@ export function EssayWorkspace({ essayId, onBack }: { essayId: string; onBack: (
               onTitleChanged={reload}
               focusTitleId={focusTitleId}
               onTitleFocused={() => setFocusTitleId(null)}
+              commentMode={commentMode}
             />
           </div>
         </div>

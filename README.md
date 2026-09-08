@@ -49,7 +49,11 @@ npm test             # runs the sync test suite (vitest) — no network/emulator
   `EssayWorkspace.tsx` is the whole document: a sticky toolbar acting on
   "whichever section currently has the cursor," plus a recursive
   `SectionBlock.tsx` per section (its own small `contentEditable` shards,
-  its own collapse state, its own version-history button).
+  its own collapse state, its own version-history button). `src/components/Icon.tsx`
+  is the one small hand-drawn (inline SVG, no icon font or CDN — see its
+  own doc comment) icon set used for cite/quote/link/subsection/underline/
+  lists in the editor toolbar and for comment/export/backup/sync wherever
+  they appear, instead of emoji or a bare text label.
 - `src/sync/` and `src/components/sync/` — the optional cross-device sync
   layer: `firebaseClient.ts` (Google sign-in plus the Firestore/Auth
   connections), `syncEngine.ts` (the actual push/pull pass), `account.ts`
@@ -131,17 +135,26 @@ already-written text — nothing is duplicated or discarded:
 
 **Comments.** Comments attach to a specific version's own content (so they
 show up in that version's history entry and in the version-compare view),
-with a resolved checkbox. Selecting text in comment mode always works
-immediately, even in a section with unsaved changes: rather than blocking
-with "save first," it silently makes a new version out of whatever's
-currently there — unlike the version pill's own freeze action, this one
-does *not* clear the section afterward, since the point is to keep writing
-and comment on live text, not to open a compare view — and anchors the
-comment to that version, same as if it had already been committed.
-Commenting itself happens in a small popover anchored right under the
-selection (`.comment-widget` in `EssayWorkspace.tsx`) rather than a modal,
-so the document stays visible and in place behind it; clicking anywhere
-outside the widget or pressing Escape dismisses it without commenting.
+with a resolved checkbox. Turning on Comment mode (top right, next to
+Export) is itself what makes that true everywhere at once: it walks every
+section in the essay and freezes any with unsaved draft changes into a new
+version immediately, rather than lazily one section at a time as you
+happen to select text in each — unlike the version pill's own freeze
+action, this does *not* clear a section afterward, since the point is to
+keep reading/writing on live text, not to open a compare view. Selecting
+text and commenting a moment later, in a section edited *after* entering
+comment mode, still freezes just that one section first as a safety net,
+but the common case (every section already dirty when you turn comment
+mode on) is handled up front. Comment mode also turns off contentEditable
+and hides every per-section editing control (version pill, history, "make
+new version," demote) and the toolbar's own formatting buttons, so the
+document reads close to a print view — selecting text to comment on still
+works normally either way, since that only ever needed native text
+selection, not editing. Commenting itself happens in a small popover
+anchored right under the selection (`.comment-widget` in
+`EssayWorkspace.tsx`) rather than a modal, so the document stays visible
+and in place behind it; clicking anywhere outside the widget or pressing
+Escape dismisses it without commenting.
 
 Once added, a comment shows up in the margin to the right of the document,
 vertically aligned with its own `<mark class="comment-anchor" data-comment-id>`

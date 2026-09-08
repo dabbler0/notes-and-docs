@@ -22,6 +22,7 @@ export function SectionBlock({
   onTitleChanged,
   focusTitleId,
   onTitleFocused,
+  commentMode = false,
 }: {
   node: EssayNode
   nodeMap: Map<string, EssayNode>
@@ -36,6 +37,8 @@ export function SectionBlock({
   onTitleChanged: () => void
   focusTitleId: string | null
   onTitleFocused: () => void
+  /** True while the document-wide "Comment mode" toggle is on — see EssayWorkspace.tsx. Turns editing off (contentEditable, title renamed, per-section version/history/demote controls) so the document reads close to a print view; selecting text to comment on still works normally either way. */
+  commentMode?: boolean
 }) {
   const wrapperRef = useRef<HTMLDivElement>(null)
   const titleRef = useRef<HTMLInputElement>(null)
@@ -80,6 +83,13 @@ export function SectionBlock({
     setComparingVersionId(null)
     setShowHistory(false)
   }, [node.id])
+
+  // Comparing/reverting versions is itself an editing action, out of place
+  // once the document is meant to read like a print view — close out of
+  // it automatically rather than leaving a stale compare view up.
+  useEffect(() => {
+    if (commentMode) setComparingVersionId(null)
+  }, [commentMode])
 
   // Push the freshly-parsed segments' text into their shard DOM elements,
   // but only when the node's saved content actually changed underneath us
@@ -225,7 +235,7 @@ export function SectionBlock({
           <div
             key={`text-${i}`}
             className={`node-content${isRoot ? '' : ' leaf-outline'}`}
-            contentEditable
+            contentEditable={!commentMode}
             onFocus={(e) => onActivate(node.id, e.currentTarget as HTMLDivElement)}
             onMouseUp={(e) => {
               onActivate(node.id, e.currentTarget as HTMLDivElement)
@@ -249,6 +259,7 @@ export function SectionBlock({
             onTitleChanged={onTitleChanged}
             focusTitleId={focusTitleId}
             onTitleFocused={onTitleFocused}
+            commentMode={commentMode}
           />
         ) : null,
       )}
@@ -263,13 +274,17 @@ export function SectionBlock({
         // still independently versionable, so it still gets a version pill.
         <div className="section-header root-header">
           <span style={{ flex: 1 }} />
-          {dirty && <span className="version-pill">unsaved</span>}
-          <button className="version-pill version-pill-btn" onClick={handleMakeNewVersion} title="Make a new version: freezes the current text and starts a blank one, side by side">
-            v{node.versions.length}
-          </button>
-          <button className="icon-btn" onClick={() => setShowHistory((v) => !v)} title="Version history">
-            🕓
-          </button>
+          {!commentMode && dirty && <span className="version-pill">unsaved</span>}
+          {!commentMode && (
+            <button className="version-pill version-pill-btn" onClick={handleMakeNewVersion} title="Make a new version: freezes the current text and starts a blank one, side by side">
+              v{node.versions.length}
+            </button>
+          )}
+          {!commentMode && (
+            <button className="icon-btn" onClick={() => setShowHistory((v) => !v)} title="Version history">
+              🕓
+            </button>
+          )}
           {openComments > 0 && <span className="chip comment-count-chip">💬 {openComments}</span>}
           {historyDropdown}
         </div>
@@ -278,23 +293,37 @@ export function SectionBlock({
           <button className={`section-chevron${isCollapsed ? ' collapsed' : ''}`} onClick={() => onToggleCollapse(node.id)} title={isCollapsed ? 'Expand' : 'Collapse'}>
             ▾
           </button>
-          <input
-            ref={titleRef}
-            className="section-title-input"
-            style={{ fontSize: headingSize(depth) }}
-            value={title}
-            onInput={(e) => setTitle((e.target as HTMLInputElement).value)}
-            onBlur={saveTitle}
-          />
-          {dirty && <span className="version-pill">unsaved</span>}
-          <button className="version-pill version-pill-btn" onClick={handleMakeNewVersion} title="Make a new version: freezes the current text and starts a blank one, side by side">
-            v{node.versions.length}
-          </button>
-          <button className="icon-btn" onClick={() => setShowHistory((v) => !v)} title="Version history">
-            🕓
-          </button>
+          {commentMode ? (
+            // A static heading, print-view style, instead of an editable
+            // title field — same size/weight as the live editor's own
+            // input so the layout doesn't shift when toggling comment
+            // mode on and off.
+            <span className="section-title-static" style={{ fontSize: headingSize(depth) }}>
+              {title}
+            </span>
+          ) : (
+            <input
+              ref={titleRef}
+              className="section-title-input"
+              style={{ fontSize: headingSize(depth) }}
+              value={title}
+              onInput={(e) => setTitle((e.target as HTMLInputElement).value)}
+              onBlur={saveTitle}
+            />
+          )}
+          {!commentMode && dirty && <span className="version-pill">unsaved</span>}
+          {!commentMode && (
+            <button className="version-pill version-pill-btn" onClick={handleMakeNewVersion} title="Make a new version: freezes the current text and starts a blank one, side by side">
+              v{node.versions.length}
+            </button>
+          )}
+          {!commentMode && (
+            <button className="icon-btn" onClick={() => setShowHistory((v) => !v)} title="Version history">
+              🕓
+            </button>
+          )}
           {openComments > 0 && <span className="chip comment-count-chip">💬 {openComments}</span>}
-          {onDemote && (
+          {!commentMode && onDemote && (
             <button className="icon-btn" title="Demote: fold this section's text back into its parent, removing the subsection but keeping the text" onClick={onDemote}>
               ⤴
             </button>

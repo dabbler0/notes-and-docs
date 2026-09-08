@@ -1,5 +1,6 @@
 import { useRef, useState } from 'preact/hooks'
 import { Modal } from '../Modal'
+import { Icon } from '../Icon'
 import { backupFileName, exportBackup, restoreBackup, type RestoreResult } from '../../lib/backup'
 import { downloadBlob } from '../../lib/download'
 
@@ -57,7 +58,7 @@ export function BackupDialog({ onClose }: { onClose: () => void }) {
           <p className="muted">Downloads everything as one .zip file, for safekeeping or moving to a new browser/device.</p>
         </div>
         <button className="btn btn-primary" disabled={busy} onClick={handleExport}>
-          ⬇ Download backup
+          <Icon name="export" /> Download backup
         </button>
       </div>
 

@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'preact/hooks'
 import type { User } from 'firebase/auth'
 import { Modal } from '../Modal'
+import { Icon } from '../Icon'
 import { QrScanner } from './QrScanner'
 import { clearFirebaseConfig, detectHostingConfig, getStoredFirebaseConfig, setFirebaseConfig, validateFirebaseConfig, type FirebaseWebConfig, type StoredFirebaseConfig } from '../../sync/firebaseConfig'
 import { createLocalKey, exportBundleFor, forgetLocalKey, getLocalKey, importLocalKey, type LocalKey } from '../../sync/account'
@@ -569,7 +570,7 @@ function AccountPanel({ uid, onKeyForgotten }: { uid: string; onKeyForgotten: ()
           📱 Show transfer QR
         </button>
         <button className="btn btn-sm" onClick={handleDownloadKeyFile}>
-          ⬇ Download key file
+          <Icon name="export" /> Download key file
         </button>
         <button className="btn btn-sm btn-ghost btn-danger" onClick={handleForgetKey}>
           Forget key on this device
@@ -591,7 +592,13 @@ function AccountPanel({ uid, onKeyForgotten }: { uid: string; onKeyForgotten: ()
 
       <div className="sync-row" style={{ marginTop: 16 }}>
         <button className="btn btn-primary" disabled={status.kind === 'running'} onClick={handleSync}>
-          {status.kind === 'running' ? 'Syncing…' : '🔄 Sync now'}
+          {status.kind === 'running' ? (
+            'Syncing…'
+          ) : (
+            <>
+              <Icon name="sync" /> Sync now
+            </>
+          )}
         </button>
         <label className="field-inline">
           <input

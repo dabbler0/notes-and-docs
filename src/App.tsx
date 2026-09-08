@@ -6,6 +6,7 @@ import { SyncSettingsDialog } from './components/sync/SyncSettingsDialog'
 import { BackupDialog } from './components/backup/BackupDialog'
 import { startAutoSyncLoop } from './sync/autoSync'
 import { detectHostingConfig, getStoredFirebaseConfig, setFirebaseConfig } from './sync/firebaseConfig'
+import { Icon } from './components/Icon'
 
 type Tab = 'essays' | 'sources' | 'search'
 
@@ -54,10 +55,10 @@ export function App() {
         </div>
         <div className="spacer" />
         <button className="btn btn-ghost btn-sm" onClick={() => setShowBackup(true)}>
-          💾 Backup
+          <Icon name="backup" /> <span className="btn-label">Backup</span>
         </button>
         <button className="btn btn-ghost btn-sm" onClick={() => setShowSync(true)}>
-          🔄 Sync
+          <Icon name="sync" /> <span className="btn-label">Sync</span>
         </button>
       </div>
       <div className="main-area">
