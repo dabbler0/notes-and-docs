@@ -138,22 +138,36 @@ text between (or before/after) its embedded children — so a single screen
 position can simultaneously be "the end of" several different nodes at
 once: a node's own last shard sits immediately after its last child's
 entire rendered subtree, which is also right where *that child's own*
-last shard just ended, one level in. Each such shard is a real, separately
-clickable line (indented to match its own node's depth, so which one is
-which is visually legible), but the ordinary spacing between one section
-and the next (`.section-header`'s own margin) still runs *between* two
-stacked shards belonging to different nodes, with nothing rendered there
-to actually catch a click. A click landing in that gap used to hit
-`.section-body`/`.editor-scroll` itself — not editable, so focus simply
+last shard just ended, one level in, and so on up through however many
+ancestors are themselves a last child. Each such shard is a real,
+separately clickable line, indented to match its own node's depth — but
+an *empty* one used to render as literally nothing: no border, no
+placeholder, zero visual trace, so a stack of them (one per nesting
+level, right where the visible text stops) looked like a single blank
+page underneath the document rather than several distinct, individually
+clickable lines. `.node-content:empty:last-child` now draws a permanent
+(not hover-only) dashed box for exactly this case — a node's own trailing
+shard, when it has nothing in it yet — so "there are 3 places to add text
+here, one per level" is something you can actually see, not just
+something that happens to be technically true if you know to look;
+typing in one replaces it with ordinary text, same as always, and the
+other levels' own boxes stay put below/above it. Suppressed in Comment
+mode, which hides every other editing affordance the same way.
+
+On top of that, the ordinary spacing between one section and the next
+(`.section-header`'s own margin) still runs *between* two such stacked
+shards belonging to different nodes, with nothing rendered there to catch
+a click — a click landing in that specific gap used to hit
+`.section-body`/`.editor-scroll` itself, not editable, so focus simply
 stayed wherever it already was, and anything typed afterward landed
 somewhere else in the document entirely (whatever was last focused,
-easily an ancestor several levels up — exactly the "my text ended up on
-the wrong section" bug this was). `EssayWorkspace.tsx`'s `handleDocMissClick`
-now catches exactly that case — a click that hit the document area but no
-actual shard — and falls back to whichever shard is vertically closest,
-placing the cursor at its end, the same way Google Docs (and most block
-editors) already handle a click below or between real content instead of
-leaving it a no-op.
+easily an ancestor several levels up — the actual "my text ended up on
+the wrong section" bug this all started from). `EssayWorkspace.tsx`'s
+`handleDocMissClick` catches exactly that case — a click that hit the
+document area but no actual shard — and falls back to whichever shard is
+vertically closest, placing the cursor at its end, the same way Google
+Docs (and most block editors) already handle a click below or between
+real content instead of leaving it a no-op.
 
 **Comments.** Comments attach to a specific version's own content (so they
 show up in that version's history entry and in the version-compare view),
