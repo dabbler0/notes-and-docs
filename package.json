@@ -7,7 +7,8 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "build:onefile": "tsc -b && vite build --mode singlefile",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "test": "vitest run"
   },
   "dependencies": {
     "firebase": "^12.18.0",
@@ -23,9 +24,11 @@
     "@types/node": "^24.13.3",
     "@types/qrcode": "^1.5.6",
     "firebase-tools": "^15.29.0",
+    "jsdom": "^30.0.1",
     "playwright": "^1.62.1",
     "typescript": "~6.0.2",
     "vite": "^8.2.2",
-    "vite-plugin-singlefile": "^2.3.3"
+    "vite-plugin-singlefile": "^2.3.3",
+    "vitest": "^5.0.0"
   }
 }

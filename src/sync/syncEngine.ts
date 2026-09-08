@@ -18,8 +18,12 @@
  *    decrypt. Caught here with a clear error rather than silently
  *    corrupting things.
  *  - Push: any local doc whose `updatedAt` is newer than the last push
- *    watermark gets encrypted (its sensitive fields — see SENSITIVE_FIELDS)
- *    and written to `accounts/{uid}/{collection}/{id}`.
+ *    watermark is a *candidate* to send — but is only actually written if
+ *    the remote copy isn't already newer (one extra read per candidate;
+ *    see the comment at the push loop itself for why this check exists:
+ *    without it, "dirty since I last pushed" alone is not the same
+ *    guarantee as "newer than what's already there"). Written fields are
+ *    encrypted first — see SENSITIVE_FIELDS — to `accounts/{uid}/{collection}/{id}`.
  *  - Pull: any remote doc whose `updatedAt` is newer than the last pull
  *    watermark is decrypted and applied locally *if* it's newer than
  *    whatever's already there — last-write-wins, by `updatedAt` — via
@@ -33,11 +37,22 @@
  *    reused for a different file, so simple "pushed already?" membership
  *    is enough — no timestamp comparison needed); a blob referenced by a
  *    synced Source but missing locally gets downloaded and decrypted.
+ *  - Concurrent calls into this module (a "Sync now" click landing mid-tick
+ *    of the 30-second auto-sync loop, say) share one in-flight pass rather
+ *    than running two overlapping ones — see `inFlightPass` below. Without
+ *    that, two passes reading the same starting cursors would each
+ *    redundantly re-check every doc, and whichever finishes last would
+ *    overwrite the other's cursor update; sharing one pass makes that a
+ *    non-issue rather than a rare-and-hard-to-reproduce one.
  *
  * What this deliberately does *not* do (documented in README rather than
  * built): realtime listeners (this polls on an interval / on demand
- * instead), conflict resolution beyond last-write-wins, or garbage
- * collection of a deleted source's now-orphaned blob chunk documents.
+ * instead), true atomic compare-and-swap on push (the extra read before
+ * writing narrows the last-push-wins race described above to a much
+ * smaller window — two devices would need to push the *same* doc within
+ * moments of each other to still collide — but doesn't eliminate it the
+ * way a Firestore transaction would), or garbage collection of a deleted
+ * source's now-orphaned blob chunk documents.
  */
 import { collection, doc, getDoc, getDocs, query, setDoc, where } from 'firebase/firestore'
 import { currentUser, firestoreDb } from './firebaseClient'
@@ -178,7 +193,33 @@ function splitIntoChunks(s: string, size: number): string[] {
   return chunks.length > 0 ? chunks : ['']
 }
 
+// Shared by every concurrent caller of runSyncPass — see the module doc
+// comment above. `onProgress` is deliberately per-caller even when a pass
+// is shared: a caller that joins a pass already underway should still hear
+// about whatever progress happens from that point on, not just get silence
+// until it resolves.
+let inFlightPass: Promise<SyncResult> | null = null
+const inFlightProgressListeners = new Set<(message: string) => void>()
+
 export async function runSyncPass(onProgress?: (message: string) => void): Promise<SyncResult> {
+  if (inFlightPass) {
+    if (onProgress) inFlightProgressListeners.add(onProgress)
+    try {
+      return await inFlightPass
+    } finally {
+      if (onProgress) inFlightProgressListeners.delete(onProgress)
+    }
+  }
+  if (onProgress) inFlightProgressListeners.add(onProgress)
+  const broadcast = (message: string) => inFlightProgressListeners.forEach((fn) => fn(message))
+  inFlightPass = runSyncPassNow(broadcast).finally(() => {
+    inFlightPass = null
+    inFlightProgressListeners.clear()
+  })
+  return inFlightPass
+}
+
+async function runSyncPassNow(onProgress?: (message: string) => void): Promise<SyncResult> {
   const user = currentUser()
   if (!user) throw new Error('Sign in with Google first — open Sync settings.')
   const uid = user.uid
@@ -212,20 +253,54 @@ export async function runSyncPass(onProgress?: (message: string) => void): Promi
     const localDocs = await backend.docs.list<LocalDoc>(col)
     const dirty = localDocs.filter((d) => (d.updatedAt ?? 0) > cursors.pushedAt)
     for (const localDoc of dirty) {
+      const remoteRef = doc(db, 'accounts', uid, col, localDoc.id)
+      // "Dirty since I last pushed" only tells us this device has a
+      // change to send — it says nothing about whether the *remote* copy
+      // has since moved on without this device knowing (e.g. this is this
+      // device's first-ever sync of a doc it's actually had all along, and
+      // some other device already pushed a newer edit in the meantime).
+      // Pushing unconditionally would silently clobber that newer remote
+      // edit with this device's older content the moment its own local
+      // watermark says "dirty," regardless of which edit is actually
+      // newer — a real last-*push*-wins bug, not the last-write-wins the
+      // rest of this module is built around. One extra read per dirty doc
+      // makes push symmetric with pull's own check below: skip if what's
+      // already there is newer than what this device is about to send.
+      const remoteSnap = await getDoc(remoteRef)
+      const remoteUpdatedAt = remoteSnap.exists() ? ((remoteSnap.data()?.updatedAt as number) ?? 0) : 0
+      if (remoteUpdatedAt >= (localDoc.updatedAt ?? 0)) continue
       const remoteDoc = await encodeForRemote(col, localDoc, cryptoKey)
-      await setDoc(doc(db, 'accounts', uid, col, localDoc.id), remoteDoc)
+      await setDoc(remoteRef, remoteDoc)
       result.pushed[col]++
     }
   }
 
+  // The new pulledAt watermark is the latest `updatedAt` actually *seen* in
+  // this pass's query results — not wall-clock "now." Using "now" would be
+  // a subtler version of the same bug Force Full Resync exists for: two
+  // devices editing independently can easily have device B push something
+  // timestamped *before* device A's own passStartedAt (B's edit simply
+  // happened first in wall-clock terms, even though B doesn't push it
+  // until after A's pass already started) — if A then stamped its cursor
+  // with "now," A would consider itself caught up to a point in time
+  // already past B's edit, and permanently skip pulling it on every future
+  // pass, having never actually fetched it. Tracking the max timestamp
+  // this device has actually retrieved can only ever advance the cursor to
+  // something it has genuine evidence of, so nothing already pushed but
+  // not yet observed can be skipped this way — the cost is occasionally
+  // re-querying a slightly wider window than strictly necessary, not lost
+  // data.
+  let maxSeenRemoteUpdatedAt = cursors.pulledAt
   for (const col of SYNCED_COLLECTIONS) {
     onProgress?.(`Pulling remote ${col}…`)
     const q = query(collection(db, 'accounts', uid, col), where('updatedAt', '>', cursors.pulledAt))
     const snap = await getDocs(q)
     for (const docSnap of snap.docs) {
       const remote = docSnap.data()
+      const remoteUpdatedAt = (remote.updatedAt as number) ?? 0
+      if (remoteUpdatedAt > maxSeenRemoteUpdatedAt) maxSeenRemoteUpdatedAt = remoteUpdatedAt
       const localDoc = await backend.docs.get<LocalDoc>(col, docSnap.id)
-      if (localDoc && (localDoc.updatedAt ?? 0) >= ((remote.updatedAt as number) ?? 0)) continue
+      if (localDoc && (localDoc.updatedAt ?? 0) >= remoteUpdatedAt) continue
       const decoded = await decodeFromRemote(remote, cryptoKey)
       await backend.docs.put(col, decoded as LocalDoc & { id: string })
       result.pulled[col]++
@@ -274,7 +349,7 @@ export async function runSyncPass(onProgress?: (message: string) => void): Promi
     }
   }
 
-  saveCursors({ pushedAt: passStartedAt, pulledAt: passStartedAt })
+  saveCursors({ pushedAt: passStartedAt, pulledAt: maxSeenRemoteUpdatedAt })
 
   const pulledTotal = result.pulled.essays + result.pulled.nodes + result.pulled.sources + result.pulled.blobs
   if (pulledTotal > 0) notifySyncApplied()

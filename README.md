@@ -20,6 +20,7 @@ device.
 npm install
 npm run dev          # local dev server
 npm run build:onefile  # produces dist/index.html: everything inlined, open it from disk
+npm test             # runs the sync test suite (vitest) — no network/emulator needed
 ```
 
 `npm run build` produces a normal multi-file build (faster to iterate on);
@@ -58,6 +59,11 @@ npm run build:onefile  # produces dist/index.html: everything inlined, open it f
   `autoSync.ts` (the polling loop), `qr.ts` (pairing-code generation), and
   `SyncSettingsDialog.tsx`/`QrScanner.tsx` for the UI. See "Syncing across
   devices" below for the full design and setup steps.
+- `src/test/` — in-memory fakes for Firestore, Auth, and a device's local
+  storage, plus a small `deviceHarness.ts` that assembles them into
+  simulated "devices" sharing one fake cloud; `src/sync/__tests__/` uses
+  it to run the real sync code (`npm test`) against multi-device
+  scenarios — see "Syncing across devices" below for what's covered.
 - `src/lib/useIsMobile.ts` plus the mobile branches inside `Modal.tsx` and
   `EssayWorkspace.tsx` — see "Mobile layout" below.
 
@@ -450,23 +456,49 @@ fresh device seeds its own local demo essay/source (see `seed.ts`) before
 it ever syncs, so the first sync from a second fresh device will carry its
 own separate copy of that same demo content in as a genuinely distinct
 essay — harmless, just occasionally a mildly confusing duplicate the first
-time two brand-new installs meet each other. A device's local `pulledAt`
-cursor (the "only ask Firestore for what's newer than this" watermark)
-advances to "now" at the end of every sync pass, even one that pulls
-nothing — so a doc whose `updatedAt` predates that cursor is invisible to
-the normal incremental pull even if this device has never actually seen
-it. This can genuinely happen, not just in theory: restoring an old local
-backup (see "Backup & restore" below) deliberately preserves each record's
-original `updatedAt` rather than bumping it to "now" (so a merge-mode
-restore can't overwrite newer local work with older backup content) —
-push that restored data from one device, and any other device whose
-cursor already advanced past that old timestamp for an unrelated reason
-will silently never pull it. Sync settings' "Force a full resync" button
-(next to "Sync now") is the escape hatch: it clears this device's local
-cursors so the next pass re-pulls (and re-pushes) everything regardless of
-timestamps, safely — nothing already up to date is overwritten, since the
-per-doc last-write-wins check still applies underneath — just at the cost
-of reading everything instead of only what changed.
+time two brand-new installs meet each other.
+
+**The cursor watermarks, and two races that used to exist around them.**
+Each device tracks its own local "pushed up to" and "pulled up to"
+watermarks. Two subtleties in how those advance were found (via the
+sync test suite — see below) and fixed:
+- *Push could clobber a newer remote edit.* "Dirty since I last pushed"
+  only meant "I have a change to send" — it said nothing about whether the
+  remote copy had moved on without this device knowing (its first-ever
+  sync of a doc it's actually had all along, after another device already
+  pushed something newer). Push now reads the remote doc's own `updatedAt`
+  before writing and skips if what's already there is newer — one extra
+  read per dirty doc, making push symmetric with pull's own always-existing
+  last-write-wins check.
+- *An empty pull pass could poison future pulls.* The pull watermark used
+  to be stamped with wall-clock "now" at the end of *every* pass, even one
+  that pulled nothing. If another device later pushed something whose own
+  `updatedAt` happened to predate that now-advanced watermark — which
+  genuinely happens, not just in theory: restoring an old local backup
+  (see "Backup & restore" below) deliberately preserves each record's
+  original `updatedAt` rather than bumping it to "now," so a merge-mode
+  restore can't overwrite newer local work with older backup content —
+  this device would never pull it, having never actually seen it. The
+  watermark now only ever advances to the latest `updatedAt` a pass
+  actually *observed* in its own query results; an empty pass observes
+  nothing, so it no longer moves the watermark at all, and nothing pushed
+  later can end up "behind" a watermark that never legitimately passed it.
+  Sync settings' "Force a full resync" button (next to "Sync now") remains
+  as a manual fallback for the narrower race the fix doesn't fully close
+  — two devices' pushes crossing paths within the same pass — by ignoring
+  the watermarks entirely for one pass; it's always safe to run, since the
+  per-doc last-write-wins check still applies underneath, just costlier
+  (it re-reads everything instead of only what changed).
+
+Both races, plus ordinary multi-device propagation, tombstoned deletions,
+PDF blob round-tripping, the encryption-key fingerprint gate, account
+reset, and overlapping concurrent `runSyncPass` calls sharing one pass
+instead of double-running (see `syncEngine.ts`'s own `inFlightPass`), are
+covered by an automated test suite (`npm test`, `src/sync/__tests__/`)
+that runs the real sync code against in-memory fakes of Firestore, Auth,
+and each device's own local storage (`src/test/`) — no network or
+emulator process needed, so it runs in a couple of seconds and stays easy
+to extend with more scenarios as they come up.
 
 This was verified end-to-end against a real `firebase emulators:start`
 Firestore + Auth instance (not just unit-level pieces), across three
