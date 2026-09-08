@@ -5,6 +5,7 @@ import { EssaysView } from './components/essays/EssaysView'
 import { SyncSettingsDialog } from './components/sync/SyncSettingsDialog'
 import { BackupDialog } from './components/backup/BackupDialog'
 import { startAutoSyncLoop } from './sync/autoSync'
+import { detectHostingConfig, getStoredFirebaseConfig, setFirebaseConfig } from './sync/firebaseConfig'
 
 type Tab = 'essays' | 'sources' | 'search'
 
@@ -19,6 +20,18 @@ export function App() {
   // 30s interval even while that dialog isn't open.
   useEffect(() => {
     startAutoSyncLoop()
+
+    // If this copy of the app is itself being served from its own project's
+    // Firebase Hosting, that project's config is available with nothing
+    // pasted in — see detectHostingConfig()'s own doc comment. Skipped
+    // entirely once a config has been pasted in by hand (source: 'manual'):
+    // an explicit choice always wins over whatever the current origin
+    // happens to auto-serve.
+    const stored = getStoredFirebaseConfig()
+    if (stored?.source === 'manual') return
+    detectHostingConfig().then((detected) => {
+      if (detected) setFirebaseConfig(detected, 'auto')
+    })
   }, [])
 
   return (

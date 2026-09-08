@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'preact/hooks'
 import { Modal } from '../Modal'
 import { QrScanner } from './QrScanner'
-import { clearFirebaseConfig, getFirebaseConfig, setFirebaseConfig, validateFirebaseConfig, type FirebaseWebConfig } from '../../sync/firebaseConfig'
+import { clearFirebaseConfig, detectHostingConfig, getStoredFirebaseConfig, setFirebaseConfig, validateFirebaseConfig, type FirebaseWebConfig, type StoredFirebaseConfig } from '../../sync/firebaseConfig'
 import { createAccount, forgetAccount, getAccount, importAccount } from '../../sync/account'
 import { isAccountBundle, type AccountBundle } from '../../lib/crypto'
 import { isAutoSyncEnabled, setAutoSyncEnabled, syncNow } from '../../sync/autoSync'
@@ -13,7 +13,9 @@ type Account = { bundle: AccountBundle; cryptoKey: CryptoKey }
 type SyncStatus = { kind: 'idle' | 'running' | 'ok' | 'error'; message: string }
 
 export function SyncSettingsDialog({ onClose }: { onClose: () => void }) {
-  const [config, setConfig] = useState<FirebaseWebConfig | null>(() => getFirebaseConfig())
+  const [stored, setStored] = useState<StoredFirebaseConfig | null>(() => getStoredFirebaseConfig())
+  const [detecting, setDetecting] = useState(!stored)
+  const [forceManualForm, setForceManualForm] = useState(false)
   const [account, setAccount] = useState<Account | null>(null)
   const [loadingAccount, setLoadingAccount] = useState(true)
 
@@ -24,6 +26,24 @@ export function SyncSettingsDialog({ onClose }: { onClose: () => void }) {
     })
   }, [])
 
+  // Covers opening this dialog before App.tsx's own startup auto-detect
+  // (which runs the same check) has had a chance to resolve yet — without
+  // this, a fresh Firebase-Hosting deploy would flash the manual-paste
+  // form for a moment even though auto-detection is about to succeed.
+  useEffect(() => {
+    if (stored) return
+    setDetecting(true)
+    detectHostingConfig().then((detected) => {
+      if (detected) {
+        setFirebaseConfig(detected, 'auto')
+        setStored({ config: detected, source: 'auto' })
+      }
+      setDetecting(false)
+    })
+  }, [stored])
+
+  const showManualForm = !stored?.config || forceManualForm
+
   return (
     <Modal onClose={onClose} wide>
       <h2>Sync across devices</h2>
@@ -32,22 +52,41 @@ export function SyncSettingsDialog({ onClose }: { onClose: () => void }) {
         staying local unless you deliberately move it to another device.
       </p>
 
-      {!config ? (
-        <FirebaseConfigForm onSaved={setConfig} />
+      {showManualForm ? (
+        <>
+          {detecting && <p className="muted">Checking whether this page's own Firebase Hosting already has a project config for it…</p>}
+          <FirebaseConfigForm
+            initialText={stored ? JSON.stringify(stored.config, null, 2) : ''}
+            onSaved={(cfg) => {
+              setFirebaseConfig(cfg, 'manual')
+              setStored({ config: cfg, source: 'manual' })
+              setForceManualForm(false)
+            }}
+            onCancel={stored ? () => setForceManualForm(false) : undefined}
+          />
+        </>
       ) : (
         <>
           <div className="sync-row">
-            <span className="muted">Firebase project: {config.projectId}</span>
-            <button
-              className="btn btn-sm btn-ghost"
-              onClick={() => {
-                if (!confirm('Disconnect this Firebase project? Your account key is kept, but syncing stops until you reconnect a project.')) return
-                clearFirebaseConfig()
-                setConfig(null)
-              }}
-            >
-              Change project
+            <span className="muted">
+              Firebase project: {stored!.config.projectId}
+              {stored!.source === 'auto' && ' (auto-detected from this page\'s own Firebase Hosting)'}
+            </span>
+            <button className="btn btn-sm btn-ghost" onClick={() => setForceManualForm(true)}>
+              Use a different project
             </button>
+            {stored!.source === 'manual' && (
+              <button
+                className="btn btn-sm btn-ghost btn-danger"
+                onClick={() => {
+                  if (!confirm('Disconnect this Firebase project? Your account key is kept, but syncing stops until you reconnect a project.')) return
+                  clearFirebaseConfig()
+                  setStored(null)
+                }}
+              >
+                Disconnect
+              </button>
+            )}
           </div>
 
           {loadingAccount ? (
@@ -69,8 +108,8 @@ export function SyncSettingsDialog({ onClose }: { onClose: () => void }) {
   )
 }
 
-function FirebaseConfigForm({ onSaved }: { onSaved: (cfg: FirebaseWebConfig) => void }) {
-  const [text, setText] = useState('')
+function FirebaseConfigForm({ initialText, onSaved, onCancel }: { initialText: string; onSaved: (cfg: FirebaseWebConfig) => void; onCancel?: () => void }) {
+  const [text, setText] = useState(initialText)
   const [error, setError] = useState('')
 
   function save(e: Event) {
@@ -87,9 +126,7 @@ function FirebaseConfigForm({ onSaved }: { onSaved: (cfg: FirebaseWebConfig) => 
       setError(err)
       return
     }
-    const cfg = parsed as FirebaseWebConfig
-    setFirebaseConfig(cfg)
-    onSaved(cfg)
+    onSaved(parsed as FirebaseWebConfig)
   }
 
   return (
@@ -105,10 +142,15 @@ function FirebaseConfigForm({ onSaved }: { onSaved: (cfg: FirebaseWebConfig) => 
       </div>
       <p className="muted">
         From your Firebase project's settings → "Your apps" → web app config. This isn't a secret by itself (it's meant to be embedded in client code) — what actually protects your data is Firestore/Storage security rules plus the
-        encryption below. See the README for the project setup and rules to use.
+        encryption below. See the README for the project setup and rules to use. If this page is served from that same project's own Firebase Hosting, you shouldn't need this at all — it's detected automatically.
       </p>
       {error && <p className="error-text">{error}</p>}
       <div className="modal-actions">
+        {onCancel && (
+          <button type="button" className="btn btn-ghost" onClick={onCancel}>
+            Cancel
+          </button>
+        )}
         <button type="submit" className="btn btn-primary">
           Connect project
         </button>

@@ -286,12 +286,29 @@ out of the box — each install points at *your own* Firebase project:
      }
    }
    ```
-3. In Project settings → "Your apps," add a web app and copy its config
-   object. Paste that into the app's Sync settings (🔄 Sync in the topbar)
-   — it's stored in this browser's `localStorage`, not baked into the
-   build, since there is no build-time secret to bake in (a Firebase web
-   config is meant to be public; see below for what actually guards the
-   data).
+3. In Project settings → "Your apps," add a web app (`firebase init
+   hosting` typically already leaves you with one). Its config object is
+   what Sync settings needs — but see the next section before pasting it
+   in by hand.
+
+**If this app is deployed on that same project's own Firebase Hosting**
+(see "Deploying to Firebase Hosting" below), it doesn't need pasting in at
+all: `detectHostingConfig()` in `sync/firebaseConfig.ts` fetches Hosting's
+own reserved `/__/firebase/init.json` on startup, which Firebase Hosting
+auto-serves with the project's config for exactly this purpose, and stores
+whatever it finds (tagged `source: 'auto'`) — so every visit to that
+hosted URL, on every device, is already connected to the right project
+with nothing typed in. This only resolves to something real when actually
+served *by* Firebase Hosting for a project that has a registered web app;
+running the app any other way (`npm run dev`, a downloaded HTML file, a
+different host) gets a 404 there, and Sync settings falls back to the
+manual-paste form below. An explicitly pasted-in config is never
+overwritten by auto-detection, even on an origin that also has one — the
+"Use a different project" button in Sync settings is how a device opts
+back into pointing at a project by hand.
+
+Once one way or the other gets a config in place, the rest of setup is
+the same:
 
 **Creating and transferring an account.** Sync settings offers "Create
 account" (generates a fresh AES-256 key and a random id, right there in
