@@ -403,6 +403,67 @@ replace mode) can touch or wipe data that several already-mounted views
 loaded independently on their own mount — reloading is the simple way to
 guarantee nothing on screen is left showing stale pre-restore state.
 
+## Deploying to Firebase Hosting
+
+`.github/workflows/firebase-deploy.yml` builds the app (the normal
+multi-file `npm run build`, not `build:onefile` — a real host serves
+per-asset files with its own caching, so there's no reason to pay for
+everything-inlined-as-one-file here) and deploys `dist/` to Firebase
+Hosting on every push to `claude/essay-workflow-manager-y7gklc` (this
+repo's current default branch — update that branch name in the workflow
+if that ever changes), or on demand via the Actions tab's "Run workflow"
+button. `firebase.json`/`.firebaserc` point it at the `notes-16464`
+project.
+
+It authenticates with a **plain Google Cloud service account key**, not
+Firebase's own `firebase init hosting:github` flow — that flow works by
+installing a Firebase-controlled GitHub App on the repo, which is exactly
+the kind of standing third-party GitHub access this setup avoids. A
+service account key is just a credential your own workflow holds (as a
+GitHub secret, revocable any time from the Cloud Console, never granting
+GitHub itself anything): set it up once, by hand, like this.
+
+1. **Create the service account.** Open
+   [console.cloud.google.com/iam-admin/serviceaccounts?project=notes-16464](https://console.cloud.google.com/iam-admin/serviceaccounts?project=notes-16464)
+   and click **Create Service Account**. Any name works (e.g.
+   `github-actions-deploy`); you can skip granting it a role in this
+   wizard — the next step does that more precisely.
+2. **Grant it deploy access.** Open
+   [console.cloud.google.com/iam-admin/iam?project=notes-16464](https://console.cloud.google.com/iam-admin/iam?project=notes-16464),
+   click **Grant Access**, enter the service account's email (it looks
+   like `github-actions-deploy@notes-16464.iam.gserviceaccount.com`), and
+   give it the **Firebase Hosting Admin** role
+   (`roles/firebasehosting.admin`) — that's the minimum needed to deploy
+   Hosting. If a deploy ever fails with a permissions error, add **Firebase
+   Viewer** too; some project configurations want both.
+3. **Create a key for it.** Back on the service accounts page, click into
+   the one you made → **Keys** tab → **Add Key** → **Create new key** →
+   **JSON**. This downloads a `.json` file — treat it like a password from
+   here on (don't commit it, don't paste it anywhere but the GitHub secret
+   below).
+4. **Add it as a GitHub secret.** In this repo on GitHub: **Settings** →
+   **Secrets and variables** → **Actions** → **New repository secret**.
+   Name it exactly `FIREBASE_SERVICE_ACCOUNT`, and for the value, open the
+   downloaded JSON file and paste its *entire contents* (the whole `{
+   "type": "service_account", ... }` object) as-is.
+5. **Delete the local copy** of the JSON key file once it's safely stored
+   as the secret (or move it somewhere access-controlled if you want to
+   keep a copy — either way, don't leave it sitting in a downloads
+   folder).
+6. Push to the branch above, or use **Run workflow** on
+   `firebase-deploy.yml` in the Actions tab, to trigger a deploy. The
+   workflow writes the secret to a temporary JSON file for
+   `GOOGLE_APPLICATION_CREDENTIALS` (which is how `firebase-tools`
+   authenticates as a service account in CI — no browser login, no stored
+   OAuth token) and deletes that file again once the deploy step finishes.
+
+If a deploy fails with something like "no currently active project" or a
+missing-site error, Hosting itself may not be fully provisioned yet for
+`notes-16464` — running `firebase init hosting` once from your own machine
+(logged in as yourself, not the service account) against this project
+will sort that out; the checked-in `firebase.json`/`.firebaserc` don't
+need to change for it.
+
 ## What's stubbed / simplified in this prototype
 
 - `src/lib/pdf.ts` points pdf.js's `cMapUrl`/`standardFontDataUrl` at a

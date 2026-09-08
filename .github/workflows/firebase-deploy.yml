@@ -1,0 +1,46 @@
+name: Deploy to Firebase Hosting
+
+# Deliberately not using the `firebase init hosting:github` / FirebaseExtended
+# GitHub Action flow, which relies on granting the Firebase GitHub App access
+# to this repo. This workflow instead authenticates to Firebase with a plain
+# Google Cloud service account key stored as a repo secret — see the README's
+# "Deploying to Firebase Hosting" section for how to create that secret.
+
+on:
+  push:
+    branches:
+      - claude/essay-workflow-manager-y7gklc
+  workflow_dispatch: {}
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - run: npm ci
+
+      # The normal multi-file build, not build:onefile — a real host serves
+      # per-asset files with its own caching just fine, so there's no reason
+      # to pay for the single-file build's everything-inlined-as-data-URIs
+      # size and cache-busting cost here (that build exists for handing
+      # someone a portable file, which isn't what this is).
+      - run: npm run build
+
+      - name: Deploy
+        env:
+          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+          GOOGLE_APPLICATION_CREDENTIALS: ${{ github.workspace }}/firebase-service-account.json
+        run: |
+          echo "$FIREBASE_SERVICE_ACCOUNT" > "$GOOGLE_APPLICATION_CREDENTIALS"
+          npx firebase-tools deploy --only hosting --non-interactive
+          rm -f "$GOOGLE_APPLICATION_CREDENTIALS"
+        shell: bash
+      # (the key file is written under $GITHUB_WORKSPACE, which the runner
+      # discards after the job regardless; the explicit rm above is just
+      # defense in depth against it lingering for any step added later)
