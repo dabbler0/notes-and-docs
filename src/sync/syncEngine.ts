@@ -5,9 +5,21 @@
  * *after* the normal local read/write path, reconciling this device's copy
  * with the account's Firestore copy, never the other way around:
  *
+ *  - Identity comes from Google sign-in (see firebaseClient.ts) — the
+ *    signed-in user's uid is the Firestore path segment
+ *    (`accounts/{uid}/...`), gated by a security rule that only that same
+ *    uid can read or write. The encryption key (account.ts) is a second,
+ *    independent layer on top of that: Google identity decides who can
+ *    even fetch the ciphertext, the key decides who can read it.
+ *  - Before touching any real data, this checks the local key's
+ *    fingerprint against the one recorded remotely (accountMeta.ts) — if
+ *    they don't match, this device has *a* key but not *the* key for this
+ *    account, and syncing would just write ciphertext nothing else can
+ *    decrypt. Caught here with a clear error rather than silently
+ *    corrupting things.
  *  - Push: any local doc whose `updatedAt` is newer than the last push
  *    watermark gets encrypted (its sensitive fields — see SENSITIVE_FIELDS)
- *    and written to `accounts/{userId}/{collection}/{id}`.
+ *    and written to `accounts/{uid}/{collection}/{id}`.
  *  - Pull: any remote doc whose `updatedAt` is newer than the last pull
  *    watermark is decrypted and applied locally *if* it's newer than
  *    whatever's already there — last-write-wins, by `updatedAt` — via
@@ -28,8 +40,9 @@
  * collection of a deleted source's now-orphaned blob chunk documents.
  */
 import { collection, doc, getDoc, getDocs, query, setDoc, where } from 'firebase/firestore'
-import { ensureSignedIn, firestoreDb } from './firebaseClient'
-import { getAccount } from './account'
+import { currentUser, firestoreDb } from './firebaseClient'
+import { getLocalKey } from './account'
+import { getAccountMeta, setAccountMeta } from './accountMeta'
 import { b64ToBuf, bufToB64, decryptBytes, decryptJson, encryptBytes, encryptJson, type EncryptedField } from '../lib/crypto'
 import { backend } from '../storage'
 import { notifySyncApplied } from './syncEvents'
@@ -81,6 +94,17 @@ function savePushedBlobIds(ids: Set<string>) {
   localStorage.setItem(PUSHED_BLOBS_KEY, JSON.stringify([...ids]))
 }
 
+/**
+ * Resets this device's notion of "what's already been synced," so the next
+ * pass re-pushes every bit of local data from scratch — used after
+ * resetting an account (accountMeta.ts's wipeRemoteAccountData), since the
+ * remote copy is gone and everything needs re-uploading under the new key.
+ */
+export function resetSyncState(): void {
+  localStorage.removeItem(CURSORS_KEY)
+  localStorage.removeItem(PUSHED_BLOBS_KEY)
+}
+
 export interface SyncCounts {
   essays: number
   nodes: number
@@ -122,7 +146,7 @@ async function decodeFromRemote(remote: Record<string, unknown>, cryptoKey: Cryp
 
 // ---- PDF blobs, chunked to fit Firestore's ~1MiB-per-document cap -------
 //
-// A blob is stored as one manifest doc (`accounts/{userId}/blobs/{blobId}`,
+// A blob is stored as one manifest doc (`accounts/{uid}/blobs/{blobId}`,
 // holding the encryption IV and how many chunks to expect) plus that many
 // chunk docs in a `chunks` subcollection under it, each just one base64
 // string field. 700,000 base64 characters (≈700,000 bytes, since base64 is
@@ -140,11 +164,26 @@ function splitIntoChunks(s: string, size: number): string[] {
 }
 
 export async function runSyncPass(onProgress?: (message: string) => void): Promise<SyncResult> {
-  const account = await getAccount()
-  if (!account) throw new Error('No account on this device yet — create or import one first.')
-  const { bundle, cryptoKey } = account
-  await ensureSignedIn()
+  const user = currentUser()
+  if (!user) throw new Error('Sign in with Google first — open Sync settings.')
+  const uid = user.uid
+
+  const localKey = await getLocalKey(uid)
+  if (!localKey) throw new Error('No encryption key set up for this Google account on this device yet — open Sync settings.')
+
   const db = firestoreDb()
+  const meta = await getAccountMeta(uid)
+  if (meta && meta.keyFingerprint !== localKey.fingerprint) {
+    throw new Error(
+      "The encryption key on this device doesn't match the one this account was already set up with elsewhere. Re-import the correct key (QR code or key file) from Sync settings — or, only as a last resort, reset the account there.",
+    )
+  }
+  if (!meta) {
+    // First sync ever for this account, from any device — this device's
+    // key becomes the account's canonical one from here on.
+    await setAccountMeta(uid, localKey.fingerprint)
+  }
+  const cryptoKey = localKey.cryptoKey
 
   const cursors = loadCursors()
   const passStartedAt = Date.now()
@@ -159,14 +198,14 @@ export async function runSyncPass(onProgress?: (message: string) => void): Promi
     const dirty = localDocs.filter((d) => (d.updatedAt ?? 0) > cursors.pushedAt)
     for (const localDoc of dirty) {
       const remoteDoc = await encodeForRemote(col, localDoc, cryptoKey)
-      await setDoc(doc(db, 'accounts', bundle.userId, col, localDoc.id), remoteDoc)
+      await setDoc(doc(db, 'accounts', uid, col, localDoc.id), remoteDoc)
       result.pushed[col]++
     }
   }
 
   for (const col of SYNCED_COLLECTIONS) {
     onProgress?.(`Pulling remote ${col}…`)
-    const q = query(collection(db, 'accounts', bundle.userId, col), where('updatedAt', '>', cursors.pulledAt))
+    const q = query(collection(db, 'accounts', uid, col), where('updatedAt', '>', cursors.pulledAt))
     const snap = await getDocs(q)
     for (const docSnap of snap.docs) {
       const remote = docSnap.data()
@@ -189,7 +228,7 @@ export async function runSyncPass(onProgress?: (message: string) => void): Promi
     const bytes = await blob.arrayBuffer()
     const { iv, cipher } = await encryptBytes(cryptoKey, bytes)
     const chunks = splitIntoChunks(bufToB64(cipher), BLOB_CHUNK_SIZE)
-    const blobDocRef = doc(db, 'accounts', bundle.userId, 'blobs', source.pdfBlobId)
+    const blobDocRef = doc(db, 'accounts', uid, 'blobs', source.pdfBlobId)
     await Promise.all([
       setDoc(blobDocRef, { iv, totalChunks: chunks.length, updatedAt: Date.now() }),
       ...chunks.map((data, i) => setDoc(doc(blobDocRef, 'chunks', String(i)), { data })),
@@ -204,7 +243,7 @@ export async function runSyncPass(onProgress?: (message: string) => void): Promi
     if (await backend.blobs.has(source.pdfBlobId)) continue
     onProgress?.(`Downloading ${source.pdfFileName || 'a PDF'}…`)
     try {
-      const blobDocRef = doc(db, 'accounts', bundle.userId, 'blobs', source.pdfBlobId)
+      const blobDocRef = doc(db, 'accounts', uid, 'blobs', source.pdfBlobId)
       const manifestSnap = await getDoc(blobDocRef)
       if (!manifestSnap.exists()) continue
       const { iv, totalChunks } = manifestSnap.data() as { iv: string; totalChunks: number }

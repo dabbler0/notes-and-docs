@@ -1,37 +1,49 @@
 /**
  * End-to-end encryption for sync: a single AES-256-GCM key, generated once
- * on whichever device creates the account and never itself sent to the
- * server — only its *ciphertext* output does. `userId` is just a random,
- * unguessable path segment (see the sync engine) — there's no password and
- * no server-side account record; possessing the key is the account.
+ * on whichever device first sets it up for a given (Google-identified)
+ * account and never itself sent to the server — only its *ciphertext*
+ * output does. Which account this key belongs to is now a signed-in Google
+ * identity (see sync/firebaseClient.ts and sync/account.ts), not anything
+ * carried in the bundle itself; possessing the key is what actually
+ * unlocks the data, Google sign-in is what gates getting to the ciphertext
+ * at all.
  */
-import { id } from './id'
-
-export interface AccountBundle {
-  /** Firestore/Storage path segment this device's data lives under. Not a secret by itself — the encryption key is what actually protects the data. */
-  userId: string
+export interface KeyBundle {
   /** Raw AES-256-GCM key, base64. */
   key: string
-  /** Bundle format version, in case the shape ever needs to change. */
-  v: 1
+  /** Bundle format version. v1 bundles (from before Google sign-in was the identity source) also carried a `userId` field alongside this one — harmless if still present on an old key file, just ignored. */
+  v: 1 | 2
 }
 
-export async function generateAccountBundle(): Promise<{ bundle: AccountBundle; cryptoKey: CryptoKey }> {
+export async function generateKeyBundle(): Promise<{ bundle: KeyBundle; cryptoKey: CryptoKey }> {
   const cryptoKey = await crypto.subtle.generateKey({ name: 'AES-GCM', length: 256 }, true, ['encrypt', 'decrypt'])
   const raw = await crypto.subtle.exportKey('raw', cryptoKey)
-  const bundle: AccountBundle = { userId: id(), key: bufToB64(raw), v: 1 }
-  return { bundle, cryptoKey }
+  return { bundle: { key: bufToB64(raw), v: 2 }, cryptoKey }
 }
 
-export function isAccountBundle(value: unknown): value is AccountBundle {
+export function isKeyBundle(value: unknown): value is KeyBundle {
   if (!value || typeof value !== 'object') return false
-  const v = value as Record<string, unknown>
-  return typeof v.userId === 'string' && typeof v.key === 'string'
+  return typeof (value as Record<string, unknown>).key === 'string'
 }
 
-export async function importAccountKey(bundle: AccountBundle): Promise<CryptoKey> {
+export async function importKeyFromBundle(bundle: KeyBundle): Promise<CryptoKey> {
   const raw = b64ToBuf(bundle.key)
   return crypto.subtle.importKey('raw', raw, 'AES-GCM', true, ['encrypt', 'decrypt'])
+}
+
+/**
+ * A short, non-secret fingerprint of a key — safe to store in Firestore
+ * (readable by anyone who can read the account's own data, which requires
+ * being signed in as that Google account in the first place) as a way to
+ * tell "this device has the right key" from "this device has *a* key that
+ * happens to not be the one this account actually uses" before ever
+ * touching real data with it. A hash reveals nothing usable about the key
+ * itself.
+ */
+export async function computeKeyFingerprint(cryptoKey: CryptoKey): Promise<string> {
+  const raw = await crypto.subtle.exportKey('raw', cryptoKey)
+  const hash = await crypto.subtle.digest('SHA-256', raw)
+  return bufToB64(hash)
 }
 
 export interface EncryptedField {

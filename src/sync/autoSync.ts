@@ -6,7 +6,8 @@
  */
 import { runSyncPass } from './syncEngine'
 import { getFirebaseConfig } from './firebaseConfig'
-import { getStoredBundle } from './account'
+import { hasLocalKey } from './account'
+import { currentUser } from './firebaseClient'
 
 const ENABLED_KEY = 'marginal.sync.autoEnabled.v1'
 const INTERVAL_MS = 30_000
@@ -39,7 +40,13 @@ export function onAutoSyncStatus(fn: (status: AutoSyncStatus) => void): () => vo
 }
 
 function canSyncAtAll(): boolean {
-  return !!getFirebaseConfig() && !!getStoredBundle()
+  if (!getFirebaseConfig()) return false
+  try {
+    const user = currentUser()
+    return !!user && hasLocalKey(user.uid)
+  } catch {
+    return false
+  }
 }
 
 async function tick() {

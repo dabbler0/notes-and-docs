@@ -1348,6 +1348,43 @@ select {
   margin: 10px auto;
 }
 
+.sync-google-signin,
+.sync-google-account {
+  margin-top: 14px;
+  padding-top: 14px;
+  border-top: 1px solid var(--border);
+}
+
+.btn-link-muted {
+  background: none;
+  border: none;
+  padding: 0;
+  color: var(--ink-dim);
+  font-size: 12.5px;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.btn-link-muted:hover {
+  color: var(--ink);
+}
+
+.sync-reset-toggle {
+  margin-top: 14px;
+}
+
+.sync-reset-box {
+  background: var(--pink);
+  border-radius: var(--radius-md);
+  padding: 12px 14px;
+  margin-top: 8px;
+}
+
+.sync-reset-box p {
+  margin-top: 0;
+  font-size: 13px;
+}
+
 .qr-scanner {
   margin: 10px 0;
 }

@@ -50,7 +50,10 @@ npm run build:onefile  # produces dist/index.html: everything inlined, open it f
   `SectionBlock.tsx` per section (its own small `contentEditable` shards,
   its own collapse state, its own version-history button).
 - `src/sync/` and `src/components/sync/` — the optional cross-device sync
-  layer: `syncEngine.ts` (the actual push/pull pass), `account.ts` and
+  layer: `firebaseClient.ts` (Google sign-in plus the Firestore/Auth
+  connections), `syncEngine.ts` (the actual push/pull pass), `account.ts`
+  (the local, per-Google-account encryption key — never uploaded) and
+  `accountMeta.ts` (the remote key-fingerprint check, and account reset),
   `firebaseConfig.ts` (what's stored locally to make sync possible at all),
   `autoSync.ts` (the polling loop), `qr.ts` (pairing-code generation), and
   `SyncSettingsDialog.tsx`/`QrScanner.tsx` for the UI. See "Syncing across
@@ -249,10 +252,21 @@ Sync is opt-in and rudimentary by design: no realtime updates, no
 conflict-resolution UI, one polling interval. What it does do: every
 device keeps a full local copy of everything in IndexedDB (nothing here
 changes that — sync is a reconciliation pass layered on top, not a
-replacement for local storage), PDFs and essay drafts are encrypted before
-they ever leave the device, and there's no password or server-side
-signup — an account *is* an encryption key plus a random id, and moving
-that pair to a new device is what "logging in" means.
+replacement for local storage), and PDFs and essay drafts are encrypted
+before they ever leave the device.
+
+**Two independent guards, not one.** An account is identified by signing
+into a **Google account** (via Firebase Auth) — that's what a Firestore
+security rule checks, so nobody without access to that specific Google
+account can even fetch your ciphertext. Separately, an **AES-256 encryption
+key never leaves the device it was created or imported on** — Google
+sign-in is not a substitute for it, and vice versa: someone who somehow got
+your Google session could read nothing but ciphertext, and someone who
+somehow got your key still can't reach Firestore without also being signed
+into the right Google account. Moving the key to a new device (QR code, key
+file, or pasted text) is what "adding a device to your account" means;
+there is no password and no separate signup, just Google sign-in plus that
+key.
 
 It talks to **Firestore only** — deliberately not Cloud Storage, even for
 PDFs (see "PDFs through Firestore" below) — specifically so the whole
@@ -266,25 +280,27 @@ mutually exclusive.
 file with no server of its own, so it can't ship a working sync backend
 out of the box — each install points at *your own* Firebase project:
 
-1. Create a Firebase project (free tier is enough) and enable
-   **Firestore**, and enable **Anonymous** sign-in under Authentication
-   (this is only so Firestore rules have a `request.auth` to check — see
-   the security note below, it has nothing to do with the app's own
-   account system).
-2. Set these Firestore rules (`accounts/{userId}` is the app's own account
-   id, not Firebase's; the recursive `{document=**}` covers the flat
-   essays/nodes/sources collections *and* the nested `blobs/{id}/chunks/{i}`
+1. Create a Firebase project (free tier is enough), enable **Firestore**,
+   and under Authentication → Sign-in method enable **Google** (not
+   Anonymous — the whole point now is a real, checkable identity).
+2. Set these Firestore rules (`accounts/{userId}` here is the signed-in
+   Firebase Auth **uid**, not a locally-generated id; the recursive
+   `{document=**}` covers the flat essays/nodes/sources collections, the
+   `meta/account` fingerprint doc, and the nested `blobs/{id}/chunks/{i}`
    subcollection PDFs live in, at any depth, with one rule):
    ```
    rules_version = '2';
    service cloud.firestore {
      match /databases/{database}/documents {
        match /accounts/{userId}/{document=**} {
-         allow read, write: if request.auth != null;
+         allow read, write: if request.auth != null && request.auth.uid == userId;
        }
      }
    }
    ```
+   This is genuine per-account enforcement, not obscurity: Firestore itself
+   refuses a request whose signed-in uid doesn't match the path, regardless
+   of whether the caller knows or guesses another account's id.
 3. In Project settings → "Your apps," add a web app (`firebase init
    hosting` typically already leaves you with one). Its config object is
    what Sync settings needs — but see the next section before pasting it
@@ -309,16 +325,41 @@ back into pointing at a project by hand.
 Once one way or the other gets a config in place, the rest of setup is
 the same:
 
-**Creating and transferring an account.** Sync settings offers "Create
-account" (generates a fresh AES-256 key and a random id, right there in
-the browser) or "Use an existing account," which accepts the same bundle
-three ways: scanning another device's QR code, uploading its downloaded
-key file, or pasting the key JSON directly. The QR/file/paste payload is
-just `{ userId, key, v }` — literally the whole account. Camera-based QR
-scanning needs a secure context (`https://`, or `localhost`) to get camera
-access at all; a copy of this app opened straight from disk over `file://`
-can't get there, so it falls back to a plain message and the key-file/paste
-paths, which work everywhere.
+**Signing in and setting up a key.** Sync settings' "Sign in with Google"
+button uses Firebase Auth's normal OAuth popup flow — which needs a real
+`https://` (or `localhost`) origin, so it doesn't work from a copy of this
+app opened straight off disk over `file://`; use the hosted copy (or `npm
+run dev`) to sign in, and the key can then be exported to a device running
+however you like. Once signed in, what happens next depends on whether
+this Google account has ever had a key set up anywhere before, which the
+app checks via a small non-sensitive fingerprint doc it keeps in Firestore
+(see "The key-fingerprint check" below) — never the key itself:
+
+- **Never set up before** → "Create key" generates a fresh AES-256 key
+  right there in the browser (or "Use an existing key" if you're deliberately
+  restoring one from a backup file on a brand-new account).
+- **Already set up, this device doesn't have it** → the app refuses to
+  silently mint a second, conflicting key. Instead it prompts you to bring
+  over the *existing* key: scanning another device's QR code, uploading its
+  downloaded key file, or pasting the key JSON directly. Camera-based QR
+  scanning needs a secure context (`https://`, or `localhost`) to get
+  camera access at all; on an origin that can't get there it falls back to
+  a plain message and the key-file/paste paths, which work everywhere. Each
+  candidate key is checked against the account's stored fingerprint
+  *before* being adopted, so pasting the wrong device's key is rejected
+  with an explanation rather than silently corrupting sync.
+- **Lost the key file entirely** → a deliberately buried "I've lost the key
+  file — reset this account instead" link, behind a warning box, a
+  type-"RESET"-to-confirm text box, and a native confirm dialog. This wipes
+  every remote document for the account (structured records, PDF blob
+  chunks, the fingerprint doc) and bootstraps a brand-new key — a genuine
+  last resort, since it permanently orphans any other device still holding
+  the old key, which is exactly why it's made this hard to reach by
+  accident rather than offered as a normal option.
+
+The key/bundle payload transferred by QR/file/paste is just `{ key, v }` —
+the key alone; which account it belongs to is Google sign-in's job, not
+the bundle's.
 
 **What's encrypted, what isn't.** A node's `draftContent` and its full
 `versions` array (so: the actual prose, and every comment attached to any
@@ -339,7 +380,7 @@ worth knowing if either would contain something sensitive.
 **PDFs through Firestore.** A Firestore document caps out at ~1MiB, so a
 PDF (encrypted, then base64-encoded) is split into 700,000-character
 chunks well under that cap: one manifest document
-(`accounts/{userId}/blobs/{blobId}`, holding the encryption IV and a chunk
+(`accounts/{uid}/blobs/{blobId}`, holding the encryption IV and a chunk
 count) plus that many chunk documents in a `chunks` subcollection under it,
 each just one base64 string field. A local blob not yet known to have been
 pushed is uploaded once (blob ids are never reused for a different file,
@@ -369,21 +410,29 @@ filters tombstoned records out, so nothing else in the app needs to know
 this exists. Sync runs automatically every 30 seconds while the app is
 open (toggle in Sync settings) and on demand via "Sync now."
 
-**The security model, stated plainly.** There's no real per-account access
-control here — the Firestore rule above allows *any* anonymously
-authenticated client to read or write *any* account's path, if it knows
-the id. What actually protects your data is that the id is an
-unguessable random UUID (rules out casual discovery) and that anything
-worth reading is encrypted with a key that never reaches Firebase at all
-(rules out a compromised or curious server operator, and rules out someone
-who does guess or leak an id from reading anything but ciphertext). A real
-product would instead mint a Firebase custom auth token server-side, bound
-to the account id, and write rules like `request.auth.uid == userId` — but
-that needs a backend able to hold a service-account secret, which a
-single static HTML file fundamentally can't do without reintroducing a
-server. This tradeoff is the whole reason the account system stays
-"rudimentary": it's exactly as much account system as a purely
-client-side app can honestly implement.
+**The security model, stated plainly.** This is genuine per-account access
+control, not obscurity: the Firestore rule requires the caller's signed-in
+Firebase Auth uid to match the path being read or written, which Firestore
+itself enforces server-side — knowing or guessing someone else's account
+id gets you nowhere. On top of that, independently, anything worth reading
+is encrypted client-side with a key that never reaches Firebase at all —
+so even a compromised or curious server operator (who, unlike an outside
+attacker, *does* pass the Firestore rule for every account) sees only
+ciphertext. The two guards protect against different things and neither
+stands in for the other: Google sign-in without the key gets you
+inaccessible ciphertext; the key without being signed into the right
+Google account never gets Firestore to hand over anything to decrypt in
+the first place.
+
+**The key-fingerprint check.** So that a second device can tell "this
+account already has a key, and it isn't the one I have" *before* touching
+any real data, each account keeps one small Firestore doc
+(`accounts/{uid}/meta/account`) holding a SHA-256 fingerprint of the raw
+key bytes — never the key itself; a fingerprint doesn't let anyone
+reconstruct or verify-by-brute-force the actual key any faster than
+guessing at random. The Firestore rule above scopes that doc to the
+account's own uid same as everything else, so only the signed-in owner can
+even read whether one exists.
 
 **Testing sync locally.** `?fbEmulator=host:firestorePort:authPort` on the
 app's URL (e.g. `?fbEmulator=127.0.0.1:8180:9199`) points Firestore/Auth at
@@ -404,17 +453,26 @@ essay — harmless, just occasionally a mildly confusing duplicate the first
 time two brand-new installs meet each other.
 
 This was verified end-to-end against a real `firebase emulators:start`
-Firestore + Auth instance (not just unit-level pieces): two independent
-browser profiles, one account transferred between them by key file, a
-~2MB PDF blob round-tripping byte-for-byte through the chunking scheme
-above, an edited essay's text propagating from one to the other, and a
-deletion on one propagating as a tombstone to the other. What's *not*
-verified is the same thing against your actual live Firebase project
-specifically (this sandbox's network policy blocks reaching Firebase's
-production domains, which is also why the emulator — a local process, not
-a hosted one — was reachable for this testing at all) — the emulator
-speaks the identical Firestore/Auth wire protocol, so this should carry
-over directly, but a live run is worth doing yourself once to confirm.
+Firestore + Auth instance (not just unit-level pieces), across three
+independent browser profiles: one Google identity signing in fresh and
+bootstrapping a key; that same identity signing in on a second device with
+no local key, correctly refusing to bootstrap a second one and instead
+detecting the existing account, rejecting a deliberately-wrong key with an
+explanation, then accepting the correct key transferred by file and
+successfully syncing (an edited essay's text and a ~2MB PDF blob both
+propagating byte-for-byte through the chunking scheme above); and a
+*different* Google identity confirmed unable to see any of the first
+account's data, exercising the `request.auth.uid == userId` rule for real.
+What's *not* verified this way is the actual interactive Google
+popup-sign-in click-through itself: this sandbox's network policy blocks
+both Firebase's production domains and, it turns out, the handful of
+external calls `signInWithPopup` needs to even open a popup, regardless of
+the Auth emulator being otherwise fully reachable. Everything downstream
+of "a Google account is signed in" — including the emulator's own uid,
+fingerprint doc, and Firestore rules — was exercised for real by signing in
+through the Auth emulator's documented `signInWithCredential` test path
+instead of the popup UI; only that one interactive step needs confirming
+yourself, on a live project, before relying on this.
 
 ## Backup & restore
 
