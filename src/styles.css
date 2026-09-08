@@ -914,10 +914,19 @@ select {
 
 .version-split-pane {
   min-width: 0;
-  /* Independent scrolling per side (asked for explicitly even in the
-     desktop, side-by-side orientation): each pane is its own bounded,
-     separately-scrolling box rather than the two growing together and
-     scrolling as part of the surrounding document. */
+}
+
+/* Independent scrolling per side (asked for explicitly even in the
+   desktop, side-by-side orientation): each pane is its own bounded,
+   separately-scrolling box rather than the two growing together and
+   scrolling as part of the surrounding document. Scoped to `.comparing`
+   specifically — `.version-split-pane` is also the class on the "live"
+   pane wrapper, which stays mounted at all times (comparing or not, see
+   the note above), so this must not apply outside of an actual
+   side-by-side or every ordinary subsection would get its own stray
+   scrollbar and the document would stop reading as one flowing piece of
+   prose. */
+.section-content-row.comparing .version-split-pane {
   max-height: 65vh;
   overflow-y: auto;
   padding-right: 4px;
@@ -980,7 +989,7 @@ select {
   .section-content-row.comparing {
     grid-template-columns: 1fr;
   }
-  .version-split-pane {
+  .section-content-row.comparing .version-split-pane {
     max-height: 40vh;
   }
 
