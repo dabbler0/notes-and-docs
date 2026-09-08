@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'preact/hooks'
 import { createEssay, deleteEssay, listEssays } from '../../models/essaysRepo'
+import { onSyncApplied } from '../../sync/syncEvents'
 import type { Essay } from '../../models/types'
 import { EssayWorkspace } from './EssayWorkspace'
 
@@ -13,6 +14,11 @@ export function EssaysView() {
 
   useEffect(() => {
     reload()
+    // A background sync (the auto-sync loop, or "Sync now" from the Sync
+    // settings dialog opened elsewhere) writes straight into IndexedDB —
+    // without this, a synced-in essay from another device wouldn't show up
+    // here until this view happened to unmount and remount on its own.
+    return onSyncApplied(reload)
   }, [])
 
   async function handleCreate() {

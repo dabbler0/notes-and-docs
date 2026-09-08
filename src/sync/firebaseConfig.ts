@@ -3,10 +3,9 @@
  * account (userId + key) above. A Firebase web app config (apiKey,
  * projectId, etc.) isn't a secret the way a server credential is — it's
  * meant to be embedded in client code; what actually protects your data is
- * (a) Firestore/Storage security rules scoping reads/writes to
- * `accounts/{uid}/...`, and (b) the fact that everything sensitive is
- * encrypted before it ever reaches this SDK. See README's sync section for
- * the rules to set up.
+ * (a) Firestore security rules scoping reads/writes to `accounts/{uid}/...`,
+ * and (b) the fact that everything sensitive is encrypted before it ever
+ * reaches this SDK. See README's sync section for the rules to set up.
  *
  * There are two ways this config reaches a device, tracked as its `source`:
  *  - 'auto': detected on its own, with nothing pasted in — see
@@ -26,7 +25,13 @@ export interface FirebaseWebConfig {
   apiKey: string
   authDomain: string
   projectId: string
-  storageBucket: string
+  // Cloud Storage isn't used by this app at all (see syncEngine.ts's blob
+  // chunking, which keeps PDFs in Firestore instead) — so unlike the other
+  // fields here, this one being present is *not* required. Firebase's own
+  // /__/firebase/init.json still includes it, empty, for any project that
+  // hasn't provisioned a Storage bucket; that emptiness used to (wrongly)
+  // fail auto-detection entirely.
+  storageBucket?: string
   messagingSenderId?: string
   appId: string
 }
@@ -38,7 +43,7 @@ export interface StoredFirebaseConfig {
   source: FirebaseConfigSource
 }
 
-const REQUIRED_FIELDS: (keyof FirebaseWebConfig)[] = ['apiKey', 'authDomain', 'projectId', 'storageBucket', 'appId']
+const REQUIRED_FIELDS: (keyof FirebaseWebConfig)[] = ['apiKey', 'authDomain', 'projectId', 'appId']
 
 export function validateFirebaseConfig(value: unknown): string | null {
   if (!value || typeof value !== 'object') return 'Not a valid config object.'
@@ -101,12 +106,11 @@ let detectPromise: Promise<HostingDetectResult> | null = null
  * can't meaningfully change without a full reload anyway.
  *
  * Firebase's own init.json also carries fields this app doesn't use at all
- * (`databaseURL`, for the Realtime Database — a different product from the
- * Firestore/Storage this app actually talks to) which can come back empty
- * with no effect on anything here; only a genuinely missing field from
- * REQUIRED_FIELDS above (most often `storageBucket`, if Cloud Storage
- * hasn't been provisioned for the project yet) makes this resolve to
- * 'invalid' instead of 'found'.
+ * — `databaseURL` (Realtime Database) and `storageBucket` (Cloud Storage,
+ * deliberately unused here — see the field's own comment above) — which
+ * can come back empty with no effect on anything here; only a genuinely
+ * missing field from REQUIRED_FIELDS above makes this resolve to 'invalid'
+ * instead of 'found'.
  */
 export function detectHostingConfig(): Promise<HostingDetectResult> {
   if (!detectPromise) {

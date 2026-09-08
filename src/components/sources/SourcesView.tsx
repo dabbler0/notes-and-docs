@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'preact/hooks'
 import { listSources, matchesSourceQuery } from '../../models/sourcesRepo'
+import { onSyncApplied } from '../../sync/syncEvents'
 import type { Source } from '../../models/types'
 import { SourceCard } from './SourceCard'
 import { AddSourceDialog } from './AddSourceDialog'
@@ -17,6 +18,9 @@ export function SourcesView() {
 
   useEffect(() => {
     reload()
+    // See the matching note in EssaysView — a background sync writes
+    // straight into IndexedDB, so this needs its own nudge to refetch.
+    return onSyncApplied(reload)
   }, [])
 
   const filtered = sources.filter((s) => matchesSourceQuery(s, query))

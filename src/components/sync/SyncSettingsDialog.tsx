@@ -65,8 +65,8 @@ export function SyncSettingsDialog({ onClose }: { onClose: () => void }) {
           {detecting && <p className="muted">Checking whether this page's own Firebase Hosting already has a project config for it…</p>}
           {detectError && (
             <p className="error-text">
-              Found this page's own Firebase Hosting config, but it's missing something this app needs: <b>{detectError.error}</b> — most often this means Cloud Storage hasn't been provisioned yet for this project (open{' '}
-              <b>Storage</b> in the Firebase console and click <b>Get started</b> once), then reload this page. In the meantime, or if you'd rather point at a different project, you can fix it up and paste it below.
+              Found this page's own Firebase Hosting config, but it's missing something this app needs: <b>{detectError.error}</b> That usually means the project's web app registration itself is incomplete — check Project settings
+              → General → "Your apps" in the Firebase console. In the meantime, or if you'd rather point at a different project, you can fix it up and paste it below.
             </p>
           )}
           {/* Not rendered while `detecting` is still in flight: the form's
@@ -159,14 +159,15 @@ function FirebaseConfigForm({ initialText, onSaved, onCancel }: { initialText: s
         <label>Firebase project config</label>
         <textarea
           rows={7}
-          placeholder={'{\n  "apiKey": "…",\n  "authDomain": "your-app.firebaseapp.com",\n  "projectId": "your-app",\n  "storageBucket": "your-app.appspot.com",\n  "appId": "…"\n}'}
+          placeholder={'{\n  "apiKey": "…",\n  "authDomain": "your-app.firebaseapp.com",\n  "projectId": "your-app",\n  "appId": "…"\n}'}
           value={text}
           onInput={(e) => setText((e.target as HTMLTextAreaElement).value)}
         />
       </div>
       <p className="muted">
-        From your Firebase project's settings → "Your apps" → web app config. This isn't a secret by itself (it's meant to be embedded in client code) — what actually protects your data is Firestore/Storage security rules plus the
-        encryption below. See the README for the project setup and rules to use. If this page is served from that same project's own Firebase Hosting, you shouldn't need this at all — it's detected automatically.
+        From your Firebase project's settings → "Your apps" → web app config — pasting the whole object (any extra fields, like `storageBucket`, are simply ignored) works fine too. This isn't a secret by itself (it's meant to be
+        embedded in client code) — what actually protects your data is Firestore security rules plus the encryption below. See the README for the project setup and rules to use. If this page is served from that same project's
+        own Firebase Hosting, you shouldn't need this at all — it's detected automatically.
       </p>
       {error && <p className="error-text">{error}</p>}
       <div className="modal-actions">

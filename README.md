@@ -254,33 +254,32 @@ they ever leave the device, and there's no password or server-side
 signup — an account *is* an encryption key plus a random id, and moving
 that pair to a new device is what "logging in" means.
 
+It talks to **Firestore only** — deliberately not Cloud Storage, even for
+PDFs (see "PDFs through Firestore" below) — specifically so the whole
+thing stays usable on Firebase's no-billing-required **Spark** (free)
+plan. As of late 2024 Google requires the pay-as-you-go Blaze plan just to
+*provision* a Cloud Storage bucket at all, even to stay within its own
+free-tier limits, which would have made "free to run" and "uses Storage"
+mutually exclusive.
+
 **Setting up your own Firebase project.** This is a single static HTML
 file with no server of its own, so it can't ship a working sync backend
 out of the box — each install points at *your own* Firebase project:
 
 1. Create a Firebase project (free tier is enough) and enable
-   **Firestore** and **Storage**, and enable **Anonymous** sign-in under
-   Authentication (this is only so Firestore/Storage rules have a
-   `request.auth` to check — see the security note below, it has nothing
-   to do with the app's own account system).
+   **Firestore**, and enable **Anonymous** sign-in under Authentication
+   (this is only so Firestore rules have a `request.auth` to check — see
+   the security note below, it has nothing to do with the app's own
+   account system).
 2. Set these Firestore rules (`accounts/{userId}` is the app's own account
-   id, not Firebase's):
+   id, not Firebase's; the recursive `{document=**}` covers the flat
+   essays/nodes/sources collections *and* the nested `blobs/{id}/chunks/{i}`
+   subcollection PDFs live in, at any depth, with one rule):
    ```
    rules_version = '2';
    service cloud.firestore {
      match /databases/{database}/documents {
-       match /accounts/{userId}/{collection}/{docId} {
-         allow read, write: if request.auth != null;
-       }
-     }
-   }
-   ```
-   and this for Storage:
-   ```
-   rules_version = '2';
-   service firebase.storage {
-     match /b/{bucket}/o {
-       match /accounts/{userId}/blobs/{blobId} {
+       match /accounts/{userId}/{document=**} {
          allow read, write: if request.auth != null;
        }
      }
@@ -325,8 +324,8 @@ paths, which work everywhere.
 `versions` array (so: the actual prose, and every comment attached to any
 version) are AES-256-GCM encrypted client-side before being written to
 Firestore, as one `_enc: {iv, data}` field; PDF bytes are encrypted the
-same way before upload to Storage, with the IV kept in the object's own
-`customMetadata` (Storage has no per-field encryption of its own). Left as
+same way before being chunked into Firestore documents (see "PDFs through
+Firestore" below), with the IV kept on the manifest document. Left as
 plaintext metadata: essay/section titles, timestamps, a source's BibTeX
 fields and free-text note, and which node has which parent (implicit in
 `draftContent`'s markers, which — being inside a node's own content — are
@@ -337,15 +336,33 @@ small. It also means a source's comment field and a essay's title are
 readable by anyone who can read your Firestore data, encryption or not —
 worth knowing if either would contain something sensitive.
 
+**PDFs through Firestore.** A Firestore document caps out at ~1MiB, so a
+PDF (encrypted, then base64-encoded) is split into 700,000-character
+chunks well under that cap: one manifest document
+(`accounts/{userId}/blobs/{blobId}`, holding the encryption IV and a chunk
+count) plus that many chunk documents in a `chunks` subcollection under it,
+each just one base64 string field. A local blob not yet known to have been
+pushed is uploaded once (blob ids are never reused for a different file,
+so simple "pushed already?" membership is enough — no timestamp comparison
+needed); a blob referenced by a synced Source but missing locally is
+reassembled from its manifest and chunks and decrypted. The tradeoff for
+staying on Firestore alone: a multi-MB PDF costs several Firestore
+read/write operations instead of one Storage upload/download, which counts
+against the Spark plan's daily quota (50K reads / 20K writes free per day)
+faster than Storage's own free tier would have — worth knowing if syncing
+many or large PDFs.
+
 **How sync actually decides what to send.** Every local record already
 carries an `updatedAt`; each pass pushes anything newer than the last push,
 and pulls anything remote newer than the last pull, applying a remote
 change locally only if it's newer than what's already there
-(last-write-wins, no merge). A PDF is pushed once, the first time a pass
-notices it hasn't been uploaded yet (blob ids are never reused for a
-different file, so there's no need to compare timestamps there). Deletion
-is a tombstone (`deleted: true` plus a fresh `updatedAt` on the essay,
-source, or node record — see the `deleted` field's own doc comment in
+(last-write-wins, no merge) — via `backend.docs.put` directly rather than
+through EssaysView/SourcesView's own state, which is why a pass that pulls
+anything also fires a `sync/syncEvents.ts` notification those views
+subscribe to, so a background sync doesn't leave an already-open list
+looking stale until it happens to remount on its own. Deletion is a
+tombstone (`deleted: true` plus a fresh `updatedAt` on the essay, source,
+or node record — see the `deleted` field's own doc comment in
 `models/types.ts`), not a hard delete, specifically so a deletion is itself
 a synchronizable *change*; every list/read in `essaysRepo`/`sourcesRepo`
 filters tombstoned records out, so nothing else in the app needs to know
@@ -353,7 +370,7 @@ this exists. Sync runs automatically every 30 seconds while the app is
 open (toggle in Sync settings) and on demand via "Sync now."
 
 **The security model, stated plainly.** There's no real per-account access
-control here — the Firestore/Storage rules above allow *any* anonymously
+control here — the Firestore rule above allows *any* anonymously
 authenticated client to read or write *any* account's path, if it knows
 the id. What actually protects your data is that the id is an
 unguessable random UUID (rules out casual discovery) and that anything
@@ -368,25 +385,36 @@ server. This tradeoff is the whole reason the account system stays
 "rudimentary": it's exactly as much account system as a purely
 client-side app can honestly implement.
 
+**Testing sync locally.** `?fbEmulator=host:firestorePort:authPort` on the
+app's URL (e.g. `?fbEmulator=127.0.0.1:8180:9199`) points Firestore/Auth at
+a local `firebase emulators:start` suite instead of the real project — for
+trying out sync, or testing security-rule changes, against disposable
+local data. Not something an end user ever needs to set.
+
 **Known gaps.** No realtime listeners — a change on another device shows
-up on the next 30-second tick or manual sync, not immediately. No
-conflict UI — a genuine simultaneous edit on two devices just keeps
-whichever timestamp is later, silently. Deleting a source removes its
-Storage object's *local* reference immediately but doesn't delete the
-remote copy (a minor, unreclaimed storage cost, not a correctness issue).
-And — since this sandbox's network policy blocks reaching Firebase's own
-domains at all — the actual push/pull pass against a live project could
-not be exercised end-to-end while building this; what's verified directly
-is the encryption round-trip (AES-GCM encrypt/decrypt, including that the
-wrong key correctly fails to decrypt), every account-management UI flow
-(create, export via QR/key-file, import via paste/file, forget), tombstone
-deletion (a deleted record is confirmed to persist locally as
-`{deleted: true}` rather than vanishing), and that a sync attempt against
-an unreachable project fails safely into a visible error rather than
-hanging the UI or throwing past the try/catch. The push/pull logic itself
-is implemented directly against the documented Firestore/Storage SDK
-semantics, but hasn't been watched moving real data between two real
-devices.
+up on the next 30-second tick or manual sync, not immediately. No conflict
+UI — a genuine simultaneous edit on two devices just keeps whichever
+timestamp is later, silently. Deleting a source removes its blob chunk
+documents' *local* reference immediately but doesn't delete the remote
+copies (a minor, unreclaimed storage cost, not a correctness issue). A
+fresh device seeds its own local demo essay/source (see `seed.ts`) before
+it ever syncs, so the first sync from a second fresh device will carry its
+own separate copy of that same demo content in as a genuinely distinct
+essay — harmless, just occasionally a mildly confusing duplicate the first
+time two brand-new installs meet each other.
+
+This was verified end-to-end against a real `firebase emulators:start`
+Firestore + Auth instance (not just unit-level pieces): two independent
+browser profiles, one account transferred between them by key file, a
+~2MB PDF blob round-tripping byte-for-byte through the chunking scheme
+above, an edited essay's text propagating from one to the other, and a
+deletion on one propagating as a tombstone to the other. What's *not*
+verified is the same thing against your actual live Firebase project
+specifically (this sandbox's network policy blocks reaching Firebase's
+production domains, which is also why the emulator — a local process, not
+a hosted one — was reachable for this testing at all) — the emulator
+speaks the identical Firestore/Auth wire protocol, so this should carry
+over directly, but a live run is worth doing yourself once to confirm.
 
 ## Backup & restore
 

@@ -3,7 +3,7 @@
  * the app is open (see SyncSettingsDialog / App.tsx). Local IndexedDB is
  * always the source of truth for what's on screen — sync only ever runs
  * *after* the normal local read/write path, reconciling this device's copy
- * with the account's Firestore/Storage copy, never the other way around:
+ * with the account's Firestore copy, never the other way around:
  *
  *  - Push: any local doc whose `updatedAt` is newer than the last push
  *    watermark gets encrypted (its sensitive fields — see SENSITIVE_FIELDS)
@@ -15,25 +15,24 @@
  *    wrapper functions, since those stamp a fresh `updatedAt` on every
  *    call, which would turn "apply a remote change" into "make a newer
  *    local change" and defeat the timestamp comparison entirely.
- *  - PDFs sync the same way, but through Storage rather than Firestore
- *    (Firestore documents cap out around 1MB): a local blob not yet known
- *    to have been pushed gets encrypted and uploaded once (blob ids are
- *    never reused for a different file, so simple "pushed already?"
- *    membership is enough — no timestamp comparison needed); a blob
- *    referenced by a synced Source but missing locally gets downloaded
- *    and decrypted.
+ *  - PDFs sync through Firestore too, not Cloud Storage — see the blob
+ *    section below for why and how. A local blob not yet known to have
+ *    been pushed gets encrypted and uploaded once (blob ids are never
+ *    reused for a different file, so simple "pushed already?" membership
+ *    is enough — no timestamp comparison needed); a blob referenced by a
+ *    synced Source but missing locally gets downloaded and decrypted.
  *
  * What this deliberately does *not* do (documented in README rather than
  * built): realtime listeners (this polls on an interval / on demand
  * instead), conflict resolution beyond last-write-wins, or garbage
- * collection of a deleted source's now-orphaned Storage object.
+ * collection of a deleted source's now-orphaned blob chunk documents.
  */
-import { collection, doc, getDocs, query, setDoc, where } from 'firebase/firestore'
-import { getBytes, getMetadata, ref, uploadBytes } from 'firebase/storage'
-import { ensureSignedIn, firebaseStorage, firestoreDb } from './firebaseClient'
+import { collection, doc, getDoc, getDocs, query, setDoc, where } from 'firebase/firestore'
+import { ensureSignedIn, firestoreDb } from './firebaseClient'
 import { getAccount } from './account'
-import { decryptBytes, decryptJson, encryptBytes, encryptJson, type EncryptedField } from '../lib/crypto'
+import { b64ToBuf, bufToB64, decryptBytes, decryptJson, encryptBytes, encryptJson, type EncryptedField } from '../lib/crypto'
 import { backend } from '../storage'
+import { notifySyncApplied } from './syncEvents'
 import type { Source } from '../models/types'
 
 const SYNCED_COLLECTIONS = ['essays', 'nodes', 'sources'] as const
@@ -121,6 +120,25 @@ async function decodeFromRemote(remote: Record<string, unknown>, cryptoKey: Cryp
   return metadata as LocalDoc
 }
 
+// ---- PDF blobs, chunked to fit Firestore's ~1MiB-per-document cap -------
+//
+// A blob is stored as one manifest doc (`accounts/{userId}/blobs/{blobId}`,
+// holding the encryption IV and how many chunks to expect) plus that many
+// chunk docs in a `chunks` subcollection under it, each just one base64
+// string field. 700,000 base64 characters (≈700,000 bytes, since base64 is
+// ASCII) leaves generous headroom under the ~1,048,576-byte real limit for
+// field-name/document overhead. A few-MB PDF is a few chunk documents —
+// more Firestore reads/writes than a single-file upload would cost, which
+// eats into the free (Spark) plan's daily quota faster, but needs nothing
+// beyond Firestore itself: no Storage bucket, no Blaze plan.
+const BLOB_CHUNK_SIZE = 700_000
+
+function splitIntoChunks(s: string, size: number): string[] {
+  const chunks: string[] = []
+  for (let i = 0; i < s.length; i += size) chunks.push(s.slice(i, i + size))
+  return chunks.length > 0 ? chunks : ['']
+}
+
 export async function runSyncPass(onProgress?: (message: string) => void): Promise<SyncResult> {
   const account = await getAccount()
   if (!account) throw new Error('No account on this device yet — create or import one first.')
@@ -160,7 +178,7 @@ export async function runSyncPass(onProgress?: (message: string) => void): Promi
     }
   }
 
-  // PDFs: Storage rather than Firestore (documents there cap out ~1MB).
+  // PDFs — chunked through Firestore, see the note above.
   const pushedBlobIds = loadPushedBlobIds()
   const sources = await backend.docs.list<Source>('sources')
   for (const source of sources) {
@@ -170,8 +188,12 @@ export async function runSyncPass(onProgress?: (message: string) => void): Promi
     onProgress?.(`Uploading ${source.pdfFileName || 'a PDF'}…`)
     const bytes = await blob.arrayBuffer()
     const { iv, cipher } = await encryptBytes(cryptoKey, bytes)
-    const storageRef = ref(firebaseStorage(), `accounts/${bundle.userId}/blobs/${source.pdfBlobId}`)
-    await uploadBytes(storageRef, cipher, { customMetadata: { iv } })
+    const chunks = splitIntoChunks(bufToB64(cipher), BLOB_CHUNK_SIZE)
+    const blobDocRef = doc(db, 'accounts', bundle.userId, 'blobs', source.pdfBlobId)
+    await Promise.all([
+      setDoc(blobDocRef, { iv, totalChunks: chunks.length, updatedAt: Date.now() }),
+      ...chunks.map((data, i) => setDoc(doc(blobDocRef, 'chunks', String(i)), { data })),
+    ])
     pushedBlobIds.add(source.pdfBlobId)
     result.pushed.blobs++
   }
@@ -182,11 +204,13 @@ export async function runSyncPass(onProgress?: (message: string) => void): Promi
     if (await backend.blobs.has(source.pdfBlobId)) continue
     onProgress?.(`Downloading ${source.pdfFileName || 'a PDF'}…`)
     try {
-      const storageRef = ref(firebaseStorage(), `accounts/${bundle.userId}/blobs/${source.pdfBlobId}`)
-      const [meta, cipher] = await Promise.all([getMetadata(storageRef), getBytes(storageRef)])
-      const iv = meta.customMetadata?.iv
-      if (!iv) continue
-      const plain = await decryptBytes(cryptoKey, iv, cipher)
+      const blobDocRef = doc(db, 'accounts', bundle.userId, 'blobs', source.pdfBlobId)
+      const manifestSnap = await getDoc(blobDocRef)
+      if (!manifestSnap.exists()) continue
+      const { iv, totalChunks } = manifestSnap.data() as { iv: string; totalChunks: number }
+      const chunkSnaps = await Promise.all(Array.from({ length: totalChunks }, (_, i) => getDoc(doc(blobDocRef, 'chunks', String(i)))))
+      const base64 = chunkSnaps.map((snap) => (snap.data()?.data as string) ?? '').join('')
+      const plain = await decryptBytes(cryptoKey, iv, b64ToBuf(base64))
       await backend.blobs.put(source.pdfBlobId, new Blob([plain], { type: 'application/pdf' }))
       result.pulled.blobs++
     } catch {
@@ -197,5 +221,9 @@ export async function runSyncPass(onProgress?: (message: string) => void): Promi
   }
 
   saveCursors({ pushedAt: passStartedAt, pulledAt: passStartedAt })
+
+  const pulledTotal = result.pulled.essays + result.pulled.nodes + result.pulled.sources + result.pulled.blobs
+  if (pulledTotal > 0) notifySyncApplied()
+
   return result
 }
