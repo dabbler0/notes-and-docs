@@ -140,19 +140,16 @@ once: a node's own last shard sits immediately after its last child's
 entire rendered subtree, which is also right where *that child's own*
 last shard just ended, one level in, and so on up through however many
 ancestors are themselves a last child. Each such shard is a real,
-separately clickable line, indented to match its own node's depth — but
-an *empty* one used to render as literally nothing: no border, no
-placeholder, zero visual trace, so a stack of them (one per nesting
-level, right where the visible text stops) looked like a single blank
-page underneath the document rather than several distinct, individually
-clickable lines. `.node-content:empty:last-child` now draws a permanent
-(not hover-only) dashed box for exactly this case — a node's own trailing
-shard, when it has nothing in it yet — so "there are 3 places to add text
-here, one per level" is something you can actually see, not just
-something that happens to be technically true if you know to look;
-typing in one replaces it with ordinary text, same as always, and the
-other levels' own boxes stay put below/above it. Suppressed in Comment
-mode, which hides every other editing affordance the same way.
+separately clickable line, indented to match its own node's depth.
+`.node-content:empty:last-child` gives a node's own trailing shard — when
+it has nothing in it yet — the same hover-revealed dashed outline every
+other editable shard already gets on hover (`.leaf-outline`'s own rule,
+just above): invisible at rest, so it doesn't clutter a document that
+ends normally, but sweeping the cursor down past the last visible text
+reveals each stacked level's own line, at its own indentation, one at a
+time as the cursor passes it. Typing in one replaces it with ordinary
+text, same as always. Suppressed in Comment mode, which hides every
+other editing affordance the same way.
 
 On top of that, the ordinary spacing between one section and the next
 (`.section-header`'s own margin) still runs *between* two such stacked

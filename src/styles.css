@@ -883,23 +883,23 @@ select {
 /* A node's own *trailing* text shard — the run after its last embedded
    child, parseSegments()'s last segment and so always .section-body's
    last child here — is exactly where more of that node's own text goes.
-   Empty, it's otherwise indistinguishable from the blank page underneath
-   the whole document; and a last child that's itself a last child,
-   arbitrarily deep, stacks several such shards (one per level, each at
-   its own indentation) at what looks like one and the same spot, with
-   nothing here-to-fore marking that there's more than one of them. A
-   permanent (not hover-only) dashed box — one per level, plainly a
-   separate line at a glance, not just technically a separate element —
-   is what actually makes "there are 3 places to type here, one per
-   nesting level" visible rather than only true if you already knew to
-   look. Deliberately not shown for any *other* empty shard (a blank run
-   before or between markers, mid-document) — those still read as
-   ordinary flowing prose, hover-cue and all, exactly as before. */
+   A last child that's itself a last child, arbitrarily deep, stacks
+   several such shards (one per level, each at its own indentation) at
+   what looks like one and the same spot — each is a real, separately
+   clickable line and land text correctly (see handleDocMissClick's own
+   comment in EssayWorkspace.tsx for the click-routing half of this), so
+   a hover-only outline, same as every other editable shard already gets,
+   is enough to reveal them without a permanent box sitting in the
+   document at rest. Sized/boxed here (not just relying on the plain
+   .leaf-outline rule above) so the root's own trailing shard — which
+   isn't .leaf-outline at all — gets the same hover affordance too, not
+   just nested ones. */
 .node-content:empty:last-child {
-  border: 1px dashed var(--border);
+  border: 1px dashed transparent;
   border-radius: var(--radius-sm);
   box-sizing: border-box;
   min-height: 1.7em;
+  transition: border-color 0.15s ease;
 }
 
 .node-content.leaf-outline:empty:last-child {
@@ -909,8 +909,7 @@ select {
 
 .node-content:empty:last-child:hover,
 .node-content:empty:last-child:focus {
-  border-color: var(--accent);
-  border-style: solid;
+  border-color: var(--border);
 }
 
 /* Defensive fallback only — every real rendering path (the live editor and
@@ -1460,11 +1459,12 @@ select {
   cursor: text;
 }
 
-/* The dashed "empty line, click to type here" boxes are exactly the kind
-   of editing affordance comment mode hides — there's nothing to type into
-   once contentEditable is off, so showing an empty invitation to type
+/* The dashed "empty line, click to type here" hover cue is exactly the
+   kind of editing affordance comment mode hides — there's nothing to
+   type into once contentEditable is off, so inviting a click to type
    would be actively misleading there. */
-.doc-scroll.comment-mode .node-content:empty:last-child {
+.doc-scroll.comment-mode .node-content:empty:last-child:hover,
+.doc-scroll.comment-mode .node-content:empty:last-child:focus {
   border-color: transparent;
 }
 
