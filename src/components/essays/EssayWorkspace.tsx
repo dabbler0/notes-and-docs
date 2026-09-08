@@ -90,6 +90,53 @@ export function EssayWorkspace({ essayId, onBack }: { essayId: string; onBack: (
     activeEditorEl.current = el
   }
 
+  /**
+   * A node's own text can end exactly where a nested child's own trailing
+   * text also ends, one level in — a click meant for any one of those
+   * stacked, same-position "end of this node's text" spots needs to land
+   * on the right one, but the gap that normally separates one section
+   * from the next (`.section-header`'s own spacing) sits *between* them
+   * too, with nothing rendered there to actually receive a click. A click
+   * that lands in one of those gaps hits `.section-body`/`.editor-scroll`
+   * itself rather than any editable shard, which doesn't change focus at
+   * all — so typing afterward silently continues wherever focus already
+   * was (often an ancestor several levels up, edited earlier), which is
+   * exactly the "my text ended up on the wrong section" bug this guards
+   * against. Mirrors how most block editors (Google Docs included) handle
+   * a click below/between real content: fall back to whichever editable
+   * shard is vertically closest and place the cursor at its end, rather
+   * than leaving the click a no-op.
+   */
+  function handleDocMissClick(e: MouseEvent) {
+    if (commentMode) return // nothing is editable in comment mode — this fallback would have nowhere useful to send focus
+    const target = e.target as HTMLElement
+    if (target.closest('.node-content, button, input, textarea, a, .comment-widget, .history-dropdown')) return
+    const container = docScrollRef.current
+    if (!container) return
+    const shards = Array.from(container.querySelectorAll<HTMLDivElement>('.node-content'))
+    if (shards.length === 0) return
+    const y = e.clientY
+    let closest: HTMLDivElement | null = null
+    let closestDist = Infinity
+    for (const el of shards) {
+      const r = el.getBoundingClientRect()
+      const dist = y < r.top ? r.top - y : y > r.bottom ? y - r.bottom : 0
+      if (dist < closestDist) {
+        closestDist = dist
+        closest = el
+      }
+    }
+    if (!closest) return
+    closest.focus()
+    onActivate(closest.closest('[data-node-id]')?.getAttribute('data-node-id') ?? '', closest)
+    const range = document.createRange()
+    range.selectNodeContents(closest)
+    range.collapse(false)
+    const sel = window.getSelection()
+    sel?.removeAllRanges()
+    sel?.addRange(range)
+  }
+
   function captureRange() {
     const sel = document.getSelection()
     const el = activeEditorEl.current
@@ -459,7 +506,7 @@ export function EssayWorkspace({ essayId, onBack }: { essayId: string; onBack: (
             <div className="spacer" />
           </div>
 
-          <div className={`editor-scroll doc-scroll${commentMode ? ' comment-mode' : ''}`} ref={docScrollRef} onMouseUp={handleMouseUpForComments}>
+          <div className={`editor-scroll doc-scroll${commentMode ? ' comment-mode' : ''}`} ref={docScrollRef} onMouseUp={handleMouseUpForComments} onClick={handleDocMissClick}>
             <SectionBlock
               node={rootNode}
               nodeMap={nodeMap}

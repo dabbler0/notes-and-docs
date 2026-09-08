@@ -874,6 +874,7 @@ select {
   transition: border-color 0.15s ease;
 }
 
+
 .node-content.leaf-outline:hover,
 .node-content.leaf-outline:focus {
   border-left-color: var(--border);

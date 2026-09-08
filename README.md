@@ -133,6 +133,28 @@ already-written text — nothing is duplicated or discarded:
   purpose — dragging a section around isn't itself a version-worthy edit
   to anyone's text.
 
+Every node's own text is really a *sequence* of shards — one per run of
+text between (or before/after) its embedded children — so a single screen
+position can simultaneously be "the end of" several different nodes at
+once: a node's own last shard sits immediately after its last child's
+entire rendered subtree, which is also right where *that child's own*
+last shard just ended, one level in. Each such shard is a real, separately
+clickable line (indented to match its own node's depth, so which one is
+which is visually legible), but the ordinary spacing between one section
+and the next (`.section-header`'s own margin) still runs *between* two
+stacked shards belonging to different nodes, with nothing rendered there
+to actually catch a click. A click landing in that gap used to hit
+`.section-body`/`.editor-scroll` itself — not editable, so focus simply
+stayed wherever it already was, and anything typed afterward landed
+somewhere else in the document entirely (whatever was last focused,
+easily an ancestor several levels up — exactly the "my text ended up on
+the wrong section" bug this was). `EssayWorkspace.tsx`'s `handleDocMissClick`
+now catches exactly that case — a click that hit the document area but no
+actual shard — and falls back to whichever shard is vertically closest,
+placing the cursor at its end, the same way Google Docs (and most block
+editors) already handle a click below or between real content instead of
+leaving it a no-op.
+
 **Comments.** Comments attach to a specific version's own content (so they
 show up in that version's history entry and in the version-compare view),
 with a resolved checkbox. Turning on Comment mode (top right, next to

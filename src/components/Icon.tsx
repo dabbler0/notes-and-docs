@@ -12,7 +12,7 @@ export type IconName = 'cite' | 'quote' | 'link' | 'subsection' | 'comment' | 'e
 
 const STROKE = { fill: 'none', stroke: 'currentColor', strokeWidth: 2, strokeLinecap: 'round' as const, strokeLinejoin: 'round' as const }
 
-export function Icon({ name, size = 16, className }: { name: IconName; size?: number; className?: string }) {
+export function Icon({ name, size = 18, className }: { name: IconName; size?: number; className?: string }) {
   const props = { width: size, height: size, viewBox: '0 0 24 24', className, 'aria-hidden': true }
   switch (name) {
     case 'cite':
@@ -106,22 +106,33 @@ export function Icon({ name, size = 16, className }: { name: IconName; size?: nu
           <circle cx="4.5" cy="18" r="1.2" fill="currentColor" stroke="none" />
         </svg>
       )
-    case 'list-ol':
-      // Small filled squares instead of list-ul's circles — legible at
-      // toolbar-icon size in a way actual "1 2 3" digits weren't (they
-      // came out an illegible smudge that small); paired with list-ul
-      // right next to it and the button's own "Numbered list" tooltip,
-      // the dots-vs-squares contrast reads as bulleted-vs-ordered clearly
-      // enough without needing real numerals.
+    case 'list-ol': {
+      // Real digits, not a font-rendering illusion at 16px CSS size.
+      // `dominant-baseline: central` (the "correct" way to vertically
+      // center SVG text) turned out unreliable to get through Preact's
+      // inline-style diffing in practice — text kept anchoring to the
+      // ordinary alphabetic baseline regardless, stacking every digit's
+      // ascender on the row above it. Placing the text at a baseline
+      // offset *below* each row's visual center (a standard trick: a
+      // digit's cap sits roughly 0.35×font-size above its baseline) works
+      // the same on every renderer, no special baseline property needed.
+      const FONT_SIZE = 6.5
+      const BASELINE_OFFSET = FONT_SIZE * 0.35
+      const digit = (n: number, centerY: number) => (
+        <text x="4.5" y={centerY + BASELINE_OFFSET} fontSize={FONT_SIZE} fontFamily="Arial, Helvetica, sans-serif" fontWeight="700" textAnchor="middle" fill="currentColor" stroke="none" strokeWidth="0">
+          {n}
+        </text>
+      )
       return (
         <svg {...props} {...STROKE}>
-          <line x1="11" y1="6" x2="21" y2="6" />
+          <line x1="11" y1="4.5" x2="21" y2="4.5" />
           <line x1="11" y1="12" x2="21" y2="12" />
-          <line x1="11" y1="18" x2="21" y2="18" />
-          <rect x="3" y="4.5" width="3" height="3" fill="currentColor" stroke="none" />
-          <rect x="3" y="10.5" width="3" height="3" fill="currentColor" stroke="none" />
-          <rect x="3" y="16.5" width="3" height="3" fill="currentColor" stroke="none" />
+          <line x1="11" y1="19.5" x2="21" y2="19.5" />
+          {digit(1, 4.5)}
+          {digit(2, 12)}
+          {digit(3, 19.5)}
         </svg>
       )
+    }
   }
 }
