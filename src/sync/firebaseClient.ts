@@ -86,9 +86,33 @@ export async function ensureSignedIn(): Promise<void> {
       () => undefined,
       (err) => {
         signInPromise = null
-        throw err
+        throw explainAuthError(err)
       },
     )
   }
   await signInPromise
+}
+
+/**
+ * Firebase's own auth error codes for "Authentication isn't set up right"
+ * are accurate but not self-explanatory — both fire the moment
+ * signInAnonymously() is called, before this app has done anything else
+ * with the project, so they're almost always a one-time Firebase Console
+ * setup step rather than anything wrong with the config itself. Rewritten
+ * here with the actual fix so a first sync failure explains itself instead
+ * of sending someone straight to Firebase's own error-code docs.
+ */
+function explainAuthError(err: unknown): Error {
+  const code = (err as { code?: string } | null)?.code
+  if (code === 'auth/configuration-not-found') {
+    return new Error(
+      'Firebase: auth/configuration-not-found — Authentication has never been set up for this project. In the Firebase console: Build → Authentication → "Get started", then in the Sign-in method tab enable Anonymous.',
+    )
+  }
+  if (code === 'auth/admin-restricted-operation' || code === 'auth/operation-not-allowed') {
+    return new Error(
+      `Firebase: ${code} — Anonymous sign-in isn't enabled for this project. In the Firebase console: Authentication → Sign-in method → enable Anonymous.`,
+    )
+  }
+  return err instanceof Error ? err : new Error(String(err))
 }
