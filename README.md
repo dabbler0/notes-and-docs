@@ -371,6 +371,38 @@ is implemented directly against the documented Firestore/Storage SDK
 semantics, but hasn't been watched moving real data between two real
 devices.
 
+## Backup & restore
+
+Independent of sync — this works with no Firebase project or account
+configured at all, since it's just a snapshot of what's already local.
+"💾 Backup" in the topbar (`lib/backup.ts`, `BackupDialog.tsx`) exports
+*everything* on the device (every essay, section, version, comment,
+source, and PDF) as one `.zip` — a `data.json` manifest plus a `blobs/`
+folder — for safekeeping or moving to a new browser/device by hand.
+
+Unlike sync's payload, this file is **not encrypted**: it's meant to
+leave the device only under your own control (onto your own disk, into
+your own cloud drive), not to cross a network boundary the way a sync
+payload does, so there was no reason to pay the complexity of key
+management twice for the same data.
+
+Restoring offers two modes:
+- **Merge** (the default, safe to run anytime): applies a backup record
+  only where it's newer than what's already local — the same
+  last-write-wins rule sync uses — so restoring an old backup on top of
+  newer local work can't clobber that work, and can't resurrect something
+  you deleted more recently than the backup was taken.
+- **Replace everything**: wipes local data first, then loads the backup
+  verbatim. This is the actual disaster-recovery path — "this device's
+  data is gone or corrupted, put it back exactly as the backup has it" —
+  and is guarded by a confirmation since it's the one destructive option
+  here.
+
+A restore ends by reloading the page, since a restore (especially in
+replace mode) can touch or wipe data that several already-mounted views
+loaded independently on their own mount — reloading is the simple way to
+guarantee nothing on screen is left showing stale pre-restore state.
+
 ## What's stubbed / simplified in this prototype
 
 - `src/lib/pdf.ts` points pdf.js's `cMapUrl`/`standardFontDataUrl` at a

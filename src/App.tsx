@@ -3,6 +3,7 @@ import { SourcesView } from './components/sources/SourcesView'
 import { PdfSearchView } from './components/sources/PdfSearchView'
 import { EssaysView } from './components/essays/EssaysView'
 import { SyncSettingsDialog } from './components/sync/SyncSettingsDialog'
+import { BackupDialog } from './components/backup/BackupDialog'
 import { startAutoSyncLoop } from './sync/autoSync'
 
 type Tab = 'essays' | 'sources' | 'search'
@@ -10,6 +11,7 @@ type Tab = 'essays' | 'sources' | 'search'
 export function App() {
   const [tab, setTab] = useState<Tab>('essays')
   const [showSync, setShowSync] = useState(false)
+  const [showBackup, setShowBackup] = useState(false)
 
   // A no-op until a Firebase project and an account are both configured —
   // see startAutoSyncLoop's own doc comment. Started once, here, rather
@@ -35,6 +37,9 @@ export function App() {
           </button>
         </div>
         <div className="spacer" />
+        <button className="btn btn-ghost btn-sm" onClick={() => setShowBackup(true)}>
+          💾 Backup
+        </button>
         <button className="btn btn-ghost btn-sm" onClick={() => setShowSync(true)}>
           🔄 Sync
         </button>
@@ -45,6 +50,7 @@ export function App() {
         {tab === 'search' && <PdfSearchView />}
       </div>
       {showSync && <SyncSettingsDialog onClose={() => setShowSync(false)} />}
+      {showBackup && <BackupDialog onClose={() => setShowBackup(false)} />}
     </div>
   )
 }
