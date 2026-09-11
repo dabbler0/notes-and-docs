@@ -77,6 +77,22 @@ npm test             # runs the sync test suite (vitest) — no network/emulator
 a PDF and its per-page extracted text are optional. The global "Search
 PDFs" tab does a substring search over every source's extracted page text.
 
+Every field of an existing source can be edited after the fact from its
+detail dialog, not just at creation: "Edit" on the BibTeX pane turns it into
+a raw-text textarea (pre-filled with the current entry re-serialized), and
+"Save" re-parses it with the same lenient BibTeX parser the "Add a source"
+dialog uses — an entry that fails to parse is left untouched with an error
+message rather than silently discarded. The PDF side supports adding a PDF
+to a source that never had one, replacing an existing one, and removing one
+outright (`setSourcePdf`/`removeSourcePdf` in `sourcesRepo.ts`). Attaching a
+new PDF always mints a *fresh* blob id rather than overwriting the old blob
+in place — the same reasoning as the demote/split blob-id convention
+elsewhere: sync tracks "have I pushed this blob id" by id, so reusing one
+for different bytes would let a device that already pushed the old PDF
+believe there's nothing left to push. The old blob is only deleted locally
+once the new one is safely stored. Either way, `updateSource` bumps
+`updatedAt`, so the edit propagates through sync like any other change.
+
 **Essay trees & versioning.** An essay is a tree of `EssayNode`s (sections/
 subsections). Each node has:
 - `draftContent` — a live, freely-editable working copy of its own text.

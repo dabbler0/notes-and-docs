@@ -60,6 +60,38 @@ export async function getSourcePdfBlob(source: Source): Promise<Blob | undefined
   return backend.blobs.get(source.pdfBlobId)
 }
 
+/**
+ * Attaches a PDF to a source that doesn't have one yet, or swaps out an
+ * existing one, given its already-extracted `pageTexts`. Always mints a
+ * *fresh* blob id for the new file rather than overwriting the old one in
+ * place — same reasoning as everywhere else blobs are replaced: sync tracks
+ * "have I pushed this blob id" by id, so reusing one for different bytes
+ * would let a device that already pushed the old PDF believe it has nothing
+ * left to do. The old blob (if any) is deleted locally only after the new
+ * one is safely stored.
+ */
+export async function setSourcePdf(source: Source, file: File, pageTexts: string[]): Promise<void> {
+  const oldBlobId = source.pdfBlobId
+  const newBlobId = id()
+  await backend.blobs.put(newBlobId, file)
+  source.pdfBlobId = newBlobId
+  source.pdfFileName = file.name
+  source.pageTexts = pageTexts
+  await updateSource(source)
+  if (oldBlobId) await backend.blobs.delete(oldBlobId)
+}
+
+/** Detaches a source's PDF entirely, reverting it to BibTeX + comment only. */
+export async function removeSourcePdf(source: Source): Promise<void> {
+  const oldBlobId = source.pdfBlobId
+  if (!oldBlobId) return
+  source.pdfBlobId = undefined
+  source.pdfFileName = undefined
+  source.pageTexts = []
+  await updateSource(source)
+  await backend.blobs.delete(oldBlobId)
+}
+
 export function matchesSourceQuery(source: Source, query: string): boolean {
   const q = query.trim().toLowerCase()
   if (!q) return true

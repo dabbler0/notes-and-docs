@@ -961,6 +961,17 @@ select {
   color: var(--ink-dim);
 }
 
+.field-header-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.field-header-row h4 {
+  margin: 0;
+}
+
 .side-by-side .pane-content {
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
