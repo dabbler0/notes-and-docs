@@ -5,7 +5,7 @@ import { PdfViewer } from '../sources/PdfViewer'
 import { displayTitle } from '../../lib/bibtex'
 import type { Source } from '../../models/types'
 
-export function QuoteInsertDialog({ onClose, onInsert }: { onClose: () => void; onInsert: (source: Source, quote: string, page: number) => void }) {
+export function QuoteInsertDialog({ inline, onClose, onInsert }: { inline?: boolean; onClose: () => void; onInsert: (source: Source, quote: string, page: number) => void }) {
   const [source, setSource] = useState<Source | null>(null)
   const [page, setPage] = useState(1)
   const [quote, setQuote] = useState('')
@@ -17,7 +17,9 @@ export function QuoteInsertDialog({ onClose, onInsert }: { onClose: () => void; 
   return (
     <Modal onClose={onClose} wide>
       <h2>Extract a quote — {displayTitle(source.bibtex)}</h2>
-      <p className="muted">Drag to select text in the PDF below, then insert it as a quote with an automatic citation.</p>
+      <p className="muted">
+        Drag to select text in the PDF below, then insert it {inline ? 'inline, quotation-marked, right where your cursor is' : 'as its own block quote'}, with an automatic citation.
+      </p>
       <PdfViewer source={source} page={page} onPageChange={setPage} onSelectionChange={setQuote} />
       <div className="field" style={{ marginTop: 16 }}>
         <label>Selected quote</label>
@@ -37,7 +39,7 @@ export function QuoteInsertDialog({ onClose, onInsert }: { onClose: () => void; 
             onInsert(source, quote.trim(), page)
           }}
         >
-          Insert quote
+          {inline ? 'Insert inline quote' : 'Insert quote'}
         </button>
       </div>
     </Modal>

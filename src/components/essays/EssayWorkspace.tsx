@@ -41,6 +41,7 @@ export function EssayWorkspace({ essayId, onBack }: { essayId: string; onBack: (
   const [mobileCommentsOpen, setMobileCommentsOpen] = useState(false)
   const [showCitation, setShowCitation] = useState(false)
   const [showQuote, setShowQuote] = useState(false)
+  const [showInlineQuote, setShowInlineQuote] = useState(false)
   const [showLink, setShowLink] = useState(false)
   const [showExport, setShowExport] = useState(false)
   const [pendingComment, setPendingComment] = useState<{ nodeId: string; range: Range; text: string; anchorRect: { top: number; bottom: number; left: number; right: number } } | null>(null)
@@ -189,6 +190,28 @@ export function EssayWorkspace({ essayId, onBack }: { essayId: string; onBack: (
     if (!range || !el || !node) return
     el.focus()
     const html = `<blockquote class="quote" data-source-id="${source.id}" data-page="${page}">${escapeHtml(quote)}</blockquote><p>${citationHtml(source, { page })}</p>`
+    insertHtmlAtRange(range, html)
+    await persistActiveNode(node)
+    reload()
+  }
+
+  /**
+   * Same idea as insertQuote, but for a quote that belongs in the middle of
+   * a sentence rather than set off as its own block: the excerpt is wrapped
+   * as a `<span>` with literal curly quote marks around it (so it exports
+   * as plain punctuated text — Markdown/LaTeX export has no special-cased
+   * handling for it, same as a citation or a source link) instead of a
+   * `<blockquote>`, and inserted right at the cursor with no paragraph
+   * break, followed by the same citation chip.
+   */
+  async function insertInlineQuote(source: Source, quote: string, page: number) {
+    setShowInlineQuote(false)
+    const range = savedRange.current
+    const el = activeEditorEl.current
+    const node = activeNode()
+    if (!range || !el || !node) return
+    el.focus()
+    const html = `<span class="quote-inline" data-source-id="${source.id}" data-page="${page}">“${escapeHtml(quote)}”</span>&nbsp;${citationHtml(source, { page })}&nbsp;`
     insertHtmlAtRange(range, html)
     await persistActiveNode(node)
     reload()
@@ -478,7 +501,7 @@ export function EssayWorkspace({ essayId, onBack }: { essayId: string; onBack: (
                 </button>
                 <button
                   className="btn btn-sm icon-btn-toolbar"
-                  title="Quote from a PDF"
+                  title="Block quote from a PDF"
                   onMouseDown={(e) => {
                     e.preventDefault()
                     captureRange()
@@ -486,6 +509,17 @@ export function EssayWorkspace({ essayId, onBack }: { essayId: string; onBack: (
                   onClick={() => setShowQuote(true)}
                 >
                   <Icon name="quote" />
+                </button>
+                <button
+                  className="btn btn-sm icon-btn-toolbar"
+                  title="Inline quote from a PDF"
+                  onMouseDown={(e) => {
+                    e.preventDefault()
+                    captureRange()
+                  }}
+                  onClick={() => setShowInlineQuote(true)}
+                >
+                  <Icon name="quote-inline" />
                 </button>
                 <button
                   className="btn btn-sm icon-btn-toolbar"
@@ -588,6 +622,7 @@ export function EssayWorkspace({ essayId, onBack }: { essayId: string; onBack: (
 
       {showCitation && <CitationPickerDialog onClose={() => setShowCitation(false)} onSelect={insertCitation} />}
       {showQuote && <QuoteInsertDialog onClose={() => setShowQuote(false)} onInsert={insertQuote} />}
+      {showInlineQuote && <QuoteInsertDialog inline onClose={() => setShowInlineQuote(false)} onInsert={insertInlineQuote} />}
       {showLink && <CitationPickerDialog title="Link to a source" requireUrl onClose={() => setShowLink(false)} onSelect={insertSourceLink} />}
       {showExport && <ExportDialog essay={essay} nodeMap={nodeMap} onClose={() => setShowExport(false)} />}
     </div>

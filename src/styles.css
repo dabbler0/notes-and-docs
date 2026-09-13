@@ -762,6 +762,10 @@ select {
   font-style: italic;
 }
 
+.node-content span.quote-inline {
+  font-style: italic;
+}
+
 .node-content mark.comment-anchor {
   background: var(--pink);
   border-radius: 3px;

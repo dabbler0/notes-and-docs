@@ -221,6 +221,25 @@ triggering *another* freeze (and a fresh version) the next time a comment
 gets added in that section, since an anchor mark is metadata about where a
 comment points, not a new revision of the prose.
 
+**Quoting a PDF.** Two toolbar buttons open the same `QuoteInsertDialog`
+(pick a source, drag-select text in its embedded `PdfViewer`, or type/paste
+into the textarea instead) but insert the result differently. "Block quote
+from a PDF" (the plain quote-marks icon) drops in a `<blockquote class="quote">`
+of its own, followed by a citation in its own paragraph — for an excerpt
+that should read as set apart from the surrounding prose. "Inline quote
+from a PDF" (the quote-marks-on-a-line icon right beside it) instead wraps
+the excerpt in a `<span class="quote-inline">` with literal curly quote
+marks and inserts it, plus its citation, right at the cursor with no
+paragraph break — for a shorter excerpt meant to read as part of the
+sentence it's dropped into (`insertQuote`/`insertInlineQuote` in
+`EssayWorkspace.tsx`). Both dialogs pass a `page` through to the citation
+chip and, for the block form, to the `data-page` attribute the quote itself
+carries. Neither export path (Markdown/LaTeX/print) needs to special-case
+`quote-inline`: unlike a `blockquote`, which markdown/LaTeX export both
+recognize and reformat, the inline span's surrounding quote marks are
+literal characters in the content, so it falls through the same
+plain-inline-text handling a citation or source link already gets.
+
 **Linking to a source.** "🔗 Link to source" wraps the current selection
 (or, with nothing selected, the source's own title) in a real hyperlink to
 that source's URL — picked from the same source-search dialog citations

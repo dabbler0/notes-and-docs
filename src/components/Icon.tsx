@@ -8,7 +8,7 @@
  * `build:onefile`), so anything pulled in at runtime is a non-starter —
  * this costs nothing to inline and never has a loading flash.
  */
-export type IconName = 'cite' | 'quote' | 'link' | 'subsection' | 'comment' | 'export' | 'backup' | 'sync' | 'bold' | 'italic' | 'underline' | 'list-ul' | 'list-ol'
+export type IconName = 'cite' | 'quote' | 'quote-inline' | 'link' | 'subsection' | 'comment' | 'export' | 'backup' | 'sync' | 'bold' | 'italic' | 'underline' | 'list-ul' | 'list-ol'
 
 const STROKE = { fill: 'none', stroke: 'currentColor', strokeWidth: 2, strokeLinecap: 'round' as const, strokeLinejoin: 'round' as const }
 
@@ -26,6 +26,22 @@ export function Icon({ name, size = 18, className }: { name: IconName; size?: nu
         <svg {...props} fill="currentColor" stroke="none">
           <path d="M4.6 8.4c0-1.9 1.1-3.4 3.4-4.4l.7 1.2c-1.5.8-2.1 1.7-2.1 2.7.1 0 .2 0 .3 0 1 0 1.8.8 1.8 1.9 0 1.1-.9 2-2 2-1.3 0-2.1-1-2.1-3.4z" />
           <path d="M12.6 8.4c0-1.9 1.1-3.4 3.4-4.4l.7 1.2c-1.5.8-2.1 1.7-2.1 2.7.1 0 .2 0 .3 0 1 0 1.8.8 1.8 1.9 0 1.1-.9 2-2 2-1.3 0-2.1-1-2.1-3.4z" />
+        </svg>
+      )
+    case 'quote-inline':
+      // The plain 'quote' icon (two big quotation-mark glyphs) reads as a
+      // standalone block quote. This variant sits the same two glyphs, at
+      // half size, on a line flanked by two short dashes — meant to read
+      // as "a quote sitting in the middle of a run of text" rather than
+      // "a quote set off on its own."
+      return (
+        <svg {...props} {...STROKE}>
+          <line x1="2" y1="12" x2="8" y2="12" />
+          <line x1="16" y1="12" x2="22" y2="12" />
+          <g fill="currentColor" stroke="none">
+            <path d="M9.3 9.5c0-1.3.8-2.3 2.3-3l.5.8c-1 .6-1.4 1.1-1.4 1.8.1 0 .1 0 .2 0 .7 0 1.2.5 1.2 1.3 0 .7-.6 1.3-1.3 1.3-.9 0-1.5-.7-1.5-2.2z" />
+            <path d="M14.3 9.5c0-1.3.8-2.3 2.3-3l.5.8c-1 .6-1.4 1.1-1.4 1.8.1 0 .1 0 .2 0 .7 0 1.2.5 1.2 1.3 0 .7-.6 1.3-1.3 1.3-.9 0-1.5-.7-1.5-2.2z" />
+          </g>
         </svg>
       )
     case 'link':
