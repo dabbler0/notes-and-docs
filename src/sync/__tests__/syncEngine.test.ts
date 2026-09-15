@@ -448,6 +448,47 @@ describe('quote bank and graveyard sync', () => {
     expect(fragments).toHaveLength(1)
     expect(fragments[0].nodeTitle).toBe('Doomed section')
   })
+
+  /**
+   * Both devices here stand in for an account that predates the quote
+   * bank/graveyard entirely — their very first sync pass involves no
+   * 'quotes'/'graveyard' documents on either side, and (for device A, the
+   * one that bootstrapped the account) no prior write to those Firestore
+   * subcollections at all, same as any real pre-existing account would be
+   * the moment this code ships. Nothing about SYNCED_COLLECTIONS iterating
+   * over a collection that has never had anything in it should be an
+   * error — querying an empty/nonexistent Firestore collection just comes
+   * back with zero docs — and once one device *does* start using the new
+   * features, they should sync in normally on top of that old data.
+   */
+  it('an account with only pre-existing essays/sources (as if from before the quote bank/graveyard existed) syncs cleanly, then adopts the new features without issue', async () => {
+    const { a, b } = await pairedDevices()
+    const essay = await a.createEssay('Pre-existing essay')
+    const source = await a.createSource({ type: 'article', key: 'old2019', fields: { title: 'Old Paper' } })
+    await a.sync()
+
+    const firstPull = await b.sync()
+    expect(firstPull.pulled.essays).toBe(1)
+    expect(firstPull.pulled.sources).toBe(1)
+    expect(firstPull.pulled.quotes).toBe(0)
+    expect(firstPull.pulled.graveyard).toBe(0)
+    expect(await b.listQuotes()).toEqual([])
+    expect(await b.listGraveyard(essay.id)).toEqual([])
+
+    // Device B now "upgrades" — starts using the new features on top of
+    // the old data it just pulled.
+    await b.createQuote(source.id, 1, 'a new quote on old data', '')
+    const child = await b.createChildNode(essay.id, 'New section', 'text')
+    await b.createGraveyardFragment(essay.id, child.id, child.title, '<p>cut</p>')
+    const pushResult = await b.sync()
+    expect(pushResult.pushed.quotes).toBe(1)
+    expect(pushResult.pushed.graveyard).toBe(1)
+
+    const finalPull = await a.sync()
+    expect(finalPull.pulled.quotes).toBe(1)
+    expect(finalPull.pulled.graveyard).toBe(1)
+    expect((await a.listQuotes())[0].quoteText).toBe('a new quote on old data')
+  })
 })
 
 describe('autoSync (the 30s polling loop)', () => {

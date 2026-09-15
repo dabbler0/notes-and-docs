@@ -622,8 +622,12 @@ Both races, plus ordinary multi-device propagation, tombstoned deletions,
 PDF blob round-tripping, the encryption-key fingerprint gate, account
 reset, quote bank and graveyard propagation (including a graveyard
 fragment staying listed after the node it references is deleted — see the
-quote bank/graveyard section above), and overlapping concurrent
-`runSyncPass` calls sharing one pass instead of double-running (see
+quote bank/graveyard section above), an account that predates the quote
+bank/graveyard entirely syncing cleanly and then adopting them without
+issue (both devices simply never write to those collections until one of
+them starts — nothing about a collection with zero prior documents needs
+special-casing), and overlapping concurrent `runSyncPass` calls sharing one
+pass instead of double-running (see
 `syncEngine.ts`'s own `inFlightPass`), are covered by an automated test
 suite (`npm test`, `src/sync/__tests__/`) that runs the real sync code
 against in-memory fakes of Firestore, Auth, and each device's own local
@@ -666,7 +670,14 @@ text graveyard, source, saved quote, and PDF) as one `.zip` — a
 `data.json` manifest plus a `blobs/` folder — for safekeeping or moving to
 a new browser/device by hand. `quotes`/`graveyard` are read with `?? []`
 on restore, so a backup made before either feature existed still restores
-cleanly — it just has nothing to contribute for them.
+cleanly — it just has nothing to contribute for them. Covered by
+`src/lib/__tests__/backup.test.ts`: a manifest built with that older
+(pre-quote-bank/graveyard) shape restores without error in both merge mode
+(existing local quotes/graveyard entries survive untouched) and replace
+mode (wiped along with everything else, same as any other replace restore
+— there's nothing in an old snapshot to bring them back as), plus a
+plain export → wipe → restore round trip for the new collections
+themselves.
 
 Unlike sync's payload, this file is **not encrypted**: it's meant to
 leave the device only under your own control (onto your own disk, into
