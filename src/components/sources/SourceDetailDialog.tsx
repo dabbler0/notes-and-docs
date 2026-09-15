@@ -4,16 +4,32 @@ import { PdfViewer } from './PdfViewer'
 import { formatBibtex, parseBibtex } from '../../lib/bibtex'
 import { extractPageTexts, loadPdf } from '../../lib/pdf'
 import { deleteSource, removeSourcePdf, setSourcePdf, updateSource } from '../../models/sourcesRepo'
+import { addQuoteToBank } from '../../models/quoteBankRepo'
 import type { Source } from '../../models/types'
 
-export function SourceDetailDialog({ source, onClose, onChanged }: { source: Source; onClose: () => void; onChanged: () => void }) {
+export function SourceDetailDialog({
+  source,
+  initialPage,
+  onClose,
+  onChanged,
+}: {
+  source: Source
+  /** Opens the PDF pane straight to this page — used by the Quotes tab's "View in source" link, so following a saved quote back to its source doesn't leave you on page 1 hunting for it. */
+  initialPage?: number
+  onClose: () => void
+  onChanged: () => void
+}) {
   const [comment, setComment] = useState(source.comment)
-  const [page, setPage] = useState(1)
+  const [page, setPage] = useState(initialPage ?? 1)
   const [editingBibtex, setEditingBibtex] = useState(false)
   const [bibtexText, setBibtexText] = useState(() => formatBibtex(source.bibtex))
   const [bibtexError, setBibtexError] = useState('')
   const [pdfBusy, setPdfBusy] = useState(false)
   const [pdfStatus, setPdfStatus] = useState('')
+  const [pendingQuote, setPendingQuote] = useState('')
+  const [quoteAnnotation, setQuoteAnnotation] = useState('')
+  const [savingQuote, setSavingQuote] = useState(false)
+  const [quoteSaved, setQuoteSaved] = useState(false)
 
   async function saveComment() {
     source.comment = comment
@@ -64,6 +80,20 @@ export function SourceDetailDialog({ source, onClose, onChanged }: { source: Sou
       onChanged()
     } finally {
       setPdfBusy(false)
+    }
+  }
+
+  async function saveQuoteToBank() {
+    if (!pendingQuote.trim()) return
+    setSavingQuote(true)
+    try {
+      await addQuoteToBank(source.id, page, pendingQuote.trim(), quoteAnnotation.trim())
+      setPendingQuote('')
+      setQuoteAnnotation('')
+      setQuoteSaved(true)
+      setTimeout(() => setQuoteSaved(false), 1500)
+    } finally {
+      setSavingQuote(false)
     }
   }
 
@@ -144,7 +174,31 @@ export function SourceDetailDialog({ source, onClose, onChanged }: { source: Sou
             </div>
           </div>
           {pdfStatus && <p className="muted">{pdfStatus}</p>}
-          {source.pdfBlobId ? <PdfViewer source={source} page={page} onPageChange={setPage} /> : <p className="muted">No PDF attached — this source is BibTeX + comment only.</p>}
+          {source.pdfBlobId ? (
+            <>
+              <PdfViewer source={source} page={page} onPageChange={setPage} onSelectionChange={setPendingQuote} />
+              <div className="field" style={{ marginTop: 12 }}>
+                <label>Add to quote bank</label>
+                <textarea
+                  rows={2}
+                  value={pendingQuote}
+                  onInput={(e) => setPendingQuote((e.target as HTMLTextAreaElement).value)}
+                  placeholder="Drag-select text in the PDF above, or type/paste a quote here"
+                />
+                <input
+                  style={{ marginTop: 6 }}
+                  placeholder="Annotation (optional) — why this quote is worth keeping"
+                  value={quoteAnnotation}
+                  onInput={(e) => setQuoteAnnotation((e.target as HTMLInputElement).value)}
+                />
+                <button className="btn btn-ghost btn-sm" style={{ marginTop: 6 }} disabled={!pendingQuote.trim() || savingQuote} onClick={saveQuoteToBank}>
+                  {quoteSaved ? 'Added!' : '+ Add to quote bank'}
+                </button>
+              </div>
+            </>
+          ) : (
+            <p className="muted">No PDF attached — this source is BibTeX + comment only.</p>
+          )}
         </div>
       </div>
       <div className="modal-actions">

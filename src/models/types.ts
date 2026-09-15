@@ -27,6 +27,25 @@ export interface Source {
   deleted?: boolean
 }
 
+/**
+ * A quote saved out of a source's PDF independently of any essay — browsed
+ * and searched on its own (the "Quotes" tab) and, from there, reused across
+ * as many essays as you like via the quote-insertion dialog's "From the
+ * quote bank" tab, rather than being tied to wherever it first got quoted.
+ */
+export interface QuoteBankEntry {
+  id: string
+  sourceId: string
+  page: number
+  quoteText: string
+  /** Free-text note about why this quote was worth keeping. */
+  annotation: string
+  createdAt: number
+  updatedAt: number
+  /** Tombstone — see the note on Source.deleted. */
+  deleted?: boolean
+}
+
 // ---- Essays / drafts -----------------------------------------------------
 
 export interface Comment {
@@ -73,6 +92,28 @@ export interface Essay {
   id: string
   title: string
   rootNodeId: string
+  createdAt: number
+  updatedAt: number
+  /** Tombstone — see the note on Source.deleted. */
+  deleted?: boolean
+}
+
+/**
+ * Text cut from an essay via "Send to graveyard" rather than deleted
+ * outright — kept around, attached to the essay it came from, so it can be
+ * browsed and copied back in later instead of only living in undo history.
+ * `nodeId`/`nodeTitle` are a best-effort *reference* to where it came from,
+ * captured at the moment of removal — never dereferenced to decide whether
+ * to show a fragment, since the whole point is that it should keep showing
+ * up even once that node is gone (deleted, split away, merged elsewhere).
+ */
+export interface GraveyardFragment {
+  id: string
+  essayId: string
+  nodeId: string
+  nodeTitle: string
+  /** The removed content's own HTML, exactly as it looked in the document. */
+  html: string
   createdAt: number
   updatedAt: number
   /** Tombstone — see the note on Source.deleted. */

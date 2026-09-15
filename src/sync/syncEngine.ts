@@ -63,7 +63,7 @@ import { backend } from '../storage'
 import { notifySyncApplied } from './syncEvents'
 import type { Source } from '../models/types'
 
-const SYNCED_COLLECTIONS = ['essays', 'nodes', 'sources'] as const
+const SYNCED_COLLECTIONS = ['essays', 'nodes', 'sources', 'quotes', 'graveyard'] as const
 type SyncedCollection = (typeof SYNCED_COLLECTIONS)[number]
 
 /** Which fields of each collection's docs are the sensitive payload that gets encrypted, vs. left as plaintext metadata — kept unencrypted so the app can list/sort essays and sources, and so a device only has to decrypt the records it actually opens. */
@@ -71,6 +71,8 @@ const SENSITIVE_FIELDS: Record<SyncedCollection, string[]> = {
   essays: [],
   nodes: ['draftContent', 'versions'],
   sources: ['pageTexts'],
+  quotes: ['quoteText', 'annotation'],
+  graveyard: ['html', 'nodeTitle'],
 }
 
 const CURSORS_KEY = 'marginal.sync.cursors.v1'
@@ -139,6 +141,8 @@ export interface SyncCounts {
   essays: number
   nodes: number
   sources: number
+  quotes: number
+  graveyard: number
   blobs: number
 }
 
@@ -244,8 +248,8 @@ async function runSyncPassNow(onProgress?: (message: string) => void): Promise<S
   const cursors = loadCursors()
   const passStartedAt = Date.now()
   const result: SyncResult = {
-    pushed: { essays: 0, nodes: 0, sources: 0, blobs: 0 },
-    pulled: { essays: 0, nodes: 0, sources: 0, blobs: 0 },
+    pushed: { essays: 0, nodes: 0, sources: 0, quotes: 0, graveyard: 0, blobs: 0 },
+    pulled: { essays: 0, nodes: 0, sources: 0, quotes: 0, graveyard: 0, blobs: 0 },
   }
 
   for (const col of SYNCED_COLLECTIONS) {
@@ -351,7 +355,7 @@ async function runSyncPassNow(onProgress?: (message: string) => void): Promise<S
 
   saveCursors({ pushedAt: passStartedAt, pulledAt: maxSeenRemoteUpdatedAt })
 
-  const pulledTotal = result.pulled.essays + result.pulled.nodes + result.pulled.sources + result.pulled.blobs
+  const pulledTotal = Object.values(result.pulled).reduce((a, b) => a + b, 0)
   if (pulledTotal > 0) notifySyncApplied()
 
   return result

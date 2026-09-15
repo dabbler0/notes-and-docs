@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'preact/hooks'
 import { commitNewVersion, createChildNode, addComment, getEssay, getNode, headVersion, loadNodeMap, moveNode, saveEssay, saveNode } from '../../models/essaysRepo'
+import { addToGraveyard } from '../../models/graveyardRepo'
 import { citationHtml, displayTitle } from '../../lib/bibtex'
 import { extractAroundRange, insertHtmlAtRange } from '../../lib/selection'
 import { escapeAttr, escapeHtml } from '../../lib/html'
@@ -11,6 +12,7 @@ import { Icon } from '../Icon'
 import { SectionBlock } from './SectionBlock'
 import { NodeTree } from './NodeTree'
 import { CommentsPanel } from './CommentsPanel'
+import { GraveyardPanel } from './GraveyardPanel'
 import { CitationPickerDialog } from './CitationPickerDialog'
 import { QuoteInsertDialog } from './QuoteInsertDialog'
 import { ExportDialog } from './ExportDialog'
@@ -31,17 +33,19 @@ export function EssayWorkspace({ essayId, onBack }: { essayId: string; onBack: (
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set())
   const [commentMode, setCommentMode] = useState(false)
   const [showTree, setShowTree] = useState(true)
-  const [showComments, setShowComments] = useState(true)
+  // The right-hand column shows either the comments panel or the graveyard
+  // panel, never both — 'null' collapses it entirely, matching showTree's
+  // own collapse behavior on the other side.
+  const [rightPanel, setRightPanel] = useState<'comments' | 'graveyard' | null>('comments')
   const isMobile = useIsMobile()
-  // On mobile the outline and comments aren't collapsible side columns —
-  // there's no room for them to coexist with the document at all — they're
-  // separate full-screen views, opened and closed independently of the
-  // desktop-only showTree/showComments column state above.
+  // On mobile the outline and the right-hand panel aren't collapsible side
+  // columns — there's no room for them to coexist with the document at all
+  // — they're separate full-screen views, opened and closed independently
+  // of the desktop-only showTree/rightPanel column state above.
   const [mobileTreeOpen, setMobileTreeOpen] = useState(false)
-  const [mobileCommentsOpen, setMobileCommentsOpen] = useState(false)
+  const [mobilePanel, setMobilePanel] = useState<'comments' | 'graveyard' | null>(null)
   const [showCitation, setShowCitation] = useState(false)
-  const [showQuote, setShowQuote] = useState(false)
-  const [showInlineQuote, setShowInlineQuote] = useState(false)
+  const [showQuoteDialog, setShowQuoteDialog] = useState(false)
   const [showLink, setShowLink] = useState(false)
   const [showExport, setShowExport] = useState(false)
   const [pendingComment, setPendingComment] = useState<{ nodeId: string; range: Range; text: string; anchorRect: { top: number; bottom: number; left: number; right: number } } | null>(null)
@@ -183,7 +187,7 @@ export function EssayWorkspace({ essayId, onBack }: { essayId: string; onBack: (
   }
 
   async function insertQuote(source: Source, quote: string, page: number) {
-    setShowQuote(false)
+    setShowQuoteDialog(false)
     const range = savedRange.current
     const el = activeEditorEl.current
     const node = activeNode()
@@ -205,7 +209,7 @@ export function EssayWorkspace({ essayId, onBack }: { essayId: string; onBack: (
    * break, followed by the same citation chip.
    */
   async function insertInlineQuote(source: Source, quote: string, page: number) {
-    setShowInlineQuote(false)
+    setShowQuoteDialog(false)
     const range = savedRange.current
     const el = activeEditorEl.current
     const node = activeNode()
@@ -240,6 +244,38 @@ export function EssayWorkspace({ essayId, onBack }: { essayId: string; onBack: (
     const html = `<a class="source-link" data-source-id="${source.id}" href="${escapeAttr(url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(linkText)}</a>&nbsp;${citationHtml(source)}&nbsp;`
     insertHtmlAtRange(range, html)
     await persistActiveNode(node)
+    reload()
+  }
+
+  /**
+   * "Send to graveyard": cuts the current selection out of the document —
+   * same as a delete — but keeps it, verbatim HTML and all, in a fragment
+   * attached to this essay instead of discarding it, so it can be browsed
+   * and copied back in later from the graveyard panel. Unlike the
+   * insert-a-quote/citation tools above, this acts directly on whatever's
+   * currently selected rather than opening a dialog first — there's nothing
+   * to pick, so there's no reason to lose the live selection to a dialog
+   * stealing focus the way `captureRange` exists to work around elsewhere.
+   */
+  async function sendSelectionToGraveyard() {
+    const el = activeEditorEl.current
+    const node = activeNode()
+    if (!essay || !el || !node) return
+    const sel = window.getSelection()
+    if (!sel || sel.rangeCount === 0 || sel.isCollapsed || !el.contains(sel.anchorNode)) {
+      alert('Select some text in the document first.')
+      return
+    }
+    const range = sel.getRangeAt(0)
+    const div = document.createElement('div')
+    div.appendChild(range.cloneContents())
+    const html = div.innerHTML
+    if (!html.trim()) return
+    range.deleteContents()
+    sel.removeAllRanges()
+    await persistActiveNode(node)
+    await addToGraveyard(essay.id, node.id, node.title || 'Untitled section', html)
+    setRightPanel('graveyard')
     reload()
   }
 
@@ -460,8 +496,11 @@ export function EssayWorkspace({ essayId, onBack }: { essayId: string; onBack: (
                 <button className="btn btn-sm" onClick={() => setMobileTreeOpen(true)}>
                   ☰ Outline
                 </button>
-                <button className="btn btn-sm" onClick={() => setMobileCommentsOpen(true)}>
+                <button className="btn btn-sm" onClick={() => setMobilePanel('comments')}>
                   <Icon name="comment" /> Comments
+                </button>
+                <button className="btn btn-sm" onClick={() => setMobilePanel('graveyard')}>
+                  <Icon name="graveyard" /> Graveyard
                 </button>
               </>
             )}
@@ -501,25 +540,14 @@ export function EssayWorkspace({ essayId, onBack }: { essayId: string; onBack: (
                 </button>
                 <button
                   className="btn btn-sm icon-btn-toolbar"
-                  title="Block quote from a PDF"
+                  title="Insert a quote from a PDF"
                   onMouseDown={(e) => {
                     e.preventDefault()
                     captureRange()
                   }}
-                  onClick={() => setShowQuote(true)}
+                  onClick={() => setShowQuoteDialog(true)}
                 >
                   <Icon name="quote" />
-                </button>
-                <button
-                  className="btn btn-sm icon-btn-toolbar"
-                  title="Inline quote from a PDF"
-                  onMouseDown={(e) => {
-                    e.preventDefault()
-                    captureRange()
-                  }}
-                  onClick={() => setShowInlineQuote(true)}
-                >
-                  <Icon name="quote-inline" />
                 </button>
                 <button
                   className="btn btn-sm icon-btn-toolbar"
@@ -534,6 +562,10 @@ export function EssayWorkspace({ essayId, onBack }: { essayId: string; onBack: (
                 </button>
                 <button className="btn btn-sm icon-btn-toolbar" title="Split into subsection" onClick={beginSplit}>
                   <Icon name="subsection" />
+                </button>
+                <span className="toolbar-divider" />
+                <button className="btn btn-sm icon-btn-toolbar" title="Send selection to the graveyard" onMouseDown={(e) => e.preventDefault()} onClick={sendSelectionToGraveyard}>
+                  <Icon name="graveyard" />
                 </button>
               </>
             )}
@@ -559,15 +591,24 @@ export function EssayWorkspace({ essayId, onBack }: { essayId: string; onBack: (
         </div>
 
         {!isMobile &&
-          (showComments ? (
+          (rightPanel ? (
             <div className="comments-panel-shell">
-              <button className="panel-edge-toggle right" onClick={() => setShowComments(false)} title="Collapse comments">
-                ›
-              </button>
-              <CommentsPanel nodeMap={nodeMap} onChanged={reload} scrollRef={docScrollRef} />
+              <div className="right-panel-tabs">
+                <button className={`right-panel-tab${rightPanel === 'comments' ? ' active' : ''}`} title="Comments" onClick={() => setRightPanel('comments')}>
+                  <Icon name="comment" />
+                </button>
+                <button className={`right-panel-tab${rightPanel === 'graveyard' ? ' active' : ''}`} title="Graveyard" onClick={() => setRightPanel('graveyard')}>
+                  <Icon name="graveyard" />
+                </button>
+                <div className="spacer" />
+                <button className="btn btn-ghost btn-sm" onClick={() => setRightPanel(null)} title="Collapse panel">
+                  ›
+                </button>
+              </div>
+              {rightPanel === 'comments' ? <CommentsPanel nodeMap={nodeMap} onChanged={reload} scrollRef={docScrollRef} /> : <GraveyardPanel essayId={essay.id} onChanged={reload} />}
             </div>
           ) : (
-            <button className="panel-edge-tab right" onClick={() => setShowComments(true)} title="Show comments">
+            <button className="panel-edge-tab right" onClick={() => setRightPanel('comments')} title="Show panel">
               ‹
             </button>
           ))}
@@ -594,18 +635,30 @@ export function EssayWorkspace({ essayId, onBack }: { essayId: string; onBack: (
         </Modal>
       )}
 
-      {mobileCommentsOpen && (
-        <Modal onClose={() => setMobileCommentsOpen(false)}>
-          <CommentsPanel
-            nodeMap={nodeMap}
-            onChanged={reload}
-            scrollRef={docScrollRef}
-            mode="list"
-            onJumpTo={(nodeId) => {
-              setMobileCommentsOpen(false)
-              requestAnimationFrame(() => scrollToNode(nodeId))
-            }}
-          />
+      {mobilePanel && (
+        <Modal onClose={() => setMobilePanel(null)}>
+          <div className="tab-row">
+            <button className={`btn btn-sm${mobilePanel === 'comments' ? ' btn-primary' : ' btn-ghost'}`} onClick={() => setMobilePanel('comments')}>
+              <Icon name="comment" /> Comments
+            </button>
+            <button className={`btn btn-sm${mobilePanel === 'graveyard' ? ' btn-primary' : ' btn-ghost'}`} onClick={() => setMobilePanel('graveyard')}>
+              <Icon name="graveyard" /> Graveyard
+            </button>
+          </div>
+          {mobilePanel === 'comments' ? (
+            <CommentsPanel
+              nodeMap={nodeMap}
+              onChanged={reload}
+              scrollRef={docScrollRef}
+              mode="list"
+              onJumpTo={(nodeId) => {
+                setMobilePanel(null)
+                requestAnimationFrame(() => scrollToNode(nodeId))
+              }}
+            />
+          ) : (
+            <GraveyardPanel essayId={essay.id} onChanged={reload} mode="list" />
+          )}
         </Modal>
       )}
 
@@ -621,8 +674,7 @@ export function EssayWorkspace({ essayId, onBack }: { essayId: string; onBack: (
       )}
 
       {showCitation && <CitationPickerDialog onClose={() => setShowCitation(false)} onSelect={insertCitation} />}
-      {showQuote && <QuoteInsertDialog onClose={() => setShowQuote(false)} onInsert={insertQuote} />}
-      {showInlineQuote && <QuoteInsertDialog inline onClose={() => setShowInlineQuote(false)} onInsert={insertInlineQuote} />}
+      {showQuoteDialog && <QuoteInsertDialog onClose={() => setShowQuoteDialog(false)} onInsertBlock={insertQuote} onInsertInline={insertInlineQuote} />}
       {showLink && <CitationPickerDialog title="Link to a source" requireUrl onClose={() => setShowLink(false)} onSelect={insertSourceLink} />}
       {showExport && <ExportDialog essay={essay} nodeMap={nodeMap} onClose={() => setShowExport(false)} />}
     </div>

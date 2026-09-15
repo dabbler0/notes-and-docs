@@ -409,6 +409,47 @@ describe('key bundle plumbing', () => {
   })
 })
 
+describe('quote bank and graveyard sync', () => {
+  it('propagates a quote bank entry between devices', async () => {
+    const { a, b } = await pairedDevices()
+    const source = await a.createSource({ type: 'article', key: 'x2020', fields: { title: 'X' } })
+    await a.createQuote(source.id, 3, 'a quoted excerpt', 'why it matters')
+    const result = await a.sync()
+    expect(result.pushed.quotes).toBe(1)
+
+    const pulled = await b.sync()
+    expect(pulled.pulled.quotes).toBe(1)
+    const quotes = await b.listQuotes()
+    expect(quotes).toHaveLength(1)
+    expect(quotes[0].quoteText).toBe('a quoted excerpt')
+    expect(quotes[0].annotation).toBe('why it matters')
+  })
+
+  it('propagates a graveyard fragment between devices, and it stays listed after its node is deleted', async () => {
+    const { a, b } = await pairedDevices()
+    const essay = await a.createEssay('Essay with a graveyard')
+    const child = await a.createChildNode(essay.id, 'Doomed section', 'text to cut')
+    await a.createGraveyardFragment(essay.id, child.id, child.title, '<p>text to cut</p>')
+    await a.sync()
+
+    const pulled = await b.sync()
+    expect(pulled.pulled.graveyard).toBe(1)
+    let fragments = await b.listGraveyard(essay.id)
+    expect(fragments).toHaveLength(1)
+    expect(fragments[0].html).toBe('<p>text to cut</p>')
+
+    // Deleting the node it came from must not take the fragment with it —
+    // graveyard fragments only ever reference a node, they never depend on
+    // it still existing (see GraveyardFragment's own doc comment).
+    const node = await b.getNode(child.id)
+    node!.deleted = true
+    await b.saveNode(node!)
+    fragments = await b.listGraveyard(essay.id)
+    expect(fragments).toHaveLength(1)
+    expect(fragments[0].nodeTitle).toBe('Doomed section')
+  })
+})
+
 describe('autoSync (the 30s polling loop)', () => {
   beforeEach(() => {
     vi.useFakeTimers()

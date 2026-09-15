@@ -20,7 +20,7 @@
 import { vi } from 'vitest'
 import { createFakeStorage } from './fakeStorage'
 import type { Backend } from '../storage/types'
-import type { Essay, EssayNode, Source, BibtexEntry } from '../models/types'
+import type { Essay, EssayNode, Source, BibtexEntry, QuoteBankEntry, GraveyardFragment } from '../models/types'
 import type { KeyBundle } from '../lib/crypto'
 import type { LocalKey } from '../sync/account'
 import type { AccountMeta } from '../sync/accountMeta'
@@ -69,6 +69,12 @@ export interface Device {
   getSource(id: string): Promise<Source | undefined>
   listSources(): Promise<Source[]>
   getSourcePdfBlob(source: Source): Promise<Blob | undefined>
+
+  createQuote(sourceId: string, page: number, quoteText: string, annotation: string): Promise<QuoteBankEntry>
+  listQuotes(): Promise<QuoteBankEntry[]>
+
+  createGraveyardFragment(essayId: string, nodeId: string, nodeTitle: string, html: string): Promise<GraveyardFragment>
+  listGraveyard(essayId: string): Promise<GraveyardFragment[]>
 
   hasLocalKey(): boolean
   createLocalKey(): Promise<LocalKey>
@@ -129,6 +135,8 @@ export async function newDevice(config = DEFAULT_CONFIG): Promise<Device> {
   const syncEngineMod = await import('../sync/syncEngine')
   const essaysRepoMod = await import('../models/essaysRepo')
   const sourcesRepoMod = await import('../models/sourcesRepo')
+  const quoteBankRepoMod = await import('../models/quoteBankRepo')
+  const graveyardRepoMod = await import('../models/graveyardRepo')
 
   const device: Device = {
     uid: null,
@@ -158,6 +166,12 @@ export async function newDevice(config = DEFAULT_CONFIG): Promise<Device> {
     getSource: (id) => withStorageAsync(() => sourcesRepoMod.getSource(id)),
     listSources: () => withStorageAsync(() => sourcesRepoMod.listSources()),
     getSourcePdfBlob: (source) => withStorageAsync(() => sourcesRepoMod.getSourcePdfBlob(source)),
+
+    createQuote: (sourceId, page, quoteText, annotation) => withStorageAsync(() => quoteBankRepoMod.addQuoteToBank(sourceId, page, quoteText, annotation)),
+    listQuotes: () => withStorageAsync(() => quoteBankRepoMod.listQuoteBank()),
+
+    createGraveyardFragment: (essayId, nodeId, nodeTitle, html) => withStorageAsync(() => graveyardRepoMod.addToGraveyard(essayId, nodeId, nodeTitle, html)),
+    listGraveyard: (essayId) => withStorageAsync(() => graveyardRepoMod.listGraveyard(essayId)),
 
     hasLocalKey: () => withStorage(() => accountMod.hasLocalKey(device.uid!)),
     createLocalKey: () => withStorageAsync(() => accountMod.createLocalKey(device.uid!)),

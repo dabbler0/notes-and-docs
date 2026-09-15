@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'preact/hooks'
 import { SourcesView } from './components/sources/SourcesView'
 import { PdfSearchView } from './components/sources/PdfSearchView'
+import { QuoteBankView } from './components/quotes/QuoteBankView'
 import { EssaysView } from './components/essays/EssaysView'
 import { SyncSettingsDialog } from './components/sync/SyncSettingsDialog'
 import { BackupDialog } from './components/backup/BackupDialog'
@@ -8,7 +9,7 @@ import { startAutoSyncLoop } from './sync/autoSync'
 import { detectHostingConfig, getStoredFirebaseConfig, setFirebaseConfig } from './sync/firebaseConfig'
 import { Icon } from './components/Icon'
 
-type Tab = 'essays' | 'sources' | 'search'
+type Tab = 'essays' | 'sources' | 'quotes' | 'search'
 
 export function App() {
   const [tab, setTab] = useState<Tab>('essays')
@@ -49,6 +50,9 @@ export function App() {
           <button className={`tab${tab === 'sources' ? ' active' : ''}`} onClick={() => setTab('sources')}>
             Sources
           </button>
+          <button className={`tab${tab === 'quotes' ? ' active' : ''}`} onClick={() => setTab('quotes')}>
+            Quotes
+          </button>
           <button className={`tab${tab === 'search' ? ' active' : ''}`} onClick={() => setTab('search')}>
             Search PDFs
           </button>
@@ -64,6 +68,7 @@ export function App() {
       <div className="main-area">
         {tab === 'essays' && <EssaysView />}
         {tab === 'sources' && <SourcesView />}
+        {tab === 'quotes' && <QuoteBankView />}
         {tab === 'search' && <PdfSearchView />}
       </div>
       {showSync && <SyncSettingsDialog onClose={() => setShowSync(false)} />}

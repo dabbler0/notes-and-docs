@@ -48,7 +48,7 @@ export function BackupDialog({ onClose }: { onClose: () => void }) {
     <Modal onClose={onClose}>
       <h2>Backup &amp; restore</h2>
       <p className="muted">
-        A full local backup of everything on this device — essays, sections, version history, comments, sources, and PDFs — as one downloadable file. Unlike sync, this file is <b>not encrypted</b>: keep it somewhere you trust
+        A full local backup of everything on this device — essays, sections, version history, comments, the text graveyard, sources, saved quotes, and PDFs — as one downloadable file. Unlike sync, this file is <b>not encrypted</b>: keep it somewhere you trust
         (your own disk, a personal cloud drive), not somewhere it could be shared or leaked.
       </p>
 
@@ -95,12 +95,14 @@ export function BackupDialog({ onClose }: { onClose: () => void }) {
 }
 
 function summarize(result: RestoreResult): string {
-  const total = result.essays + result.nodes + result.sources + result.blobs
+  const total = result.essays + result.nodes + result.sources + result.quotes + result.graveyard + result.blobs
   if (total === 0) return result.mode === 'replace' ? '✓ Restored (backup was empty).' : '✓ Nothing to apply — local data was already newer or identical everywhere.'
   const parts: string[] = []
   if (result.essays) parts.push(`${result.essays} essay${result.essays === 1 ? '' : 's'}`)
   if (result.nodes) parts.push(`${result.nodes} section${result.nodes === 1 ? '' : 's'}`)
   if (result.sources) parts.push(`${result.sources} source${result.sources === 1 ? '' : 's'}`)
+  if (result.quotes) parts.push(`${result.quotes} quote${result.quotes === 1 ? '' : 's'}`)
+  if (result.graveyard) parts.push(`${result.graveyard} graveyard fragment${result.graveyard === 1 ? '' : 's'}`)
   if (result.blobs) parts.push(`${result.blobs} PDF${result.blobs === 1 ? '' : 's'}`)
   return `✓ Restored ${parts.join(', ')}.`
 }

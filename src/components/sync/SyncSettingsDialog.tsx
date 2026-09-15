@@ -627,8 +627,8 @@ function AccountPanel({ uid, onKeyForgotten }: { uid: string; onKeyForgotten: ()
 
 function summarize(result: SyncResult): string {
   const { pushed, pulled } = result
-  const pushedTotal = pushed.essays + pushed.nodes + pushed.sources + pushed.blobs
-  const pulledTotal = pulled.essays + pulled.nodes + pulled.sources + pulled.blobs
+  const pushedTotal = Object.values(pushed).reduce((a, b) => a + b, 0)
+  const pulledTotal = Object.values(pulled).reduce((a, b) => a + b, 0)
   if (pushedTotal === 0 && pulledTotal === 0) return '✓ Already up to date.'
   const parts: string[] = []
   if (pushedTotal) parts.push(`sent ${pushedTotal} change${pushedTotal === 1 ? '' : 's'}`)

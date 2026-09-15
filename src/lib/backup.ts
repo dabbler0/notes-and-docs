@@ -10,7 +10,7 @@
  */
 import JSZip from 'jszip'
 import { backend } from '../storage'
-import type { Essay, EssayNode, Source } from '../models/types'
+import type { Essay, EssayNode, GraveyardFragment, QuoteBankEntry, Source } from '../models/types'
 
 const BACKUP_VERSION = 1
 
@@ -20,12 +20,21 @@ export interface BackupManifest {
   essays: Essay[]
   nodes: EssayNode[]
   sources: Source[]
+  /** Absent in a backup made before the quote bank/graveyard existed — always read with `?? []`, never assumed present. */
+  quotes?: QuoteBankEntry[]
+  graveyard?: GraveyardFragment[]
   /** Which blob ids the zip's blobs/ folder actually contains — a source can reference a pdfBlobId whose blob went missing locally, so this isn't just "every source's pdfBlobId." */
   blobs: string[]
 }
 
 export async function exportBackup(): Promise<Blob> {
-  const [essays, nodes, sources] = await Promise.all([backend.docs.list<Essay>('essays'), backend.docs.list<EssayNode>('nodes'), backend.docs.list<Source>('sources')])
+  const [essays, nodes, sources, quotes, graveyard] = await Promise.all([
+    backend.docs.list<Essay>('essays'),
+    backend.docs.list<EssayNode>('nodes'),
+    backend.docs.list<Source>('sources'),
+    backend.docs.list<QuoteBankEntry>('quotes'),
+    backend.docs.list<GraveyardFragment>('graveyard'),
+  ])
 
   const zip = new JSZip()
   const blobsFolder = zip.folder('blobs')!
@@ -38,7 +47,7 @@ export async function exportBackup(): Promise<Blob> {
     blobIds.push(source.pdfBlobId)
   }
 
-  const manifest: BackupManifest = { version: BACKUP_VERSION, exportedAt: Date.now(), essays, nodes, sources, blobs: blobIds }
+  const manifest: BackupManifest = { version: BACKUP_VERSION, exportedAt: Date.now(), essays, nodes, sources, quotes, graveyard, blobs: blobIds }
   zip.file('data.json', JSON.stringify(manifest, null, 2))
   return zip.generateAsync({ type: 'blob' })
 }
@@ -48,6 +57,8 @@ export interface RestoreResult {
   essays: number
   nodes: number
   sources: number
+  quotes: number
+  graveyard: number
   blobs: number
 }
 
@@ -68,7 +79,7 @@ export async function restoreBackup(file: File | Blob, opts: { mode: 'merge' | '
 
   if (opts.mode === 'replace') await clearAllLocalData()
 
-  const result: RestoreResult = { mode: opts.mode, essays: 0, nodes: 0, sources: 0, blobs: 0 }
+  const result: RestoreResult = { mode: opts.mode, essays: 0, nodes: 0, sources: 0, quotes: 0, graveyard: 0, blobs: 0 }
 
   async function applyDocs<T extends { id: string; updatedAt?: number }>(collection: string, items: T[]): Promise<number> {
     let applied = 0
@@ -86,6 +97,8 @@ export async function restoreBackup(file: File | Blob, opts: { mode: 'merge' | '
   result.essays = await applyDocs('essays', manifest.essays)
   result.nodes = await applyDocs('nodes', manifest.nodes)
   result.sources = await applyDocs('sources', manifest.sources)
+  result.quotes = await applyDocs('quotes', manifest.quotes ?? [])
+  result.graveyard = await applyDocs('graveyard', manifest.graveyard ?? [])
 
   for (const blobId of manifest.blobs) {
     const blobFile = zip.file(`blobs/${blobId}`)
@@ -100,13 +113,21 @@ export async function restoreBackup(file: File | Blob, opts: { mode: 'merge' | '
 }
 
 async function clearAllLocalData(): Promise<void> {
-  const [essays, nodes, sources] = await Promise.all([backend.docs.list<Essay>('essays'), backend.docs.list<EssayNode>('nodes'), backend.docs.list<Source>('sources')])
+  const [essays, nodes, sources, quotes, graveyard] = await Promise.all([
+    backend.docs.list<Essay>('essays'),
+    backend.docs.list<EssayNode>('nodes'),
+    backend.docs.list<Source>('sources'),
+    backend.docs.list<QuoteBankEntry>('quotes'),
+    backend.docs.list<GraveyardFragment>('graveyard'),
+  ])
   for (const e of essays) await backend.docs.delete('essays', e.id)
   for (const n of nodes) await backend.docs.delete('nodes', n.id)
   for (const s of sources) {
     if (s.pdfBlobId) await backend.blobs.delete(s.pdfBlobId)
     await backend.docs.delete('sources', s.id)
   }
+  for (const q of quotes) await backend.docs.delete('quotes', q.id)
+  for (const g of graveyard) await backend.docs.delete('graveyard', g.id)
 }
 
 export function backupFileName(): string {

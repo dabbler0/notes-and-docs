@@ -8,7 +8,7 @@
  * `build:onefile`), so anything pulled in at runtime is a non-starter —
  * this costs nothing to inline and never has a loading flash.
  */
-export type IconName = 'cite' | 'quote' | 'quote-inline' | 'link' | 'subsection' | 'comment' | 'export' | 'backup' | 'sync' | 'bold' | 'italic' | 'underline' | 'list-ul' | 'list-ol'
+export type IconName = 'cite' | 'quote' | 'quote-inline' | 'link' | 'subsection' | 'comment' | 'graveyard' | 'export' | 'backup' | 'sync' | 'bold' | 'italic' | 'underline' | 'list-ul' | 'list-ol'
 
 const STROKE = { fill: 'none', stroke: 'currentColor', strokeWidth: 2, strokeLinecap: 'round' as const, strokeLinejoin: 'round' as const }
 
@@ -63,6 +63,20 @@ export function Icon({ name, size = 18, className }: { name: IconName; size?: nu
       return (
         <svg {...props} {...STROKE}>
           <path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z" />
+        </svg>
+      )
+    case 'graveyard':
+      // A grave marker (cross + ground line) — "Send to graveyard" removes
+      // text from the document without discarding it outright, so this
+      // needed to read as "laid to rest, not destroyed" rather than the
+      // trash-can most editors use for an actual delete. An earlier
+      // headstone-arch version read as a padlock at toolbar size; a plain
+      // cross reads unambiguously even at 18px.
+      return (
+        <svg {...props} {...STROKE}>
+          <line x1="12" y1="3" x2="12" y2="17" />
+          <line x1="8" y1="7.5" x2="16" y2="7.5" />
+          <line x1="4" y1="21" x2="20" y2="21" />
         </svg>
       )
     case 'export':

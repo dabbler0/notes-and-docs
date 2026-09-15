@@ -276,6 +276,40 @@ select {
   color: var(--ink-dim);
 }
 
+.quote-bank-card {
+  /* Unlike a source/essay card, nothing here opens on a click to the card
+     itself — only its own "View in source"/"Remove" buttons do anything —
+     so it shouldn't invite one with the pointer cursor (or hover lift)
+     .card normally has. */
+  cursor: default;
+}
+
+.quote-bank-card:hover {
+  box-shadow: var(--shadow-soft);
+  transform: none;
+}
+
+.quote-bank-text {
+  margin: 0;
+  font-style: italic;
+  font-size: 14px;
+  line-height: 1.5;
+  border-left: 3px solid var(--accent);
+  padding-left: 10px;
+}
+
+.quote-bank-annotation {
+  margin: 0;
+  font-size: 13px;
+  color: var(--ink-dim);
+}
+
+.quote-bank-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 4px;
+}
+
 .badge {
   display: inline-flex;
   align-items: center;
@@ -562,12 +596,14 @@ select {
   padding: 14px 8px;
 }
 
-/* The little edge tabs that collapse/expand the tree and comments panels —
-   attached to the panel itself (like an editor's own sidebar handle) so
-   the control travels with the thing it controls, rather than living in
-   the toolbar disconnected from it. Collapsing removes the panel from the
-   flex row entirely, so the editor panel (flex: 1) fills the freed space
-   on its own — no extra layout work needed for that part. */
+/* The little edge tab that collapses/expands the tree panel — attached to
+   the panel itself (like an editor's own sidebar handle) so the control
+   travels with the thing it controls, rather than living in the toolbar
+   disconnected from it. Collapsing removes the panel from the flex row
+   entirely, so the editor panel (flex: 1) fills the freed space on its own
+   — no extra layout work needed for that part. The right-hand panel's own
+   collapse control lives in `.right-panel-tabs` instead, since that column
+   now needs a header row anyway to switch between Comments and Graveyard. */
 .panel-edge-toggle {
   position: absolute;
   top: 14px;
@@ -594,10 +630,6 @@ select {
      the editor panel — overlapping there would put it underneath the
      editor's sticky toolbar (a higher stacking context), swallowing clicks. */
   right: 6px;
-}
-
-.panel-edge-toggle.right {
-  left: 6px;
 }
 
 .panel-edge-tab {
@@ -1204,6 +1236,80 @@ select {
   position: relative;
   flex-shrink: 0;
   display: flex;
+  flex-direction: column;
+}
+
+/* The row of tabs (Comments / Graveyard) plus the collapse button, sitting
+   above whichever of the two panels is currently showing — this is what
+   makes the two mutually exclusive: it's one column that displays one or
+   the other, not two columns that could both be open. */
+.right-panel-tabs {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 8px 10px;
+  flex-shrink: 0;
+  border-left: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+}
+
+.right-panel-tab {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  border-radius: var(--radius-sm);
+  border: none;
+  background: transparent;
+  color: var(--ink-dim);
+}
+
+.right-panel-tab:hover {
+  background: var(--surface-2);
+  color: var(--ink);
+}
+
+.right-panel-tab.active {
+  background: var(--ink);
+  color: var(--surface);
+}
+
+.graveyard-panel {
+  position: relative;
+  width: 300px;
+  flex-shrink: 0;
+  border-left: 1px solid var(--border);
+  background: var(--surface);
+  overflow-y: auto;
+  padding: 14px 10px;
+}
+
+.graveyard-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.graveyard-item {
+  background: var(--surface-2);
+}
+
+.graveyard-fragment-text {
+  font-size: 13.5px;
+  line-height: 1.5;
+  margin: 6px 0;
+}
+
+.graveyard-fragment-text p {
+  margin: 0 0 6px;
+}
+
+.graveyard-item-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 6px;
 }
 
 .comments-panel {
@@ -1362,6 +1468,17 @@ select {
 .citation-list .card {
   cursor: pointer;
   padding: 12px 14px;
+}
+
+.citation-list .card.card-selected {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent);
+}
+
+.tab-row {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 14px;
 }
 
 .hit-list {

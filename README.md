@@ -2,9 +2,12 @@
 
 A local-first workflow manager for writing essays/papers: a searchable
 library of cited sources (PDFs with BibTeX + extracted text, or bare
-citations) and a draft editor — presented as one continuous, collapsible
-document rather than a file tree — with an explicit per-section version
-history, inline commenting, and inline citation/quote insertion.
+citations), a quote bank of excerpts saved out of those PDFs independently
+of any one essay, and a draft editor — presented as one continuous,
+collapsible document rather than a file tree — with an explicit per-section
+version history, inline commenting, inline citation/quote insertion, and a
+per-essay "graveyard" for text cut from the document without discarding it
+outright.
 
 Runs entirely in the browser, local-first — no server of its own. Data
 lives in **IndexedDB** on every device, both structured records and PDF
@@ -36,8 +39,8 @@ npm test             # runs the sync test suite (vitest) — no network/emulator
   Drive-backed `Backend` would slot in without touching any other module —
   see the comment at the top of that file.
 - `src/models/` — data types plus repository functions (`sourcesRepo.ts`,
-  `essaysRepo.ts`) that implement the actual domain logic on top of the
-  storage layer.
+  `essaysRepo.ts`, `quoteBankRepo.ts`, `graveyardRepo.ts`) that implement
+  the actual domain logic on top of the storage layer.
 - `src/lib/` — BibTeX parsing, PDF text extraction/rendering (pdf.js), DOM
   Range helpers used by the editor's citation/quote/split actions,
   `childMarkers.ts` (how a node's content embeds its subsections — see
@@ -221,24 +224,68 @@ triggering *another* freeze (and a fresh version) the next time a comment
 gets added in that section, since an anchor mark is metadata about where a
 comment points, not a new revision of the prose.
 
-**Quoting a PDF.** Two toolbar buttons open the same `QuoteInsertDialog`
-(pick a source, drag-select text in its embedded `PdfViewer`, or type/paste
-into the textarea instead) but insert the result differently. "Block quote
-from a PDF" (the plain quote-marks icon) drops in a `<blockquote class="quote">`
-of its own, followed by a citation in its own paragraph — for an excerpt
-that should read as set apart from the surrounding prose. "Inline quote
-from a PDF" (the quote-marks-on-a-line icon right beside it) instead wraps
-the excerpt in a `<span class="quote-inline">` with literal curly quote
-marks and inserts it, plus its citation, right at the cursor with no
-paragraph break — for a shorter excerpt meant to read as part of the
-sentence it's dropped into (`insertQuote`/`insertInlineQuote` in
-`EssayWorkspace.tsx`). Both dialogs pass a `page` through to the citation
-chip and, for the block form, to the `data-page` attribute the quote itself
-carries. Neither export path (Markdown/LaTeX/print) needs to special-case
-`quote-inline`: unlike a `blockquote`, which markdown/LaTeX export both
-recognize and reformat, the inline span's surrounding quote marks are
-literal characters in the content, so it falls through the same
-plain-inline-text handling a citation or source link already gets.
+**Quoting a PDF.** One toolbar button ("Insert a quote from a PDF") opens
+`QuoteInsertDialog` — one quote-*selection* interface with two tabs ("From a
+PDF": pick a source, drag-select text in its embedded `PdfViewer`, or
+type/paste into the textarea instead; "From the quote bank": search and pick
+from whatever's already saved there, see below) feeding two insert
+*actions* at the bottom, since "block or inline" is a question about how the
+excerpt should land in the document, orthogonal to which excerpt it is —
+asking it twice (once per tab, as two near-duplicate dialogs used to) would
+just be the same question asked in the wrong place. "Insert as block quote"
+drops in a `<blockquote class="quote">` of its own, followed by a citation
+in its own paragraph — for an excerpt that should read as set apart from
+the surrounding prose. "Insert as inline quote" instead wraps the excerpt in
+a `<span class="quote-inline">` with literal curly quote marks and inserts
+it, plus its citation, right at the cursor with no paragraph break — for a
+shorter excerpt meant to read as part of the sentence it's dropped into
+(`insertQuote`/`insertInlineQuote` in `EssayWorkspace.tsx`). Both actions
+pass a `page` through to the citation chip and, for the block form, to the
+`data-page` attribute the quote itself carries. Neither export path
+(Markdown/LaTeX/print) needs to special-case `quote-inline`: unlike a
+`blockquote`, which markdown/LaTeX export both recognize and reformat, the
+inline span's surrounding quote marks are literal characters in the
+content, so it falls through the same plain-inline-text handling a citation
+or source link already gets.
+
+**The quote bank.** A `QuoteBankEntry` (`quoteBankRepo.ts`) is a quote saved
+out of a source's PDF independently of any essay — from a source's own
+detail view (Sources tab), drag-select text in its embedded `PdfViewer` (or
+type/paste one in) and "+ Add to quote bank" with an optional annotation
+explaining why it's worth keeping. Saved quotes are browsable and
+searchable on their own in the "Quotes" tab (title/author, page, and
+annotation all match a search), each with a "View in source" link that
+reopens that source's detail view straight to the page it was quoted from
+(`SourceDetailDialog`'s new `initialPage` prop) — and, from any essay, in
+the quote-insertion dialog's own "From the quote bank" tab, so a quote saved
+once can be reused across as many drafts as it's actually relevant to,
+rather than living wherever it first got quoted. A quote whose source has
+since been deleted stays listed (nothing here is ever cascade-deleted along
+with its source — same tombstone convention as everything else) but loses
+its "View in source" link and drops out of the insertion dialog's bank tab,
+since there's no citation left to attach it to.
+
+**The graveyard.** "Send to graveyard" (the cross-and-ground-line icon, at
+the end of the formatting toolbar) cuts the current selection out of the
+document — same as a delete — but keeps it, verbatim HTML and all, as a
+`GraveyardFragment` (`graveyardRepo.ts`) attached to the essay it came from,
+rather than discarding it. Unlike the insert-a-quote/citation tools, this
+acts directly on whatever's currently selected instead of opening a dialog
+first — there's nothing to pick, so there's no reason to risk losing the
+live selection to a dialog stealing focus. Fragments are browsed from a
+right-hand panel that now shows either Comments or the Graveyard — never
+both, since it's genuinely one column with a small tab switcher
+(`.right-panel-tabs`) at its top, not two independently-toggleable panels —
+with Copy (plain text, via the clipboard API where available) and Delete on
+each card; sending a selection there automatically switches the panel to
+the Graveyard tab so it's obvious where the cut text went. A fragment
+remembers the node it came from (id *and* a title snapshot taken at the
+moment of removal) purely as a reference — that reference is never
+dereferenced to decide whether to show the fragment, specifically so it
+keeps showing up even once that node is gone (deleted outright, split away,
+merged elsewhere): the title snapshot is what keeps a fragment reading
+sensibly once that's happened, since the live node title obviously isn't
+there to ask anymore.
 
 **Linking to a source.** "🔗 Link to source" wraps the current selection
 (or, with nothing selected, the source's own title) in a real hyperlink to
@@ -573,13 +620,19 @@ sync test suite — see below) and fixed:
 
 Both races, plus ordinary multi-device propagation, tombstoned deletions,
 PDF blob round-tripping, the encryption-key fingerprint gate, account
-reset, and overlapping concurrent `runSyncPass` calls sharing one pass
-instead of double-running (see `syncEngine.ts`'s own `inFlightPass`), are
-covered by an automated test suite (`npm test`, `src/sync/__tests__/`)
-that runs the real sync code against in-memory fakes of Firestore, Auth,
-and each device's own local storage (`src/test/`) — no network or
-emulator process needed, so it runs in a couple of seconds and stays easy
-to extend with more scenarios as they come up.
+reset, quote bank and graveyard propagation (including a graveyard
+fragment staying listed after the node it references is deleted — see the
+quote bank/graveyard section above), and overlapping concurrent
+`runSyncPass` calls sharing one pass instead of double-running (see
+`syncEngine.ts`'s own `inFlightPass`), are covered by an automated test
+suite (`npm test`, `src/sync/__tests__/`) that runs the real sync code
+against in-memory fakes of Firestore, Auth, and each device's own local
+storage (`src/test/`) — no network or emulator process needed, so it runs
+in a couple of seconds and stays easy to extend with more scenarios as
+they come up. `SYNCED_COLLECTIONS` in `syncEngine.ts` is the single list
+every push/pull loop iterates over generically, so a new collection (the
+quote bank and graveyard both went in this way) is a matter of adding it
+there plus its `SENSITIVE_FIELDS` entry, not touching the loops themselves.
 
 This was verified end-to-end against a real `firebase emulators:start`
 Firestore + Auth instance (not just unit-level pieces), across three
@@ -608,9 +661,12 @@ yourself, on a live project, before relying on this.
 Independent of sync — this works with no Firebase project or account
 configured at all, since it's just a snapshot of what's already local.
 "💾 Backup" in the topbar (`lib/backup.ts`, `BackupDialog.tsx`) exports
-*everything* on the device (every essay, section, version, comment,
-source, and PDF) as one `.zip` — a `data.json` manifest plus a `blobs/`
-folder — for safekeeping or moving to a new browser/device by hand.
+*everything* on the device (every essay, section, version, comment, the
+text graveyard, source, saved quote, and PDF) as one `.zip` — a
+`data.json` manifest plus a `blobs/` folder — for safekeeping or moving to
+a new browser/device by hand. `quotes`/`graveyard` are read with `?? []`
+on restore, so a backup made before either feature existed still restores
+cleanly — it just has nothing to contribute for them.
 
 Unlike sync's payload, this file is **not encrypted**: it's meant to
 leave the device only under your own control (onto your own disk, into
