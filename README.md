@@ -432,17 +432,39 @@ rather than being silently dropped.
   `\underline` and a `quote` environment become their normal editor
   equivalents (`<b>`/`<i>`/`<u>`/`<blockquote class="quote">`).
 - **Footnotes are the interesting case.** Every `\footnote{...}` is
-  checked against the resolved bibliography *first*: `matchFootnoteToSource()`
-  scores it on whether the footnote's own text mentions a known source's
-  year and/or an author's last name (title-word overlap alone is
-  deliberately never enough, precisely so an ordinary explanatory aside
-  that happens to share a word with someone's title doesn't get
-  misidentified) — a footnote that reads like a manually-typed citation
-  becomes a real one; only a footnote that doesn't clear that bar becomes
-  an actual footnote (a fresh `Footnote` entry plus its `<sup>` marker, the
-  same shape "Insert footnote" produces by hand). A `\footcite{key}` is
-  never run through this heuristic at all — it already names a bibtex key
-  explicitly, so it's just a citation, resolved the same way `\cite` is.
+  checked against the resolved bibliography *first*, through two matchers
+  in `matchFootnoteToSource()` (`lib/latexImport.ts`):
+  - A **shorthand-citation** check first, for a footnote that's *nothing
+    but* a compact hand-typed citation — anchored to the whole trimmed
+    footnote text, not just a prefix, which is what actually enforces "no
+    extraneous text": a real sentence that happens to mention a name
+    simply doesn't match this shape at all. Recognizes `Lastname`,
+    `Firstname Lastname`, optionally followed by `, Title` (plain,
+    `\textit{...}`-wrapped, or quoted — formatting is already gone by the
+    time this runs) and/or a trailing page reference (`p. 12`, `p12`,
+    `pp. 12-15`, `pp 12–15`, ...) in any combination — see
+    `parseShorthandCitation()`/`resolveShorthandCitation()`. A bare last
+    name, or last name + title with no year at all, is only ever accepted
+    here when it resolves to a **unique** source; two sources sharing a
+    surname fall back to the surname alone being ambiguous, get
+    disambiguated by a given first name or by title-keyword overlap when
+    either is present, and stay unresolved (never guessed at) otherwise.
+  - Free-text scoring as a fallback, for a footnote embedded in an
+    otherwise ordinary sentence: mentions a known source's year and/or
+    author's last name, optionally reinforced by title-word overlap or a
+    bare page reference, with a year or author match specifically required
+    (title/page overlap alone is deliberately never enough, precisely so
+    an ordinary aside that happens to share a word — or a number that
+    looks like a page — with someone's paper doesn't get misidentified).
+    Like the shorthand matcher, this only ever returns a *uniquely*
+    top-scoring source — a tie is treated as no match, not a coin flip.
+
+  Either way, a footnote that resolves becomes a real citation; one that
+  doesn't clear either bar becomes an actual footnote (a fresh `Footnote`
+  entry plus its `<sup>` marker, the same shape "Insert footnote" produces
+  by hand). A `\footcite{key}` is never run through either matcher at all
+  — it already names a bibtex key explicitly, so it's just a citation,
+  resolved the same way `\cite` is.
 - **What's imported** (a summary shown after the fact): how many
   bibliography entries were added vs. already existed locally, how many
   footnotes were recognized as citations vs. kept as real footnotes, and

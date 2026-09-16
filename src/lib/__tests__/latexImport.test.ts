@@ -51,6 +51,77 @@ describe('matchFootnoteToSource', () => {
   it('does not match on title words alone, without a year or author', () => {
     expect(matchFootnoteToSource('Widgets and gadgets are both discussed at length elsewhere.', byKey)).toBeNull()
   })
+
+  describe('shorthand citations (no extraneous text)', () => {
+    it('matches "Lastname, p<page>"', () => {
+      expect(matchFootnoteToSource('Smith, p123', byKey)).toBe(smith)
+      expect(matchFootnoteToSource('Smith, p. 123', byKey)).toBe(smith)
+    })
+
+    it('matches "Lastname, pp<page range>" and en/em dashes in the range', () => {
+      expect(matchFootnoteToSource('Smith, pp. 12-15', byKey)).toBe(smith)
+      expect(matchFootnoteToSource('Smith, pp. 12–15', byKey)).toBe(smith)
+    })
+
+    it('matches "Firstname Lastname, p<page>"', () => {
+      expect(matchFootnoteToSource('John Smith, p. 9', byKey)).toBe(smith)
+    })
+
+    it('matches "Lastname" alone when it is unique in the bibliography', () => {
+      expect(matchFootnoteToSource('Smith', byKey)).toBe(smith)
+      expect(matchFootnoteToSource('Smith.', byKey)).toBe(smith)
+    })
+
+    it('matches "Lastname, Title, p<page>" (title already stripped of LaTeX markup by this point)', () => {
+      expect(matchFootnoteToSource('Smith, A Study of Widgets, p. 12', byKey)).toBe(smith)
+    })
+
+    it('matches "Lastname, "Title", p<page>" with the title in smart quotes', () => {
+      expect(matchFootnoteToSource('Smith, “A Study of Widgets,” p. 12', byKey)).toBe(smith)
+    })
+
+    it('matches author + title with no page number at all', () => {
+      expect(matchFootnoteToSource('Smith, A Study of Widgets', byKey)).toBe(smith)
+    })
+
+    it('does not match a bare last name shared by more than one source', () => {
+      const doe1 = makeSource('d1', 'doe2019', { author: 'Jane Doe', year: '2019', title: 'First Paper' })
+      const doe2 = makeSource('d2', 'doe2021', { author: 'John Doe', year: '2021', title: 'Second Paper' })
+      const ambiguous = new Map(byKey)
+      ambiguous.set('doe2019', doe1)
+      ambiguous.set('doe2021', doe2)
+      expect(matchFootnoteToSource('Doe', ambiguous)).toBeNull()
+      expect(matchFootnoteToSource('Doe, p. 5', ambiguous)).toBeNull()
+    })
+
+    it('disambiguates two same-surname authors by title when one is given', () => {
+      const doe1 = makeSource('d1', 'doe2019', { author: 'Jane Doe', year: '2019', title: 'A Treatise on Widgets' })
+      const doe2 = makeSource('d2', 'doe2021', { author: 'John Doe', year: '2021', title: 'Gizmology' })
+      const both = new Map([['doe2019', doe1], ['doe2021', doe2]])
+      expect(matchFootnoteToSource('Doe, A Treatise on Widgets, p. 5', both)).toBe(doe1)
+      expect(matchFootnoteToSource('Doe, Gizmology', both)).toBe(doe2)
+    })
+
+    it('narrows an ambiguous surname by first name when one is given', () => {
+      const doe1 = makeSource('d1', 'doe2019', { author: 'Jane Doe', year: '2019', title: 'First Paper' })
+      const doe2 = makeSource('d2', 'doe2021', { author: 'John Doe', year: '2021', title: 'Second Paper' })
+      const both = new Map([['doe2019', doe1], ['doe2021', doe2]])
+      expect(matchFootnoteToSource('Jane Doe, p. 5', both)).toBe(doe1)
+      expect(matchFootnoteToSource('John Doe', both)).toBe(doe2)
+    })
+
+    it('does not treat an ordinary sentence that happens to contain a capitalized name as shorthand', () => {
+      // "Smith" appears, but this is a real sentence, not a bare citation —
+      // it should fall through to the free-text scorer, which still
+      // requires a year or a title overlap and finds neither here.
+      expect(matchFootnoteToSource('Smith later revised this claim in an interview.', byKey)).toBeNull()
+    })
+
+    it('does not match a name-shaped footnote against a source with no author field', () => {
+      const noAuthor = makeSource('n1', 'anon2020', { year: '2020', title: 'Untitled Report' })
+      expect(matchFootnoteToSource('Nobody', new Map([['anon2020', noAuthor]]))).toBeNull()
+    })
+  })
 })
 
 describe('parseLatexDocument', () => {

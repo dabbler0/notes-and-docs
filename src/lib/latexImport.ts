@@ -147,18 +147,117 @@ function titleKeywords(title: string): string[] {
     .slice(0, 6)
 }
 
+/** A page reference in any of the forms a manually-typed citation actually uses: "p. 45", "p45", "pp. 12-15", "pp 12–15". Used both to strip a trailing page reference off a shorthand citation and as a (weak, on its own) signal in the free-text scorer below. */
+const PAGE_RE = /,?\s+pp?\.?\s*(\d+(?:\s*[-–—]\s*\d+)?)\.?$/i
+
+interface ShorthandCitation {
+  /** "Smith" or "John Smith" — never validated against real names beyond its *shape*; resolveShorthandCitation is what actually keeps this safe (a name-shaped footnote that doesn't resolve to a real, sufficiently unique author is simply not a match). */
+  name: string
+  title?: string
+  page?: string
+}
+
+/**
+ * Recognizes a footnote that's really nothing but a compact, manually-typed
+ * citation — "Smith, p. 45", "John Smith, The Long Title, pp. 12–15",
+ * "Smith, “A Title,” p. 9" — rather than an ordinary sentence. Anchored to
+ * the *whole* trimmed footnote text, not just a prefix: that's what "no
+ * extraneous text" actually means in practice — a real sentence that
+ * happens to mention someone's name simply won't match this shape at all,
+ * and falls through to the looser free-text scoring in
+ * matchFootnoteToSource instead, which still requires a year or a title
+ * overlap on top of the name.
+ */
+function parseShorthandCitation(text: string): ShorthandCitation | null {
+  let rest = text.trim()
+  let page: string | undefined
+  const pageMatch = PAGE_RE.exec(rest)
+  if (pageMatch) {
+    rest = rest.slice(0, pageMatch.index).trim()
+    page = pageMatch[1].replace(/\s+/g, '').replace(/[–—]/g, '-')
+  }
+  rest = rest.replace(/\.$/, '').trim()
+  if (!rest) return null
+  const commaIdx = rest.indexOf(',')
+  const namePart = (commaIdx === -1 ? rest : rest.slice(0, commaIdx)).trim()
+  const titlePart = commaIdx === -1 ? undefined : rest.slice(commaIdx + 1).trim().replace(/^[“"'‘]+|[”"'’]+$/g, '').trim()
+  if (!isNameLike(namePart)) return null
+  return { name: namePart, title: titlePart || undefined, page }
+}
+
+/** "Smith", "John Smith", "J. Smith" — one to three capitalized tokens and nothing else. Deliberately strict: this (plus resolveShorthandCitation actually finding a matching author afterward) is what keeps an ordinary sentence from being mistaken for a bare citation. */
+function isNameLike(s: string): boolean {
+  return /^[A-Z][A-Za-z'’.-]*(\s+[A-Z][A-Za-z'’.-]*){0,2}$/.test(s)
+}
+
+/**
+ * Resolves a parsed shorthand citation against the known sources — by last
+ * name first (optionally narrowed by a given first name), then, if that's
+ * still ambiguous, by title-keyword overlap. Returns null rather than
+ * guessing whenever more than one source remains plausible: per the
+ * feature's own design, "just an author" is only ever accepted when it
+ * points at a *unique* entry, and "author + title" only when the title
+ * actually discriminates between same-surname authors.
+ */
+function resolveShorthandCitation(shorthand: ShorthandCitation, sourceByKey: Map<string, Source>): Source | null {
+  const nameTokens = shorthand.name.split(/\s+/)
+  const lastName = nameTokens[nameTokens.length - 1].toLowerCase()
+  const firstName = nameTokens.length > 1 ? nameTokens[0].toLowerCase() : null
+
+  let candidates = [...sourceByKey.values()].filter((source) => {
+    const authors = source.bibtex.fields.author
+    return !!authors && authorLastNames(authors).some((ln) => ln.toLowerCase() === lastName)
+  })
+  if (candidates.length === 0) return null
+
+  if (firstName && candidates.length > 1) {
+    const narrowed = candidates.filter((source) => source.bibtex.fields.author!.toLowerCase().includes(firstName))
+    if (narrowed.length > 0) candidates = narrowed
+  }
+
+  if (candidates.length === 1) return candidates[0]
+
+  if (shorthand.title) {
+    const keywords = titleKeywords(shorthand.title)
+    const scored = candidates
+      .map((source) => ({ source, hits: keywords.filter((w) => (source.bibtex.fields.title ?? '').toLowerCase().includes(w)).length }))
+      .filter((s) => s.hits > 0)
+      .sort((a, b) => b.hits - a.hits)
+    if (scored.length === 1 || (scored.length > 1 && scored[0].hits > scored[1].hits)) return scored[0].source
+  }
+
+  return null // still ambiguous — several same-surname sources, nothing left to tell them apart with
+}
+
 /**
  * Scores every known source against a footnote's plain text and returns the
- * best match, if any clears the bar — a footnote that's really a manually
- * typed citation reliably mentions the year and/or the author's name (a
- * generic explanatory aside essentially never does both), so requiring one
- * of those specifically, plus enough total signal, keeps this from firing
- * on ordinary footnotes that just happen to share a word with someone's
- * paper title.
+ * best match, if any clears the bar. Tries the strict "this footnote is
+ * basically just a citation" shape first (see parseShorthandCitation) —
+ * that's the only path a bare author name, or author + title with no year,
+ * can ever succeed through, and only when it resolves unambiguously.
+ * Anything else falls through to free-text scoring, which still requires
+ * a year and/or a title overlap on top of the author match: a generic
+ * explanatory aside essentially never combines those, so requiring one of
+ * them (plus enough total signal) keeps this from firing on a footnote
+ * that just happens to share a word with someone's paper title.
  */
 export function matchFootnoteToSource(plainText: string, sourceByKey: Map<string, Source>): Source | null {
+  const shorthand = parseShorthandCitation(plainText)
+  if (shorthand) {
+    const resolved = resolveShorthandCitation(shorthand, sourceByKey)
+    if (resolved) return resolved
+  }
+
   const lower = plainText.toLowerCase()
-  let best: { source: Source; score: number } | null = null
+  const hasPageRef = /\bpp?\.?\s*\d+(?:\s*[-–—]\s*\d+)?\b/i.test(plainText)
+  // Collect every source that clears the bar, not just the first/highest —
+  // two sources sharing a surname (or, coincidentally, a mentioned year)
+  // can each reach the same score, and picking whichever happened to be
+  // first in iteration order would be exactly the kind of unjustified
+  // guess this function otherwise goes out of its way to avoid (see
+  // resolveShorthandCitation's own identical reasoning above). Only a
+  // *unique* top score is ever returned.
+  const qualifying: { source: Source; score: number }[] = []
   for (const source of sourceByKey.values()) {
     const fields = source.bibtex.fields
     let score = 0
@@ -180,9 +279,13 @@ export function matchFootnoteToSource(plainText: string, sourceByKey: Map<string
       const hits = titleKeywords(fields.title).filter((w) => lower.includes(w)).length
       score += hits
     }
-    if (hasStrongSignal && score >= 3 && (!best || score > best.score)) best = { source, score }
+    if (hasStrongSignal && hasPageRef) score += 1
+    if (hasStrongSignal && score >= 3) qualifying.push({ source, score })
   }
-  return best?.source ?? null
+  if (qualifying.length === 0) return null
+  qualifying.sort((a, b) => b.score - a.score)
+  if (qualifying.length > 1 && qualifying[0].score === qualifying[1].score) return null
+  return qualifying[0].source
 }
 
 function escapeRegExp(s: string): string {
