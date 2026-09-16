@@ -69,7 +69,7 @@ type SyncedCollection = (typeof SYNCED_COLLECTIONS)[number]
 /** Which fields of each collection's docs are the sensitive payload that gets encrypted, vs. left as plaintext metadata — kept unencrypted so the app can list/sort essays and sources, and so a device only has to decrypt the records it actually opens. */
 const SENSITIVE_FIELDS: Record<SyncedCollection, string[]> = {
   essays: [],
-  nodes: ['draftContent', 'versions'],
+  nodes: ['draftContent', 'versions', 'footnotes'],
   sources: ['pageTexts'],
   quotes: ['quoteText', 'annotation'],
   graveyard: ['html', 'nodeTitle'],

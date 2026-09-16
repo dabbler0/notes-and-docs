@@ -1,12 +1,15 @@
 import { useEffect, useState } from 'preact/hooks'
 import { createEssay, deleteEssay, listEssays } from '../../models/essaysRepo'
 import { onSyncApplied } from '../../sync/syncEvents'
+import { Icon } from '../Icon'
 import type { Essay } from '../../models/types'
 import { EssayWorkspace } from './EssayWorkspace'
+import { ImportLatexDialog } from './ImportLatexDialog'
 
 export function EssaysView() {
   const [essays, setEssays] = useState<Essay[]>([])
   const [openId, setOpenId] = useState<string | null>(null)
+  const [showImport, setShowImport] = useState(false)
 
   async function reload() {
     setEssays(await listEssays())
@@ -44,6 +47,9 @@ export function EssaysView() {
     <div className="page-pad">
       <div className="page-header">
         <h1>Drafts</h1>
+        <button className="btn btn-ghost" onClick={() => setShowImport(true)}>
+          <Icon name="import" /> Import LaTeX project
+        </button>
         <button className="btn btn-primary" onClick={handleCreate}>
           + New essay
         </button>
@@ -62,6 +68,16 @@ export function EssaysView() {
             </div>
           ))}
         </div>
+      )}
+      {showImport && (
+        <ImportLatexDialog
+          onClose={() => setShowImport(false)}
+          onImported={(essayId) => {
+            setShowImport(false)
+            reload()
+            setOpenId(essayId)
+          }}
+        />
       )}
     </div>
   )

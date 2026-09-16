@@ -8,7 +8,7 @@
  * `build:onefile`), so anything pulled in at runtime is a non-starter —
  * this costs nothing to inline and never has a loading flash.
  */
-export type IconName = 'cite' | 'quote' | 'quote-inline' | 'link' | 'subsection' | 'comment' | 'graveyard' | 'export' | 'backup' | 'sync' | 'bold' | 'italic' | 'underline' | 'list-ul' | 'list-ol'
+export type IconName = 'cite' | 'quote' | 'quote-inline' | 'link' | 'subsection' | 'footnote' | 'comment' | 'graveyard' | 'export' | 'import' | 'backup' | 'sync' | 'bold' | 'italic' | 'underline' | 'list-ul' | 'list-ol'
 
 const STROKE = { fill: 'none', stroke: 'currentColor', strokeWidth: 2, strokeLinecap: 'round' as const, strokeLinejoin: 'round' as const }
 
@@ -77,6 +77,28 @@ export function Icon({ name, size = 18, className }: { name: IconName; size?: nu
           <line x1="12" y1="3" x2="12" y2="17" />
           <line x1="8" y1="7.5" x2="16" y2="7.5" />
           <line x1="4" y1="21" x2="20" y2="21" />
+        </svg>
+      )
+    case 'footnote':
+      // A baseline (a line of text) with a small raised digit beside it —
+      // the same visual shorthand word processors use for "insert a
+      // footnote reference here."
+      return (
+        <svg {...props} {...STROKE}>
+          <line x1="3" y1="17" x2="13" y2="17" />
+          <text x="18" y="10" fontSize="9.5" fontFamily="Arial, Helvetica, sans-serif" fontWeight="700" textAnchor="middle" fill="currentColor" stroke="none" strokeWidth="0">
+            1
+          </text>
+        </svg>
+      )
+    case 'import':
+      // The 'export' icon flipped vertically: an arrow into a tray instead
+      // of out of one.
+      return (
+        <svg {...props} {...STROKE}>
+          <path d="M21 9V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v4" />
+          <polyline points="7 12 12 17 17 12" />
+          <line x1="12" y1="17" x2="12" y2="5" />
         </svg>
       )
     case 'export':

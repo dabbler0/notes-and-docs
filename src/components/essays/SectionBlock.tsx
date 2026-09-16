@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks'
-import { commitNewVersion, deleteNodeOnly, headVersion, revertToVersion, saveNode } from '../../models/essaysRepo'
+import { commitNewVersion, deleteFootnote, deleteNodeOnly, headVersion, nodeFootnotes, revertToVersion, saveNode, updateFootnoteContent } from '../../models/essaysRepo'
 import { parseSegments, reconstructContent } from '../../lib/childMarkers'
 import { FrozenPreview } from './FrozenPreview'
-import type { EssayNode, NodeVersion } from '../../models/types'
+import type { EssayNode, Footnote, NodeVersion } from '../../models/types'
 
 const HEADING_SIZES = [21, 18, 16.5, 15, 14.5]
 function headingSize(depth: number) {
@@ -22,6 +22,8 @@ export function SectionBlock({
   onTitleChanged,
   focusTitleId,
   onTitleFocused,
+  focusFootnoteId,
+  onFootnoteFocused,
   commentMode = false,
 }: {
   node: EssayNode
@@ -37,6 +39,9 @@ export function SectionBlock({
   onTitleChanged: () => void
   focusTitleId: string | null
   onTitleFocused: () => void
+  /** Id of a footnote just created by the "Insert footnote" toolbar action, so its own (freshly empty) body can be focused for typing immediately — same idea as focusTitleId for a just-split subsection's title. */
+  focusFootnoteId: string | null
+  onFootnoteFocused: () => void
   /** True while the document-wide "Comment mode" toggle is on — see EssayWorkspace.tsx. Turns editing off (contentEditable, title renamed, per-section version/history/demote controls) so the document reads close to a print view; selecting text to comment on still works normally either way. */
   commentMode?: boolean
 }) {
@@ -190,6 +195,17 @@ export function SectionBlock({
     onTitleChanged()
   }
 
+  /** Deletes the footnote's own record and, if it's still actually mounted (it might not be — this node could be collapsed, or the marker could already be gone from a since-edited draft), its `<sup>` marker from the live content too, so a deleted footnote doesn't leave a dangling reference behind. */
+  async function handleDeleteFootnote(footnoteId: string) {
+    window.clearTimeout(saveTimer.current)
+    const marker = wrapperRef.current?.querySelector(`sup.footnote-ref[data-footnote-id="${cssEscapeId(footnoteId)}"]`)
+    marker?.remove()
+    const html = reconstructContent(node.id)
+    if (html != null) await persist(html)
+    await deleteFootnote(node, footnoteId)
+    onTitleChanged()
+  }
+
   async function handleRevertToComparing() {
     if (!comparingVersionId) return
     await revertToVersion(node, comparingVersionId)
@@ -259,6 +275,8 @@ export function SectionBlock({
             onTitleChanged={onTitleChanged}
             focusTitleId={focusTitleId}
             onTitleFocused={onTitleFocused}
+            focusFootnoteId={focusFootnoteId}
+            onFootnoteFocused={onFootnoteFocused}
             commentMode={commentMode}
           />
         ) : null,
@@ -377,6 +395,97 @@ export function SectionBlock({
           </button>
         </div>
       )}
+      {/* Footnotes aren't versioned the way a node's own text is (there's
+          no equivalent of draftContent/versions for them) — they just
+          always reflect node.footnotes as it stands right now, regardless
+          of which version's text happens to be shown above during a
+          compare. Numbered locally to this node, in marker order, via the
+          `.node-footnotes` CSS counter (see styles.css) rather than a
+          stored number, so adding/removing/reordering one never leaves a
+          stale number sitting on another. */}
+      {!isCollapsed && nodeFootnotes(node).length > 0 && (
+        <div className="node-footnotes">
+          {nodeFootnotes(node).map((footnote) => (
+            <FootnoteRow
+              key={footnote.id}
+              node={node}
+              footnote={footnote}
+              commentMode={commentMode}
+              focus={focusFootnoteId === footnote.id}
+              onFocused={onFootnoteFocused}
+              onDelete={() => handleDeleteFootnote(footnote.id)}
+            />
+          ))}
+        </div>
+      )}
     </div>
   )
+}
+
+/**
+ * One footnote's own editable body — an uncontrolled `contentEditable` div,
+ * same debounced-save shape as a node's own text shards (see `persist`/
+ * `scheduleSave` above): typing schedules a save rather than saving on
+ * every keystroke, and the DOM is only ever overwritten from `footnote`
+ * when it's genuinely a *different* footnote object than what's already
+ * synced (an external change — e.g. a sync pull rewriting node.footnotes
+ * wholesale) — never on every render, which would otherwise stomp on
+ * whatever's mid-typing the moment some unrelated bit of state changes.
+ */
+function FootnoteRow({
+  node,
+  footnote,
+  commentMode,
+  focus,
+  onFocused,
+  onDelete,
+}: {
+  node: EssayNode
+  footnote: Footnote
+  commentMode: boolean
+  focus: boolean
+  onFocused: () => void
+  onDelete: () => void
+}) {
+  const ref = useRef<HTMLDivElement>(null)
+  const saveTimer = useRef<number | undefined>(undefined)
+  const synced = useRef<{ footnote: Footnote | null; content: string }>({ footnote: null, content: '' })
+
+  useEffect(() => {
+    if (synced.current.footnote === footnote && synced.current.content === footnote.content) return
+    if (ref.current) ref.current.innerHTML = footnote.content
+    synced.current = { footnote, content: footnote.content }
+  }, [footnote, footnote.content])
+
+  useEffect(() => {
+    if (focus && ref.current) {
+      ref.current.focus()
+      onFocused()
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [focus])
+
+  function handleInput() {
+    window.clearTimeout(saveTimer.current)
+    saveTimer.current = window.setTimeout(() => {
+      const html = ref.current?.innerHTML ?? ''
+      synced.current = { footnote, content: html }
+      updateFootnoteContent(node, footnote.id, html)
+    }, 500)
+  }
+
+  return (
+    <div className="footnote-item">
+      <div className="footnote-content" ref={ref} contentEditable={!commentMode} onInput={handleInput} />
+      {!commentMode && (
+        <button className="icon-btn footnote-delete" title="Delete this footnote" onClick={onDelete}>
+          ×
+        </button>
+      )}
+    </div>
+  )
+}
+
+function cssEscapeId(s: string): string {
+  return typeof CSS !== 'undefined' && CSS.escape ? CSS.escape(s) : s.replace(/["\\]/g, '\\$&')
 }

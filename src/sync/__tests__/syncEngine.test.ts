@@ -409,6 +409,37 @@ describe('key bundle plumbing', () => {
   })
 })
 
+describe('footnote sync and backward compatibility', () => {
+  it('a node with no footnotes field at all (as if from before footnotes existed) syncs cleanly, then a footnote added later propagates normally', async () => {
+    const { a, b } = await pairedDevices()
+    const essay = await a.createEssay('Essay with an old-format node')
+    const root = await a.getNode(essay.rootNodeId)
+    // Deliberately no `footnotes` key at all — putNodeRaw writes the object
+    // exactly as given, the same shape a node saved before this feature
+    // existed would have.
+    await a.putNodeRaw({ ...root!, draftContent: 'Some old text.' })
+    await a.sync()
+
+    const pulled = await b.sync()
+    expect(pulled.pulled.nodes).toBe(1)
+    const pulledRoot = await b.getNode(essay.rootNodeId)
+    expect(pulledRoot?.draftContent).toBe('Some old text.')
+    expect('footnotes' in pulledRoot!).toBe(false)
+
+    // Device B now adds a footnote on top of that old-format node.
+    pulledRoot!.footnotes = [{ id: 'f1', content: 'A new footnote.' }]
+    pulledRoot!.draftContent = 'Some old text.<sup class="footnote-ref" data-footnote-id="f1"></sup>'
+    await b.saveNode(pulledRoot!)
+    const pushResult = await b.sync()
+    expect(pushResult.pushed.nodes).toBe(1)
+
+    const finalPull = await a.sync()
+    expect(finalPull.pulled.nodes).toBe(1)
+    const finalNode = await a.getNode(essay.rootNodeId)
+    expect(finalNode?.footnotes).toEqual([{ id: 'f1', content: 'A new footnote.' }])
+  })
+})
+
 describe('quote bank and graveyard sync', () => {
   it('propagates a quote bank entry between devices', async () => {
     const { a, b } = await pairedDevices()

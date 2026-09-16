@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'preact/hooks'
-import { commitNewVersion, createChildNode, addComment, getEssay, getNode, headVersion, loadNodeMap, moveNode, saveEssay, saveNode } from '../../models/essaysRepo'
+import { addFootnote, commitNewVersion, createChildNode, addComment, getEssay, getNode, headVersion, loadNodeMap, moveNode, saveEssay, saveNode } from '../../models/essaysRepo'
 import { addToGraveyard } from '../../models/graveyardRepo'
 import { citationHtml, displayTitle } from '../../lib/bibtex'
 import { extractAroundRange, insertHtmlAtRange } from '../../lib/selection'
@@ -51,6 +51,7 @@ export function EssayWorkspace({ essayId, onBack }: { essayId: string; onBack: (
   const [pendingComment, setPendingComment] = useState<{ nodeId: string; range: Range; text: string; anchorRect: { top: number; bottom: number; left: number; right: number } } | null>(null)
   const commentWidgetRef = useRef<HTMLDivElement>(null)
   const [focusTitleId, setFocusTitleId] = useState<string | null>(null)
+  const [focusFootnoteId, setFocusFootnoteId] = useState<string | null>(null)
 
   const activeNodeId = useRef<string | null>(null)
   const activeEditorEl = useRef<HTMLDivElement | null>(null)
@@ -244,6 +245,28 @@ export function EssayWorkspace({ essayId, onBack }: { essayId: string; onBack: (
     const html = `<a class="source-link" data-source-id="${source.id}" href="${escapeAttr(url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(linkText)}</a>&nbsp;${citationHtml(source)}&nbsp;`
     insertHtmlAtRange(range, html)
     await persistActiveNode(node)
+    reload()
+  }
+
+  /**
+   * Inserts a new, empty footnote at the cursor and hands focus straight to
+   * its own body so it's ready to type into immediately — same shape as
+   * "Split into subsection" handing focus to the new child's title. The
+   * marker itself carries no visible number (SectionBlock numbers footnotes
+   * with a CSS counter, purely from marker order — see its own doc comment)
+   * so there's nothing here that could ever go stale if more footnotes get
+   * added before or after this one later.
+   */
+  async function insertFootnote() {
+    const range = savedRange.current
+    const el = activeEditorEl.current
+    const node = activeNode()
+    if (!range || !el || !node) return
+    el.focus()
+    const footnote = addFootnote(node)
+    insertHtmlAtRange(range, `<sup class="footnote-ref" data-footnote-id="${footnote.id}"></sup>`)
+    await persistActiveNode(node)
+    setFocusFootnoteId(footnote.id)
     reload()
   }
 
@@ -563,6 +586,17 @@ export function EssayWorkspace({ essayId, onBack }: { essayId: string; onBack: (
                 <button className="btn btn-sm icon-btn-toolbar" title="Split into subsection" onClick={beginSplit}>
                   <Icon name="subsection" />
                 </button>
+                <button
+                  className="btn btn-sm icon-btn-toolbar"
+                  title="Insert footnote"
+                  onMouseDown={(e) => {
+                    e.preventDefault()
+                    captureRange()
+                  }}
+                  onClick={insertFootnote}
+                >
+                  <Icon name="footnote" />
+                </button>
                 <span className="toolbar-divider" />
                 <button className="btn btn-sm icon-btn-toolbar" title="Send selection to the graveyard" onMouseDown={(e) => e.preventDefault()} onClick={sendSelectionToGraveyard}>
                   <Icon name="graveyard" />
@@ -585,6 +619,8 @@ export function EssayWorkspace({ essayId, onBack }: { essayId: string; onBack: (
               onTitleChanged={reload}
               focusTitleId={focusTitleId}
               onTitleFocused={() => setFocusTitleId(null)}
+              focusFootnoteId={focusFootnoteId}
+              onFootnoteFocused={() => setFocusFootnoteId(null)}
               commentMode={commentMode}
             />
           </div>

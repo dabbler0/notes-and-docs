@@ -5,9 +5,11 @@ library of cited sources (PDFs with BibTeX + extracted text, or bare
 citations), a quote bank of excerpts saved out of those PDFs independently
 of any one essay, and a draft editor — presented as one continuous,
 collapsible document rather than a file tree — with an explicit per-section
-version history, inline commenting, inline citation/quote insertion, and a
-per-essay "graveyard" for text cut from the document without discarding it
-outright.
+version history, inline commenting, inline citation/quote insertion,
+footnotes, and a per-essay "graveyard" for text cut from the document
+without discarding it outright. An existing paper can also be brought in
+wholesale by importing a zipped LaTeX project, converted into that same
+section-tree shape.
 
 Runs entirely in the browser, local-first — no server of its own. Data
 lives in **IndexedDB** on every device, both structured records and PDF
@@ -39,24 +41,28 @@ npm test             # runs the sync test suite (vitest) — no network/emulator
   Drive-backed `Backend` would slot in without touching any other module —
   see the comment at the top of that file.
 - `src/models/` — data types plus repository functions (`sourcesRepo.ts`,
-  `essaysRepo.ts`, `quoteBankRepo.ts`, `graveyardRepo.ts`) that implement
-  the actual domain logic on top of the storage layer.
+  `essaysRepo.ts`, `quoteBankRepo.ts`, `graveyardRepo.ts`,
+  `latexImportRepo.ts`) that implement the actual domain logic on top of
+  the storage layer.
 - `src/lib/` — BibTeX parsing, PDF text extraction/rendering (pdf.js), DOM
   Range helpers used by the editor's citation/quote/split actions,
   `childMarkers.ts` (how a node's content embeds its subsections — see
   below), `treeNumbering.ts` ("Section 2.3.1"-style placeholder titles for
-  newly split-off sections), and `export.ts` (Markdown/LaTeX conversion for
-  the export dialog — see below; the LaTeX path is zipped up with the
-  `jszip` package, the one runtime dependency added purely for export).
+  newly split-off sections), `export.ts` (Markdown/LaTeX conversion for the
+  export dialog — see below; the LaTeX path is zipped up with the `jszip`
+  package, also used for backups and for `latexImport.ts` — the parser
+  behind importing a zipped LaTeX project, see "Importing a LaTeX project"
+  below).
 - `src/components/sources/` and `src/components/essays/` — the UI.
   `EssayWorkspace.tsx` is the whole document: a sticky toolbar acting on
   "whichever section currently has the cursor," plus a recursive
   `SectionBlock.tsx` per section (its own small `contentEditable` shards,
-  its own collapse state, its own version-history button). `src/components/Icon.tsx`
-  is the one small hand-drawn (inline SVG, no icon font or CDN — see its
-  own doc comment) icon set used for cite/quote/link/subsection/underline/
-  lists in the editor toolbar and for comment/export/backup/sync wherever
-  they appear, instead of emoji or a bare text label.
+  its own collapse state, its own version-history button, its own
+  footnotes list). `src/components/Icon.tsx` is the one small hand-drawn
+  (inline SVG, no icon font or CDN — see its own doc comment) icon set used
+  for cite/quote/link/subsection/footnote/underline/lists in the editor
+  toolbar and for comment/graveyard/export/import/backup/sync wherever they
+  appear, instead of emoji or a bare text label.
 - `src/sync/` and `src/components/sync/` — the optional cross-device sync
   layer: `firebaseClient.ts` (Google sign-in plus the Firestore/Auth
   connections), `syncEngine.ts` (the actual push/pull pass), `account.ts`
@@ -287,6 +293,29 @@ merged elsewhere): the title snapshot is what keeps a fragment reading
 sensibly once that's happened, since the live node title obviously isn't
 there to ask anymore.
 
+**Footnotes.** "Insert footnote" (a small baseline with a raised digit)
+drops an empty `<sup class="footnote-ref" data-footnote-id>` marker at the
+cursor and hands focus straight to the new footnote's own body, listed
+right under that section's text, ready to type into immediately — the same
+"create it, then focus its editable surface" shape "Split into subsection"
+already uses for a new child's title. A footnote's actual content lives in
+`EssayNode.footnotes` (see the `Footnote` type in `models/types.ts`), not
+inline in the marker itself — the marker is just a reference, exactly like
+a subsection marker references a child node — so numbering is never stored
+anywhere: it's purely how many footnote-ref markers precede this one in
+the node's own content, computed with a CSS counter scoped to each node's
+own `.section-body` for the inline superscripts, and independently for the
+list underneath (see the CSS's own comment on why those are deliberately
+*separate* counters, not one shared one). Deleting a footnote (the "×" on
+its own row) removes both its record and its marker, if the marker's still
+actually mounted. Footnotes aren't versioned — there's no per-footnote
+history the way a node's own text has `versions` — they just always reflect
+whatever's currently in `node.footnotes`, comparing-a-version or not.
+`node.footnotes` is optional precisely so a node saved before this feature
+existed doesn't need any migration: every read goes through
+`essaysRepo.nodeFootnotes()`, which treats "the field is absent" and "the
+field is an empty array" identically everywhere in the app, export included.
+
 **Linking to a source.** "🔗 Link to source" wraps the current selection
 (or, with nothing selected, the source's own title) in a real hyperlink to
 that source's URL — picked from the same source-search dialog citations
@@ -306,17 +335,31 @@ what's exported matches what's on screen rather than some separately
 versioned snapshot:
 - **Markdown** — headings by depth, bold/italic, links, and blockquotes;
   citations keep their plain visible label text rather than becoming
-  footnotes.
+  footnotes. Real footnotes (from `node.footnotes`, not citations) *do*
+  become proper Markdown footnotes — `[^fn3]` inline, with a `[^fn3]: ...`
+  definition collected at the very end of the document under a `---` rule.
+  Labels are a document-wide running count (`fn1`, `fn2`, ...), never the
+  per-node-local number the editor itself shows next to a footnote — since
+  a real Markdown renderer matches `[^label]` document-wide, reusing small
+  per-node numbers as labels would silently conflate two different
+  sections' own "footnote 1."
 - **PDF** — the exact same Markdown, rendered back to a printable HTML
   page in a new tab, which then opens the browser's own print dialog;
   "Save as PDF" there is the actual PDF-generation step, so this needs no
-  PDF-writing library of its own.
+  PDF-writing library of its own. `markdownToHtml()` understands its own
+  sibling function's footnote syntax specifically (not general Markdown
+  footnote syntax) — an inline `[^label]` becomes a superscript link, and
+  the trailing `[^label]: ...` lines become a numbered list at the very
+  end of the page, both connected by a matching `#fn-label` anchor.
 - **LaTeX project** — a `main.tex` using `\section`/`\subsection`/
   `\subsubsection` and, past that depth, `\paragraph`/`\subparagraph`, with
   citations rendered as `\cite` or `\footcite` (a dialog toggle — the
   latter switches the preamble to `biblatex`/`\printbibliography` instead
   of `natbib`/`\bibliography`) plus a `references.bib` built from exactly
-  the sources actually cited in the essay, zipped together with JSZip.
+  the sources actually cited in the essay, zipped together with JSZip. Real
+  footnotes round-trip the cleanest of the three formats here: LaTeX's own
+  `\footnote{...}` is inline and self-numbering, so a footnote-ref marker
+  converts straight to one, no separate label or definition needed.
 
 **Making a new version.** Clicking a section's version pill (`vN`) is a
 single explicit action, not a dialog: it freezes the current text into a
@@ -352,6 +395,66 @@ clearing anything. That's the only difference from clicking the version
 pill itself: browsing history is just look-don't-touch, so reverting to
 something several versions back doesn't require re-living every version
 in between the way the version-pill's freeze-and-clear action would.
+
+## Importing a LaTeX project
+
+"Import LaTeX project" (Drafts tab) turns a zipped `.tex`/`.bib` project
+into a real draft — the mirror image of the LaTeX export above, but
+necessarily far less exact: it's a small, deliberately narrow parser
+(`lib/latexImport.ts`), not a LaTeX engine, built to make sense of what a
+typical single-author paper's own `.tex` file actually contains, not the
+whole language. Anything it doesn't recognize degrades to plain text
+rather than being silently dropped.
+
+- **Unzipping and file selection** happen in the browser (JSZip, same
+  library the backup/export features already use) — nothing is uploaded
+  anywhere. Every `.bib` file found is concatenated and parsed with the
+  same lenient BibTeX parser "Add a source" uses; every `.tex` file is a
+  candidate for the *main* file, picked by which one actually contains
+  `\begin{document}` (falling back to sheer file size if none do), then
+  the shallowest path, then a conventional name (`main.tex`, `paper.tex`,
+  ...) — see `pickMainTexFile()`.
+- **Sources come first.** Every new bib entry becomes a real `Source`
+  (skipping any whose key already matches an existing local source, so
+  re-importing the same project twice doesn't create duplicates) *before*
+  the `.tex` file is parsed, specifically so `\cite`/`\citep`/`\citet`/
+  `\footcite{key}` can resolve straight to a real citation chip
+  (`citationHtml()`, the exact same one the editor's own "Cite a source"
+  tool inserts) while parsing, rather than needing a separate
+  patch-up pass afterward. An unresolvable key still degrades gracefully —
+  a plain `[key]` in the text plus a warning shown in the import summary —
+  rather than being dropped.
+- **Structure**: `\section`/`\subsection`/`\subsubsection` become nested
+  child nodes (a level skip, e.g. a `\subsubsection` with no enclosing
+  `\subsection`, just nests under the nearest real ancestor instead of
+  fabricating a placeholder one); a `\begin{abstract}` becomes its own
+  leading "Abstract" child if present; `\textbf`/`\textit`/`\emph`/
+  `\underline` and a `quote` environment become their normal editor
+  equivalents (`<b>`/`<i>`/`<u>`/`<blockquote class="quote">`).
+- **Footnotes are the interesting case.** Every `\footnote{...}` is
+  checked against the resolved bibliography *first*: `matchFootnoteToSource()`
+  scores it on whether the footnote's own text mentions a known source's
+  year and/or an author's last name (title-word overlap alone is
+  deliberately never enough, precisely so an ordinary explanatory aside
+  that happens to share a word with someone's title doesn't get
+  misidentified) — a footnote that reads like a manually-typed citation
+  becomes a real one; only a footnote that doesn't clear that bar becomes
+  an actual footnote (a fresh `Footnote` entry plus its `<sup>` marker, the
+  same shape "Insert footnote" produces by hand). A `\footcite{key}` is
+  never run through this heuristic at all — it already names a bibtex key
+  explicitly, so it's just a citation, resolved the same way `\cite` is.
+- **What's imported** (a summary shown after the fact): how many
+  bibliography entries were added vs. already existed locally, how many
+  footnotes were recognized as citations vs. kept as real footnotes, and
+  any warnings (an unresolved citation key, mainly).
+- **Persistence** (`models/latexImportRepo.ts`) writes the parsed tree
+  directly as `Essay`/`EssayNode` records with ids already assigned during
+  parsing (rather than going through `essaysRepo.createEssay`/
+  `createChildNode`, which each mint their own) — the one part of the
+  whole flow that isn't a pure function, kept as thin as possible around
+  the actual parser so the parser itself (unzipping and DB writes aside)
+  stays fully unit-testable without a database at all
+  (`lib/__tests__/latexImport.test.ts`).
 
 ## Mobile layout
 
@@ -626,8 +729,10 @@ quote bank/graveyard section above), an account that predates the quote
 bank/graveyard entirely syncing cleanly and then adopting them without
 issue (both devices simply never write to those collections until one of
 them starts — nothing about a collection with zero prior documents needs
-special-casing), and overlapping concurrent `runSyncPass` calls sharing one
-pass instead of double-running (see
+special-casing), a node saved before footnotes existed (no `footnotes`
+field on the object at all, not even an empty array) syncing cleanly and
+then having a footnote added on top of it, and overlapping concurrent
+`runSyncPass` calls sharing one pass instead of double-running (see
 `syncEngine.ts`'s own `inFlightPass`), are covered by an automated test
 suite (`npm test`, `src/sync/__tests__/`) that runs the real sync code
 against in-memory fakes of Firestore, Auth, and each device's own local

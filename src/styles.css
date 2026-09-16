@@ -804,6 +804,87 @@ select {
   cursor: pointer;
 }
 
+/* Footnote numbering is a pure CSS counter, not anything stored — a
+   footnote-ref marker carries no digit of its own (see Footnote's own doc
+   comment in models/types.ts), so adding/removing/reordering one never
+   leaves a stale number sitting on some other one. Scoped to each node's
+   own .section-body, which is exactly the same scope node.footnotes is
+   defined over — a nested child section's own .section-body resets the
+   counter again, so nesting doesn't bleed one node's numbering into
+   another's. */
+.section-body {
+  counter-reset: footnote;
+}
+
+.node-content sup.footnote-ref {
+  counter-increment: footnote;
+  cursor: default;
+}
+
+.node-content sup.footnote-ref::after {
+  content: counter(footnote);
+  color: var(--accent);
+}
+
+.node-footnotes {
+  /* Its own counter scope, separate from .section-body's — this list is
+     numbered by each footnote's position in node.footnotes (creation
+     order), the inline markers by their position in the text (text
+     order). The two agree in the overwhelmingly common case (a footnote's
+     marker lands right where it was inserted, at the moment it was
+     created), but nothing here tries to force them to match if someone's
+     since rearranged the text those markers sit in — sharing one counter
+     across both regions would make that worse, not better, by having
+     *both* numbers drift instead of just one. */
+  counter-reset: footnote-list;
+  margin: 10px 0 4px;
+  padding-top: 8px;
+  border-top: 1px dashed var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.footnote-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--ink-dim);
+}
+
+.footnote-item::before {
+  content: counter(footnote-list, decimal) '.';
+  counter-increment: footnote-list;
+  flex-shrink: 0;
+  padding-top: 1px;
+}
+
+.footnote-content {
+  flex: 1;
+  min-width: 0;
+  outline: none;
+}
+
+.footnote-content:focus {
+  color: var(--ink);
+}
+
+.footnote-content p {
+  margin: 0 0 4px;
+}
+
+.footnote-delete {
+  flex-shrink: 0;
+  font-size: 15px;
+  line-height: 1;
+  color: var(--ink-dim);
+}
+
+.footnote-delete:hover {
+  color: var(--red, #a23b2c);
+}
+
 /* --- continuous document view (section headers, collapse, faint dividers) --- */
 
 .doc-toolbar {

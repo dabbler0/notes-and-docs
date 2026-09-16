@@ -1,7 +1,7 @@
 import { backend } from '../storage'
 import { id } from '../lib/id'
 import { getChildIds, insertMarkerInContent, removeMarkerFromContent, type MarkerPlacement } from '../lib/childMarkers'
-import type { Comment, Essay, EssayNode, NodeVersion } from './types'
+import type { Comment, Essay, EssayNode, Footnote, NodeVersion } from './types'
 
 const ESSAYS = 'essays'
 const NODES = 'nodes'
@@ -129,6 +129,31 @@ export async function setCommentResolved(node: EssayNode, versionId: string, com
   const comment = version?.comments.find((c) => c.id === commentId)
   if (!comment) return
   comment.resolved = resolved
+  await saveNode(node)
+}
+
+/** `node.footnotes` is optional (absent on any node saved before footnotes existed) — this is the one place that reads it, so "absent" and "empty" are treated identically everywhere else. */
+export function nodeFootnotes(node: EssayNode): Footnote[] {
+  return node.footnotes ?? []
+}
+
+/** Appends a new, empty footnote to the node and returns it — the caller inserts its `<sup class="footnote-ref" data-footnote-id>` marker into the live content separately (see EssayWorkspace's `insertFootnote`) and saves the node itself once both changes are made. */
+export function addFootnote(node: EssayNode): Footnote {
+  const footnote: Footnote = { id: id(), content: '' }
+  node.footnotes = [...nodeFootnotes(node), footnote]
+  return footnote
+}
+
+export async function updateFootnoteContent(node: EssayNode, footnoteId: string, content: string): Promise<void> {
+  const footnote = nodeFootnotes(node).find((f) => f.id === footnoteId)
+  if (!footnote) return
+  footnote.content = content
+  await saveNode(node)
+}
+
+/** Removes a footnote from the node's list — the caller is responsible for also removing its marker from the live content (see EssayWorkspace's `deleteFootnote`), same division of labor as `addFootnote`. */
+export async function deleteFootnote(node: EssayNode, footnoteId: string): Promise<void> {
+  node.footnotes = nodeFootnotes(node).filter((f) => f.id !== footnoteId)
   await saveNode(node)
 }
 

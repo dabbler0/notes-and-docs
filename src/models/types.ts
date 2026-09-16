@@ -66,6 +66,24 @@ export interface NodeVersion {
   label?: string
 }
 
+/**
+ * A footnote body, referenced from within a node's own content by a
+ * `<sup class="footnote-ref" data-footnote-id>` marker sitting wherever the
+ * footnote was inserted — the same "marker in the text, real content kept
+ * elsewhere" shape `childMarkers.ts` uses for subsections, chosen for the
+ * same reason: the footnote's own body is ordinary editable HTML, not a
+ * plain string, and shouldn't have to live inline in the middle of running
+ * text to be edited. Numbering is deliberately not stored here — it's
+ * however many footnote-ref markers precede this one in the node's own
+ * content, computed at render/export time (via a CSS counter in the editor,
+ * a running counter in export.ts) — so reordering, inserting, or deleting a
+ * footnote never leaves a stale number sitting on some other one.
+ */
+export interface Footnote {
+  id: string
+  content: string
+}
+
 export interface EssayNode {
   id: string
   essayId: string
@@ -82,6 +100,15 @@ export interface EssayNode {
    * simply "whatever markers this content currently contains."
    */
   draftContent: string
+  /**
+   * This node's own footnotes, referenced from `draftContent` (see
+   * `Footnote`'s own doc comment). Absent on any node saved before
+   * footnotes existed — always read through `essaysRepo.nodeFootnotes()`
+   * rather than directly, so that older data doesn't need an explicit
+   * migration pass: "no footnotes field" and "an empty footnotes array"
+   * are treated identically everywhere this is read.
+   */
+  footnotes?: Footnote[]
   createdAt: number
   updatedAt: number
   /** Tombstone — see the note on Source.deleted. */
