@@ -65,13 +65,18 @@ npm test             # runs the sync test suite (vitest) — no network/emulator
   appear, instead of emoji or a bare text label.
 - `src/sync/` and `src/components/sync/` — the optional cross-device sync
   layer: `firebaseClient.ts` (Google sign-in plus the Firestore/Auth
-  connections), `syncEngine.ts` (the actual push/pull pass), `account.ts`
-  (the local, per-Google-account encryption key — never uploaded) and
-  `accountMeta.ts` (the remote key-fingerprint check, and account reset),
-  `firebaseConfig.ts` (what's stored locally to make sync possible at all),
-  `autoSync.ts` (the polling loop), `qr.ts` (pairing-code generation), and
-  `SyncSettingsDialog.tsx`/`QrScanner.tsx` for the UI. See "Syncing across
-  devices" below for the full design and setup steps.
+  connections), `syncEngine.ts` (the actual push/pull pass, plus the
+  automatic encryption-policy migration described below), `account.ts`
+  (the local, per-Google-account encryption key — never uploaded),
+  `accountMeta.ts` (the remote key-fingerprint check and account reset),
+  `collections.ts` (the list of synced collections and the current
+  encryption-policy version — its own small module purely so
+  `accountMeta.ts` and `syncEngine.ts` can each use it without importing
+  each other), `firebaseConfig.ts` (what's stored locally to make sync
+  possible at all), `autoSync.ts` (the polling loop), `qr.ts`
+  (pairing-code generation), and `SyncSettingsDialog.tsx`/`QrScanner.tsx`
+  for the UI. See "Syncing across devices" below for the full design and
+  setup steps.
 - `src/test/` — in-memory fakes for Firestore, Auth, and a device's local
   storage, plus a small `deviceHarness.ts` that assembles them into
   simulated "devices" sharing one fake cloud; `src/sync/__tests__/` uses
@@ -632,21 +637,52 @@ The key/bundle payload transferred by QR/file/paste is just `{ key, v }` —
 the key alone; which account it belongs to is Google sign-in's job, not
 the bundle's.
 
-**What's encrypted, what isn't.** A node's `draftContent` and its full
-`versions` array (so: the actual prose, and every comment attached to any
-version) are AES-256-GCM encrypted client-side before being written to
-Firestore, as one `_enc: {iv, data}` field; PDF bytes are encrypted the
-same way before being chunked into Firestore documents (see "PDFs through
-Firestore" below), with the IV kept on the manifest document. Left as
-plaintext metadata: essay/section titles, timestamps, a source's BibTeX
-fields and free-text note, and which node has which parent (implicit in
-`draftContent`'s markers, which — being inside a node's own content — are
-covered by the same encryption as the prose). This split is deliberate, not
-just laziness: it's what lets a device list your essays/sources and know
-what's changed without decrypting everything, and keeps sync payloads
-small. It also means a source's comment field and a essay's title are
-readable by anyone who can read your Firestore data, encryption or not —
-worth knowing if either would contain something sensitive.
+**What's encrypted, what isn't.** The policy (`SENSITIVE_FIELDS` in
+`syncEngine.ts`) is: every user-editable field is AES-256-GCM encrypted
+client-side before being written to Firestore, bundled as one `_enc:
+{iv, data}` field per document — an essay's title, a section's title and
+its `draftContent`/`versions` (so: the actual prose, and every comment
+attached to any version), a source's whole BibTeX entry plus its
+free-text comment and its PDF's original filename, a quote bank entry's
+text/annotation/page number, a footnote's or graveyard fragment's own
+HTML. PDF bytes are encrypted the same way before being chunked into
+Firestore documents (see "PDFs through Firestore" below), with the IV
+kept on the manifest document. Left as plaintext metadata: `id` and other
+system-generated references — a node's `essayId`, an essay's
+`rootNodeId`, a quote's `sourceId`, a PDF's `pdfBlobId`, and so on, none
+of which are ever user-typed content, and which node has which parent
+(implicit in `draftContent`'s markers, themselves inside the encrypted
+prose) — plus `createdAt`/`updatedAt`/the deletion tombstone, which are
+system-stamped rather than user-entered, and which for `updatedAt`
+specifically *has* to stay plaintext no matter what: Firestore needs to
+filter and sort on it server-side for incremental sync's own
+`where('updatedAt', '>', cursor)` queries to work at all. This split is
+deliberate, not laziness: it's what lets a device list which local docs
+are dirty and pull only what's changed without decrypting everything
+first, while still keeping every piece of actual user content — not just
+the prose — unreadable to anyone who can merely read your Firestore data.
+
+This wasn't always the policy — titles, a source's BibTeX/comment/PDF
+filename, and a quote's page number used to sit in that same plaintext
+metadata, unencrypted (`CURRENT_ENCRYPTION_VERSION` in
+`sync/collections.ts` — bumped to 2 for this tightening, with the version
+history documented right there). Rather than leaving already-synced
+accounts stuck with old, less-encrypted remote data forever, each
+account's own remote `meta/account` doc records the encryption version
+its data is *confirmed* fully in; the next device to sign in and sync
+checks that first, and if it's behind, runs `migrateAccountEncryption()`
+before anything else that pass — a full read of every document in every
+synced collection, decoding each one (already has to tolerate a doc that's
+entirely old-shape, entirely new-shape, or any mix, since a doc can easily
+have been pushed once years ago and never touched since) and re-encoding
+it under the current policy, then writing it straight back. `updatedAt`
+(and everything else that was never sensitive) passes through completely
+unchanged, so this can never look like a real edit to any other device's
+last-write-wins comparison — only the *shape* of the ciphertext changes,
+never the content or its timestamp. This costs one full collection scan
+per account, the first time any device syncs after the policy changes —
+never once per device, since the migrated version is recorded remotely
+the moment it finishes.
 
 **PDFs through Firestore.** A Firestore document caps out at ~1MiB, so a
 PDF (encrypted, then base64-encoded) is split into 700,000-character
@@ -765,10 +801,18 @@ issue (both devices simply never write to those collections until one of
 them starts — nothing about a collection with zero prior documents needs
 special-casing), a node saved before footnotes existed (no `footnotes`
 field on the object at all, not even an empty array) syncing cleanly and
-then having a footnote added on top of it, and overlapping concurrent
+then having a footnote added on top of it, overlapping concurrent
 `runSyncPass` calls sharing one pass instead of double-running (see
-`syncEngine.ts`'s own `inFlightPass`), are covered by an automated test
-suite (`npm test`, `src/sync/__tests__/`) that runs the real sync code
+`syncEngine.ts`'s own `inFlightPass`), that a fresh push never leaves any
+user-editable field in plaintext (`src/sync/__tests__/encryptionPolicy.test.ts`
+inspects the raw fake-Firestore document directly, not just what comes
+back out through decryption), and the encryption-policy migration itself —
+a hand-seeded account in the old, partially-plaintext shape gets fully
+re-encrypted on its next sync with `updatedAt` untouched, the remote
+`encryptionVersion` recorded afterward so a second sync doesn't redundantly
+re-touch it, and a brand-new account never running the migration at all —
+are covered by an automated test suite (`npm test`, `src/sync/__tests__/`)
+that runs the real sync code
 against in-memory fakes of Firestore, Auth, and each device's own local
 storage (`src/test/`) — no network or emulator process needed, so it runs
 in a couple of seconds and stays easy to extend with more scenarios as

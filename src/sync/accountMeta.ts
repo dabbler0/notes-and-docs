@@ -10,10 +10,13 @@
  */
 import { collection, deleteDoc, doc, getDoc, getDocs, setDoc } from 'firebase/firestore'
 import { firestoreDb } from './firebaseClient'
+import { CURRENT_ENCRYPTION_VERSION, SYNCED_COLLECTIONS } from './collections'
 
 export interface AccountMeta {
   keyFingerprint: string
   createdAt: number
+  /** Which encryption-field policy this account's remote data is fully in — see the constant's own doc comment in `collections.ts`. Absent on any meta doc written before this field existed, which syncEngine.ts treats as version 1 and migrates from automatically. */
+  encryptionVersion?: number
 }
 
 function metaDocRef(uid: string) {
@@ -25,11 +28,17 @@ export async function getAccountMeta(uid: string): Promise<AccountMeta | null> {
   return snap.exists() ? (snap.data() as AccountMeta) : null
 }
 
-export async function setAccountMeta(uid: string, keyFingerprint: string): Promise<void> {
-  await setDoc(metaDocRef(uid), { keyFingerprint, createdAt: Date.now() })
+/** `encryptionVersion` defaults to the current policy — correct for the one real caller (bootstrapping a brand-new account, which by definition has no legacy remote data to migrate from) and for tests that don't care about it. Pass an older number to simulate a pre-existing account for migration tests. */
+export async function setAccountMeta(uid: string, keyFingerprint: string, encryptionVersion: number = CURRENT_ENCRYPTION_VERSION): Promise<void> {
+  await setDoc(metaDocRef(uid), { keyFingerprint, createdAt: Date.now(), encryptionVersion })
 }
 
-const TOP_COLLECTIONS = ['essays', 'nodes', 'sources'] as const
+/** Records that this account's remote data has been confirmed fully migrated to `version` — a merge write, so it never disturbs `keyFingerprint`/`createdAt`. */
+export async function markEncryptionVersion(uid: string, version: number): Promise<void> {
+  await setDoc(metaDocRef(uid), { encryptionVersion: version }, { merge: true })
+}
+
+const TOP_COLLECTIONS = SYNCED_COLLECTIONS
 
 /**
  * The "I lost my key file" last resort: deletes every remote document this

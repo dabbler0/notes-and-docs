@@ -95,9 +95,16 @@ export function query(col: ColRef, ...clauses: WhereClause[]): FakeQuery {
   return { __isFakeQuery: true, col, clauses }
 }
 
-export async function setDoc(ref: DocRef, data: Record<string, unknown>): Promise<void> {
+/** `options.merge` mirrors real Firestore's shallow top-level merge (not a deep merge, not field-path merge — the one form this app's own code actually uses, in accountMeta.ts's markEncryptionVersion). Without it, setDoc replaces the whole document, same as real Firestore's own default. */
+export async function setDoc(ref: DocRef, data: Record<string, unknown>, options?: { merge?: boolean }): Promise<void> {
   assertNoUndefined(data, ref.path)
-  __getFakeCloud().set(ref.path, structuredClone(data))
+  const cloud = __getFakeCloud()
+  if (options?.merge) {
+    const existing = cloud.get(ref.path)
+    cloud.set(ref.path, { ...(existing ? structuredClone(existing) : {}), ...structuredClone(data) })
+  } else {
+    cloud.set(ref.path, structuredClone(data))
+  }
 }
 
 interface DocSnap {

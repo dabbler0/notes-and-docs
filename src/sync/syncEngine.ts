@@ -54,24 +54,32 @@
  * way a Firestore transaction would), or garbage collection of a deleted
  * source's now-orphaned blob chunk documents.
  */
-import { collection, doc, getDoc, getDocs, query, setDoc, where } from 'firebase/firestore'
+import { collection, doc, getDoc, getDocs, query, setDoc, where, type Firestore } from 'firebase/firestore'
 import { currentUser, firestoreDb } from './firebaseClient'
 import { getLocalKey } from './account'
-import { getAccountMeta, setAccountMeta } from './accountMeta'
+import { getAccountMeta, markEncryptionVersion, setAccountMeta } from './accountMeta'
+import { CURRENT_ENCRYPTION_VERSION, SYNCED_COLLECTIONS, type SyncedCollection } from './collections'
 import { b64ToBuf, bufToB64, decryptBytes, decryptJson, encryptBytes, encryptJson, type EncryptedField } from '../lib/crypto'
 import { backend } from '../storage'
 import { notifySyncApplied } from './syncEvents'
 import type { Source } from '../models/types'
 
-const SYNCED_COLLECTIONS = ['essays', 'nodes', 'sources', 'quotes', 'graveyard'] as const
-type SyncedCollection = (typeof SYNCED_COLLECTIONS)[number]
-
-/** Which fields of each collection's docs are the sensitive payload that gets encrypted, vs. left as plaintext metadata — kept unencrypted so the app can list/sort essays and sources, and so a device only has to decrypt the records it actually opens. */
+/**
+ * Which fields of each collection's docs are the sensitive payload that
+ * gets encrypted, vs. left as plaintext metadata. The policy (see
+ * CURRENT_ENCRYPTION_VERSION's own doc comment for the version history):
+ * every user-editable field is encrypted; the only things left as
+ * plaintext metadata are system-generated ids/references and the
+ * system-stamped createdAt/updatedAt/deleted fields — never something a
+ * user typed. `updatedAt` in particular *has* to stay plaintext no matter
+ * what: Firestore needs to filter/sort on it server-side for incremental
+ * sync's own `where('updatedAt', '>', cursor)` queries to work at all.
+ */
 const SENSITIVE_FIELDS: Record<SyncedCollection, string[]> = {
-  essays: [],
-  nodes: ['draftContent', 'versions', 'footnotes'],
-  sources: ['pageTexts'],
-  quotes: ['quoteText', 'annotation'],
+  essays: ['title'],
+  nodes: ['title', 'draftContent', 'versions', 'footnotes'],
+  sources: ['bibtex', 'comment', 'pdfFileName', 'pageTexts'],
+  quotes: ['quoteText', 'annotation', 'page'],
   graveyard: ['html', 'nodeTitle'],
 }
 
@@ -178,6 +186,34 @@ async function decodeFromRemote(remote: Record<string, unknown>, cryptoKey: Cryp
   return metadata as LocalDoc
 }
 
+/**
+ * Re-encrypts every remote document in every synced collection under the
+ * *current* SENSITIVE_FIELDS policy, regardless of any individual doc's
+ * own `updatedAt` — the normal incremental push/pull loops below only
+ * ever touch a doc that's actually changed since some watermark, so
+ * anything nobody has edited since before the policy last changed would
+ * otherwise sit in its old, less-encrypted shape forever. `decodeFromRemote`
+ * already has to handle a doc that's entirely unencrypted metadata,
+ * entirely the new shape, or any mix of the two (a doc can easily have
+ * been pushed once under an older policy and never touched again) — so
+ * running every doc through decode-then-encode is the migration: whatever
+ * used to sit as plaintext metadata but is sensitive under the current
+ * policy moves into `_enc`, and everything else (most importantly
+ * `updatedAt`) passes through completely unchanged, so this can never
+ * look like a real edit to any other device's last-write-wins comparison.
+ */
+async function migrateAccountEncryption(db: Firestore, uid: string, cryptoKey: CryptoKey, onProgress?: (message: string) => void): Promise<void> {
+  for (const col of SYNCED_COLLECTIONS) {
+    onProgress?.(`Upgrading ${col} to the current encryption policy…`)
+    const snap = await getDocs(collection(db, 'accounts', uid, col))
+    for (const docSnap of snap.docs) {
+      const decoded = await decodeFromRemote(docSnap.data(), cryptoKey)
+      const reencoded = await encodeForRemote(col, decoded, cryptoKey)
+      await setDoc(docSnap.ref, reencoded)
+    }
+  }
+}
+
 // ---- PDF blobs, chunked to fit Firestore's ~1MiB-per-document cap -------
 //
 // A blob is stored as one manifest doc (`accounts/{uid}/blobs/{blobId}`,
@@ -238,12 +274,22 @@ async function runSyncPassNow(onProgress?: (message: string) => void): Promise<S
       "The encryption key on this device doesn't match the one this account was already set up with elsewhere. Re-import the correct key (QR code or key file) from Sync settings — or, only as a last resort, reset the account there.",
     )
   }
+  const cryptoKey = localKey.cryptoKey
   if (!meta) {
     // First sync ever for this account, from any device — this device's
-    // key becomes the account's canonical one from here on.
+    // key becomes the account's canonical one from here on, and there's
+    // nothing remote yet to migrate: this starts already at the current
+    // encryption version.
     await setAccountMeta(uid, localKey.fingerprint)
+  } else if ((meta.encryptionVersion ?? 1) < CURRENT_ENCRYPTION_VERSION) {
+    // An account that predates the current field-encryption policy (or
+    // predates encryptionVersion existing at all) — bring its remote data
+    // up to date before doing anything else this pass, so the push/pull
+    // loops below always see (and only ever have to write) the current
+    // shape.
+    await migrateAccountEncryption(db, uid, cryptoKey, onProgress)
+    await markEncryptionVersion(uid, CURRENT_ENCRYPTION_VERSION)
   }
-  const cryptoKey = localKey.cryptoKey
 
   const cursors = loadCursors()
   const passStartedAt = Date.now()

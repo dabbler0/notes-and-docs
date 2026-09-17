@@ -83,7 +83,7 @@ export interface Device {
   forgetLocalKey(): void
 
   getAccountMeta(): Promise<AccountMeta | null>
-  setAccountMeta(fingerprint: string): Promise<void>
+  setAccountMeta(fingerprint: string, encryptionVersion?: number): Promise<void>
   wipeRemoteAccountData(): Promise<void>
 
   sync(onProgress?: (message: string) => void): Promise<SyncResult>
@@ -180,7 +180,7 @@ export async function newDevice(config = DEFAULT_CONFIG): Promise<Device> {
     forgetLocalKey: () => withStorage(() => accountMod.forgetLocalKey(device.uid!)),
 
     getAccountMeta: () => withStorageAsync(() => accountMetaMod.getAccountMeta(device.uid!)),
-    setAccountMeta: (fp) => withStorageAsync(() => accountMetaMod.setAccountMeta(device.uid!, fp)),
+    setAccountMeta: (fp, encryptionVersion) => withStorageAsync(() => accountMetaMod.setAccountMeta(device.uid!, fp, encryptionVersion)),
     wipeRemoteAccountData: () => withStorageAsync(() => accountMetaMod.wipeRemoteAccountData(device.uid!)),
 
     sync: (onProgress) => withStorageAsync(() => syncEngineMod.runSyncPass(onProgress)),
