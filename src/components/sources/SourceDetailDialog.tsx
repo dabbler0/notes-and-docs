@@ -19,6 +19,7 @@ export function SourceDetailDialog({
   onClose: () => void
   onChanged: () => void
 }) {
+  const [tab, setTab] = useState<'bibtex' | 'pdf'>(initialPage ? 'pdf' : 'bibtex')
   const [comment, setComment] = useState(source.comment)
   const [page, setPage] = useState(initialPage ?? 1)
   const [editingBibtex, setEditingBibtex] = useState(false)
@@ -107,7 +108,16 @@ export function SourceDetailDialog({
   return (
     <Modal onClose={onClose} wide>
       <h2>{source.bibtex.fields.title || source.bibtex.key}</h2>
-      <div className="side-by-side">
+      <div className="tab-row">
+        <button className={`btn btn-sm${tab === 'bibtex' ? ' btn-primary' : ' btn-ghost'}`} onClick={() => setTab('bibtex')}>
+          BibTeX &amp; notes
+        </button>
+        <button className={`btn btn-sm${tab === 'pdf' ? ' btn-primary' : ' btn-ghost'}`} onClick={() => setTab('pdf')}>
+          PDF &amp; quotes
+        </button>
+      </div>
+
+      {tab === 'bibtex' ? (
         <div>
           <div className="field-header-row">
             <h4>BibTeX</h4>
@@ -148,6 +158,7 @@ export function SourceDetailDialog({
             Delete source
           </button>
         </div>
+      ) : (
         <div>
           <div className="field-header-row">
             <h4>PDF</h4>
@@ -200,7 +211,7 @@ export function SourceDetailDialog({
             <p className="muted">No PDF attached — this source is BibTeX + comment only.</p>
           )}
         </div>
-      </div>
+      )}
       <div className="modal-actions">
         <button className="btn" onClick={onClose}>
           Close

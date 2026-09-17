@@ -1542,6 +1542,12 @@ select {
   position: relative;
   box-shadow: var(--shadow-soft);
   background: white;
+  max-width: 100%;
+}
+
+.pdf-viewer {
+  max-width: 100%;
+  overflow-x: auto;
 }
 
 .pdf-text-layer {

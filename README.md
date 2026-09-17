@@ -107,6 +107,18 @@ believe there's nothing left to push. The old blob is only deleted locally
 once the new one is safely stored. Either way, `updateSource` bumps
 `updatedAt`, so the edit propagates through sync like any other change.
 
+The detail dialog itself (`SourceDetailDialog.tsx`) splits BibTeX/comment
+editing and PDF viewing/quoting into two tabs ("BibTeX & notes" and "PDF &
+quotes") rather than showing them side by side. They used to share a
+`.side-by-side` two-column layout, but a PDF page is rendered at a fixed
+size and doesn't shrink to fit a column the way text does, so a wide page
+would overflow its half of the dialog and overlap the BibTeX pane next to
+it. Giving each concern the full dialog width instead removes the
+constraint that caused the overlap in the first place. Opening the dialog
+with `initialPage` set (as the Quotes tab's "View in source" link does)
+opens straight to the PDF tab, since there's no reason to land on BibTeX
+first when the whole point was to jump to a specific page.
+
 **Essay trees & versioning.** An essay is a tree of `EssayNode`s (sections/
 subsections). Each node has:
 - `draftContent` — a live, freely-editable working copy of its own text.
