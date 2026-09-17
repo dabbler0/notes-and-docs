@@ -480,10 +480,22 @@ rather than being silently dropped.
 
 ## Mobile layout
 
-Below a 720px viewport width, three things change; nothing else does —
+Below a 720px viewport width, four things change; nothing else does —
 splitting, versioning, comments, citations, and export all work exactly
 the same way on mobile as on desktop.
 
+- **The app-level topbar (brand, tabs, Backup/Sync) wraps onto two rows
+  instead of one.** With four tabs, the single-row layout could run wider
+  than a narrow phone's screen with nothing to indicate it — Backup/Sync
+  would end up positioned off the right edge, reachable only by a
+  horizontal scroll nothing invited you to try. `flex-wrap` on `.topbar`
+  lets the tab row drop to its own line below brand/Backup/Sync (which
+  stay short enough to always fit on the first line together), and that
+  tab row is independently horizontally scrollable in case even four tabs
+  alone don't fit a particularly narrow screen. `.essay-header` reuses the
+  same `.topbar` class but doesn't have a `.tabs` child, so this never
+  visibly changes anything there — its own content (an already-flexible
+  title input) just shrinks to fit rather than needing to wrap.
 - **Every modal is a full-screen view instead.** `Modal.tsx` is the one
   place every dialog in the app goes through (add/detail source, the
   citation/quote/link pickers, export, sync settings), so this is a single

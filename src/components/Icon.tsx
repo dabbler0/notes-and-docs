@@ -53,10 +53,15 @@ export function Icon({ name, size = 18, className }: { name: IconName; size?: nu
         </svg>
       )
     case 'subsection':
+      // A single connected "corner down, then right" arrow — the standard
+      // shorthand for "this becomes a child of the thing above it." An
+      // earlier version drew the arrowhead and the curve as two separate
+      // strokes that didn't actually meet, leaving a visible gap that read
+      // as two unrelated marks rather than one arrow.
       return (
         <svg {...props} {...STROKE}>
-          <polyline points="10 5 15 10 10 15" />
-          <path d="M3 3v6a4 4 0 0 0 4 4h8" />
+          <path d="M6 4v8a4 4 0 0 0 4 4h7" />
+          <polyline points="13 12 17 16 13 20" />
         </svg>
       )
     case 'comment':
@@ -71,22 +76,26 @@ export function Icon({ name, size = 18, className }: { name: IconName; size?: nu
       // needed to read as "laid to rest, not destroyed" rather than the
       // trash-can most editors use for an actual delete. An earlier
       // headstone-arch version read as a padlock at toolbar size; a plain
-      // cross reads unambiguously even at 18px.
+      // cross reads unambiguously even at 18px. Proportions tightened from
+      // the first pass (a too-long top arm made it read as top-heavy) to a
+      // more classic 1:2 top-arm/bottom-arm split.
       return (
         <svg {...props} {...STROKE}>
-          <line x1="12" y1="3" x2="12" y2="17" />
-          <line x1="8" y1="7.5" x2="16" y2="7.5" />
-          <line x1="4" y1="21" x2="20" y2="21" />
+          <line x1="12" y1="4" x2="12" y2="16" />
+          <line x1="8" y1="8" x2="16" y2="8" />
+          <line x1="5" y1="20" x2="19" y2="20" />
         </svg>
       )
     case 'footnote':
       // A baseline (a line of text) with a small raised digit beside it —
       // the same visual shorthand word processors use for "insert a
-      // footnote reference here."
+      // footnote reference here." Pulled the two closer together from the
+      // first pass, where the wide gap between them read as two unrelated
+      // marks rather than "a footnote marker sitting right after some text."
       return (
         <svg {...props} {...STROKE}>
-          <line x1="3" y1="17" x2="13" y2="17" />
-          <text x="18" y="10" fontSize="9.5" fontFamily="Arial, Helvetica, sans-serif" fontWeight="700" textAnchor="middle" fill="currentColor" stroke="none" strokeWidth="0">
+          <line x1="3" y1="15" x2="12" y2="15" />
+          <text x="17" y="11" fontSize="10" fontFamily="Arial, Helvetica, sans-serif" fontWeight="700" textAnchor="middle" fill="currentColor" stroke="none" strokeWidth="0">
             1
           </text>
         </svg>
@@ -168,7 +177,10 @@ export function Icon({ name, size = 18, className }: { name: IconName; size?: nu
       // offset *below* each row's visual center (a standard trick: a
       // digit's cap sits roughly 0.35×font-size above its baseline) works
       // the same on every renderer, no special baseline property needed.
-      const FONT_SIZE = 6.5
+      // Rows sit at the exact same y-positions as 'list-ul's own bullets
+      // (6/12/18, not the first pass's uneven 4.5/12/19.5) so the two
+      // icons read as a matched pair rather than subtly misaligned twins.
+      const FONT_SIZE = 7.5
       const BASELINE_OFFSET = FONT_SIZE * 0.35
       const digit = (n: number, centerY: number) => (
         <text x="4.5" y={centerY + BASELINE_OFFSET} fontSize={FONT_SIZE} fontFamily="Arial, Helvetica, sans-serif" fontWeight="700" textAnchor="middle" fill="currentColor" stroke="none" strokeWidth="0">
@@ -177,12 +189,12 @@ export function Icon({ name, size = 18, className }: { name: IconName; size?: nu
       )
       return (
         <svg {...props} {...STROKE}>
-          <line x1="11" y1="4.5" x2="21" y2="4.5" />
-          <line x1="11" y1="12" x2="21" y2="12" />
-          <line x1="11" y1="19.5" x2="21" y2="19.5" />
-          {digit(1, 4.5)}
+          <line x1="11" y1="6" x2="20" y2="6" />
+          <line x1="11" y1="12" x2="20" y2="12" />
+          <line x1="11" y1="18" x2="20" y2="18" />
+          {digit(1, 6)}
           {digit(2, 12)}
-          {digit(3, 19.5)}
+          {digit(3, 18)}
         </svg>
       )
     }

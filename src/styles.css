@@ -1201,6 +1201,34 @@ select {
   .topbar {
     padding: 10px 14px;
     gap: 10px;
+    /* The app-level topbar (brand + tabs + spacer + Backup/Sync) is too
+       wide to fit one row on a narrow phone once there are four tabs —
+       without this, the row simply overflows and Backup/Sync end up
+       positioned off the right edge of the screen with no way to reach
+       them (no scrollbar, nothing visibly wrong until you look for a
+       button that's silently unreachable). Wrapping lets the tabs drop to
+       their own second row instead, so the row that actually matters for
+       reachability — brand/spacer/Backup/Sync — never has to compete with
+       them for width. `.essay-header` reuses this class too but never
+       wraps in practice: its own content already shrinks (the title input
+       is flex:1) rather than overflowing. */
+    flex-wrap: wrap;
+    row-gap: 8px;
+  }
+
+  /* Pushed onto its own full-width row (see .topbar's own comment above),
+     and independently scrollable so it's never *this* row that reintroduces
+     an unreachable-button problem if four tabs still don't fit even on
+     their own line on a especially narrow screen. */
+  .tabs {
+    order: 5;
+    width: 100%;
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+
+  .tabs::-webkit-scrollbar {
+    display: none;
   }
 
   /* The essay workspace's own header (back / title / comment mode /
@@ -1232,6 +1260,7 @@ select {
   .tab {
     padding: 7px 12px;
     font-size: 13.5px;
+    flex-shrink: 0;
   }
 
   .page-pad {
