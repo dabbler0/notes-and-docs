@@ -563,7 +563,7 @@ export function EssayWorkspace({ essayId, onBack }: { essayId: string; onBack: (
                 </button>
                 <button
                   className="btn btn-sm icon-btn-toolbar"
-                  title="Insert a quote from a PDF"
+                  title="Insert a quote from a source"
                   onMouseDown={(e) => {
                     e.preventDefault()
                     captureRange()

@@ -235,12 +235,15 @@ triggering *another* freeze (and a fresh version) the next time a comment
 gets added in that section, since an anchor mark is metadata about where a
 comment points, not a new revision of the prose.
 
-**Quoting a PDF.** One toolbar button ("Insert a quote from a PDF") opens
-`QuoteInsertDialog` — one quote-*selection* interface with two tabs ("From a
-PDF": pick a source, drag-select text in its embedded `PdfViewer`, or
-type/paste into the textarea instead; "From the quote bank": search and pick
-from whatever's already saved there, see below) feeding two insert
-*actions* at the bottom, since "block or inline" is a question about how the
+**Quoting a source.** One toolbar button ("Insert a quote from a source")
+opens `QuoteInsertDialog` — one quote-*selection* interface with two tabs
+("From a source": pick any source, drag-select text in its embedded
+`PdfViewer` if it has a PDF attached, or type/paste the excerpt straight
+into the textarea either way — a source with no PDF just skips the viewer
+entirely and asks for the quote (and, optionally, a page number) by hand;
+"From the quote bank": search and pick from whatever's already saved there,
+see below) feeding two insert *actions* at the bottom, since "block or
+inline" is a question about how the
 excerpt should land in the document, orthogonal to which excerpt it is —
 asking it twice (once per tab, as two near-duplicate dialogs used to) would
 just be the same question asked in the wrong place. "Insert as block quote"
