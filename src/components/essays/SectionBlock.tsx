@@ -145,7 +145,8 @@ export function SectionBlock({
     }, 500)
   }
 
-  function handleShardInput() {
+  function handleShardInput(e: Event) {
+    autoListify(e as InputEvent)
     const html = reconstructContent(node.id)
     if (html != null) setDirty(html !== head.content)
     scheduleSave()
@@ -488,4 +489,72 @@ function FootnoteRow({
 
 function cssEscapeId(s: string): string {
   return typeof CSS !== 'undefined' && CSS.escape ? CSS.escape(s) : s.replace(/["\\]/g, '\\$&')
+}
+
+const AUTOLIST_BLOCK_TAGS = new Set(['P', 'DIV', 'LI', 'H1', 'H2', 'H3', 'H4', 'H5', 'H6', 'BLOCKQUOTE'])
+const ORDERED_MARKER_RE = /^\d+\.\s$/
+const BULLET_MARKER_RE = /^[-*]\s$/
+
+/** Nearest ancestor that counts as "a line" for autolist purposes — the first block-level element walking up from `node`, or `root` itself if none is found first (a shard's own text often isn't wrapped in a `<p>` at all). */
+function findLineAncestor(node: Node, root: HTMLElement): Node {
+  let el = node.parentNode
+  while (el && el !== root) {
+    if (el.nodeType === Node.ELEMENT_NODE && AUTOLIST_BLOCK_TAGS.has((el as HTMLElement).tagName)) return el
+    el = el.parentNode
+  }
+  return root
+}
+
+/**
+ * "1. " or "- "/"* " typed at the very start of an otherwise-empty line
+ * converts that line into an ordered/unordered list, the same shorthand
+ * most word processors support — checked on every `input` event, but only
+ * actually does anything right when the just-typed character is the
+ * space that completes one of those two markers (`e.data === ' '`), so
+ * this never fires mid-word or while deleting.
+ *
+ * Deliberately DOM-first rather than going through Preact state: this
+ * shard is an uncontrolled `contentEditable` (see the module doc comment
+ * on `persist`/`syncedContent` above for why), so removing the marker
+ * text and calling `execCommand` are just further direct edits to the
+ * same live DOM the browser itself is already editing — exactly like
+ * `exec()` in EssayWorkspace.tsx does for the toolbar's Bold/Italic/list
+ * buttons, just triggered by typing instead of a click.
+ */
+function autoListify(e: InputEvent | undefined) {
+  if (!e || e.inputType !== 'insertText' || e.data !== ' ') return
+  const sel = window.getSelection()
+  if (!sel || !sel.isCollapsed || sel.rangeCount === 0) return
+  const range = sel.getRangeAt(0)
+  const cursorNode = range.startContainer
+  const cursorOffset = range.startOffset
+  if (cursorNode.nodeType !== Node.TEXT_NODE) return
+  const shard = (cursorNode.parentElement as HTMLElement | null)?.closest<HTMLElement>('.node-content')
+  if (!shard) return
+
+  const line = findLineAncestor(cursorNode, shard)
+  const beforeRange = document.createRange()
+  beforeRange.setStart(line, 0)
+  beforeRange.setEnd(cursorNode, cursorOffset)
+  const before = beforeRange.toString()
+
+  const isOrdered = ORDERED_MARKER_RE.test(before)
+  const isBullet = !isOrdered && BULLET_MARKER_RE.test(before)
+  if (!isOrdered && !isBullet) return
+
+  // Strip the marker text (everything from the start of the line through
+  // the just-typed trailing space) from the one text node it lives in —
+  // `before` matching the marker regex on its own already guarantees this
+  // text node holds the whole thing, since a line with anything preceding
+  // the marker in another node would have made `before` longer than the
+  // regex allows.
+  const textNode = cursorNode as Text
+  textNode.textContent = (textNode.textContent ?? '').slice(cursorOffset)
+  const newRange = document.createRange()
+  newRange.setStart(textNode, 0)
+  newRange.collapse(true)
+  sel.removeAllRanges()
+  sel.addRange(newRange)
+
+  document.execCommand(isOrdered ? 'insertOrderedList' : 'insertUnorderedList')
 }

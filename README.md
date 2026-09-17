@@ -298,6 +298,27 @@ merged elsewhere): the title snapshot is what keeps a fragment reading
 sensibly once that's happened, since the live node title obviously isn't
 there to ask anymore.
 
+**Autoformatting lists.** Typing `- ` or `* ` at the very start of an
+otherwise-empty line turns it into a bulleted list; `1. ` (any number, not
+just 1) turns it into a numbered one — the same shorthand most word
+processors support, so a list rarely needs the toolbar's own list buttons
+at all. `autoListify()` in `SectionBlock.tsx` checks this on every `input`
+event, but only actually does anything the instant the just-typed
+character is the space that completes one of those two markers
+(`e.data === ' '` on the native `InputEvent`) — never mid-word, never
+while deleting. "Very start of an otherwise-empty line" is enforced by
+reading the *whole* line's text up to the cursor (a `Range` from the start
+of the nearest block ancestor to the caret, not just the current text
+node) and requiring it to be *exactly* the marker: `See item 1. really`
+never triggers, since there's real text before the `1. `. Once confirmed,
+it strips the marker text from the DOM and calls the same
+`document.execCommand('insertOrderedList' | 'insertUnorderedList')` the
+toolbar's own list buttons use — this is DOM-first rather than going
+through Preact state deliberately, for the same reason `persist`'s own
+doc comment gives: a shard is an uncontrolled `contentEditable`, so this
+is just another direct edit to the live DOM the browser's already editing,
+exactly like a toolbar click would be.
+
 **Footnotes.** "Insert footnote" (a small baseline with a raised digit)
 drops an empty `<sup class="footnote-ref" data-footnote-id>` marker at the
 cursor and hands focus straight to the new footnote's own body, listed
