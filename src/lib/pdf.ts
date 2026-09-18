@@ -74,3 +74,34 @@ export async function renderPageToCanvas(doc: PdfDoc, pageNumber: number, canvas
   await page.render({ canvasContext: ctx, viewport }).promise
   return { width: viewport.width, height: viewport.height }
 }
+
+/** One occurrence of a search query within a PDF's extracted page texts, in
+ * document order. `indexInPage` is this occurrence's 0-based rank among
+ * matches on its own page — used to line it up with whichever match gets
+ * highlighted when that page is actually rendered. */
+export interface PdfMatch {
+  page: number
+  indexInPage: number
+}
+
+/** Finds every case-insensitive occurrence of `query` across a PDF's
+ * per-page extracted text (as produced by `extractPageTexts`), in reading
+ * order. Used to drive in-PDF search: which pages to jump to, and an
+ * overall "N of M" count, without re-parsing the PDF itself. */
+export function findPdfMatches(pageTexts: string[], query: string): PdfMatch[] {
+  const q = query.trim().toLowerCase()
+  if (!q) return []
+  const matches: PdfMatch[] = []
+  for (let p = 0; p < pageTexts.length; p++) {
+    const text = pageTexts[p].toLowerCase()
+    let from = 0
+    let indexInPage = 0
+    let idx: number
+    while ((idx = text.indexOf(q, from)) !== -1) {
+      matches.push({ page: p + 1, indexInPage })
+      indexInPage++
+      from = idx + q.length
+    }
+  }
+  return matches
+}

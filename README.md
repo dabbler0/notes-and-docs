@@ -274,6 +274,25 @@ inline span's surrounding quote marks are literal characters in the
 content, so it falls through the same plain-inline-text handling a citation
 or source link already gets.
 
+**Searching within a PDF.** `PdfViewer` — used both from a source's own
+detail view and from the "From a source" tab of `QuoteInsertDialog` — has its
+own search box above the page controls, independent of the global "Search
+PDFs" tab (which finds *which source* to open, not a spot within one already
+open). Typing a query jumps straight to its first hit, wherever in the
+document that is, and the ↑/↓ buttons (or Enter/Shift+Enter in the box)
+step through every occurrence in reading order, crossing page boundaries as
+needed and reporting an overall "N of M" count. The search itself
+(`findPdfMatches` in `lib/pdf.ts`) runs against the source's already-extracted
+`pageTexts` rather than re-parsing the PDF, so it can count matches on pages
+that aren't even the one currently rendered — which is what lets it jump
+pages at all. Only the *currently rendered* page's matches get visually
+highlighted (a `<mark>` wrapped around the hit within the invisible text
+layer, with the active occurrence in a darker shade), since that's the only
+page with real text-item positions to highlight against; a query that happens
+to be split across two adjacent text items (rare, but possible mid-line) is
+still found and counted by `findPdfMatches`, just not highlighted, since
+highlighting works item-by-item.
+
 **The quote bank.** A `QuoteBankEntry` (`quoteBankRepo.ts`) is a quote saved
 out of a source's PDF independently of any essay — from a source's own
 detail view (Sources tab), drag-select text in its embedded `PdfViewer` (or

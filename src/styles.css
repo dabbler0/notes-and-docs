@@ -1536,6 +1536,8 @@ select {
   flex-direction: column;
   gap: 10px;
   align-items: center;
+  max-width: 100%;
+  overflow-x: auto;
 }
 
 .pdf-page-wrap {
@@ -1543,11 +1545,6 @@ select {
   box-shadow: var(--shadow-soft);
   background: white;
   max-width: 100%;
-}
-
-.pdf-viewer {
-  max-width: 100%;
-  overflow-x: auto;
 }
 
 .pdf-text-layer {
@@ -1565,6 +1562,32 @@ select {
 
 .pdf-text-layer span::selection {
   background: rgba(201, 107, 74, 0.4);
+}
+
+.pdf-text-layer mark.pdf-search-hit {
+  background: rgba(255, 213, 79, 0.55);
+  color: transparent;
+}
+
+.pdf-text-layer mark.pdf-search-hit-active {
+  background: rgba(255, 152, 0, 0.75);
+}
+
+.pdf-search-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  max-width: 480px;
+}
+
+.pdf-search-input {
+  flex: 1;
+  min-width: 0;
+}
+
+.pdf-search-count {
+  white-space: nowrap;
 }
 
 .pdf-controls {
