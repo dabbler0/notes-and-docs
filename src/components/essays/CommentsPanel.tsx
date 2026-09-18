@@ -69,7 +69,18 @@ export function CommentsPanel({
     const raw: { id: string; top: number }[] = []
     for (const { comment, node } of rows) {
       const mark = scrollEl.querySelector(`[data-comment-id="${cssEscape(comment.id)}"]`) as HTMLElement | null
-      const anchorEl = mark ?? (scrollEl.querySelector(`[data-node-id="${cssEscape(node.id)}"] .section-header`) as HTMLElement | null)
+      // A mark that's collapsed out of view (its own section, or an
+      // ancestor section, has been toggled closed) still exists in the
+      // DOM, so the query above finds it either way — but
+      // getBoundingClientRect() on anything inside a `display: none`
+      // subtree returns all zeroes, which used to pin every comment in a
+      // collapsed section to the very top of the margin instead of near
+      // its real (collapsed) location, stacking them on top of each other
+      // and the "N open" badge. Fall back to the nearest *visible* section
+      // header instead, walking up through collapsed ancestors as needed —
+      // a comment three levels deep under three collapsed sections still
+      // lands at the outermost one's header rather than at the top.
+      const anchorEl = isVisible(mark) ? mark : nearestVisibleHeader(scrollEl, node.id)
       if (!anchorEl) continue
       const top = anchorEl.getBoundingClientRect().top - scrollRect.top + scrollEl.scrollTop + deltaTop
       raw.push({ id: comment.id, top })
@@ -174,4 +185,26 @@ export function CommentsPanel({
 
 function cssEscape(s: string): string {
   return typeof CSS !== 'undefined' && CSS.escape ? CSS.escape(s) : s.replace(/["\\]/g, '\\$&')
+}
+
+/** True for an element that's actually laid out right now — false for one
+ * sitting inside a `display: none` subtree (a collapsed section), where
+ * `getBoundingClientRect()` degrades to all zeroes rather than throwing or
+ * returning something obviously unusable. */
+function isVisible(el: HTMLElement | null): el is HTMLElement {
+  return !!el && el.offsetParent !== null
+}
+
+/** Walks up from a node's own section block to the nearest ancestor section
+ * whose header is actually visible — its own header if it's visible, or
+ * else its parent's, grandparent's, and so on, up to the root (which is
+ * never collapsible and so always visible). */
+function nearestVisibleHeader(scrollEl: HTMLElement, nodeId: string): HTMLElement | null {
+  let block = scrollEl.querySelector(`[data-node-id="${cssEscape(nodeId)}"]`) as HTMLElement | null
+  while (block) {
+    const header = block.querySelector(':scope > .section-header') as HTMLElement | null
+    if (isVisible(header)) return header
+    block = block.parentElement?.closest('.section-block') ?? null
+  }
+  return null
 }

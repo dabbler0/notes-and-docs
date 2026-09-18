@@ -1425,7 +1425,17 @@ select {
 .comments-panel {
   position: relative;
   width: 300px;
-  flex-shrink: 0;
+  /* Every child of this panel (the count badge, the empty-state message,
+     the scrolling canvas of cards) is `position: absolute`, so none of
+     them contribute to this element's own content height — left to its
+     `auto` default, this box would compute to zero height inside the
+     column-direction `.comments-panel-shell` flex container, and
+     `overflow: hidden` below would then clip all of them out of view
+     entirely rather than just hiding an independent scrollbar. `flex: 1`
+     (with a zero basis) makes it fill the shell's remaining height
+     instead of sizing to its own (empty) content. */
+  flex: 1;
+  min-height: 0;
   border-left: 1px solid var(--border);
   background: var(--surface);
   /* No scrollbar of its own — .margin-comments-inner below is a tall

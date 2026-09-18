@@ -247,6 +247,30 @@ triggering *another* freeze (and a fresh version) the next time a comment
 gets added in that section, since an anchor mark is metadata about where a
 comment points, not a new revision of the prose.
 
+Two bugs used to make comments disappear from the margin far more often than
+they should have. First, `.comments-panel`'s own box has no in-flow content
+at all — the count badge, the empty-state message, and the scrolling canvas
+of cards are all `position: absolute` — so left to its `auto` height it
+collapsed to zero, and `overflow: hidden` then clipped every one of its
+children out of view entirely rather than just suppressing an independent
+scrollbar; it now carries `flex: 1; min-height: 0` so it actually fills the
+height of the column-direction `.comments-panel-shell` it sits in, the same
+"absolutely-positioned children don't establish a size" trap `min-width: 0`
+already works around elsewhere in this file (see `.side-by-side > div`).
+Second, a comment anchored inside a *collapsed* section (or a section whose
+ancestor is collapsed) used to compute its card's position from that
+anchor's `getBoundingClientRect()` even though the anchor sits inside a
+`display: none` subtree, where that call degrades to all zeroes — pinning
+every such comment to the very top of the margin, stacked on top of each
+other and the count badge, rather than near the collapsed section it
+actually belongs to. `recompute()` in `CommentsPanel.tsx` now checks
+whether the anchor mark (or the plain section-header fallback used when no
+mark is found) is actually laid out — `offsetParent !== null` — and if not,
+walks up through `nearestVisibleHeader()` to the nearest ancestor section
+that *is* visible, all the way to the root if every ancestor between it and
+the comment is collapsed, so the card lands at the outermost collapsed
+section's header instead of vanishing.
+
 **Quoting a source.** One toolbar button ("Insert a quote from a source")
 opens `QuoteInsertDialog` — one quote-*selection* interface with two tabs
 ("From a source": pick any source, drag-select text in its embedded
