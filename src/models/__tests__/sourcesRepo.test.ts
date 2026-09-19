@@ -3,8 +3,8 @@
  * the PDF, keep its extracted text" conversion (`convertSourceToTextOnly`)
  * — the two pieces behind the storage-size UI and the text-only viewer.
  */
-import { beforeEach, describe, expect, it } from 'vitest'
-import { convertSourceToTextOnly, createSource, getSourcePdfBlob, getSourceStorageBytes, hasQuotableText, removeSourcePdf, setSourcePdf } from '../sourcesRepo'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { convertSourceToTextOnly, createSource, getSourcePdfBlob, getSourceStorageBytes, hasQuotableText, removeSourcePdf, searchPdfBank, setSourcePdf } from '../sourcesRepo'
 import { emptyEntry } from '../../lib/bibtex'
 
 interface FakeStorageModule {
@@ -82,6 +82,48 @@ describe('convertSourceToTextOnly', () => {
     expect(source.textOnly).toBe(false)
     expect(source.pdfBlobId).toBeUndefined()
     expect(source.pageTexts).toEqual([])
+  })
+})
+
+describe('createSource with textOnly', () => {
+  it('never stores the PDF blob at all — pdfBlobId is never set, only textOnly and pageTexts', async () => {
+    const { backend } = (await import('../../storage')) as unknown as { backend: { blobs: { put: (id: string, blob: Blob) => Promise<void> } } }
+    const putSpy = vi.spyOn(backend.blobs, 'put')
+
+    const source = await createSource(emptyEntry('x2020'), { pdfFile: pdfFile(999_999), pageTexts: ['extracted text'], textOnly: true })
+
+    expect(source.pdfBlobId).toBeUndefined()
+    expect(source.textOnly).toBe(true)
+    expect(source.pageTexts).toEqual(['extracted text'])
+    expect(source.pdfFileName).toBe('paper.pdf')
+    expect(await getSourceStorageBytes(source)).toBe(new Blob(['extracted text']).size)
+    // The whole point: the PDF's bytes are never written to the blob store
+    // at all — not stored-then-deleted, just never put in the first place.
+    expect(putSpy).not.toHaveBeenCalled()
+
+    putSpy.mockRestore()
+  })
+
+  it('a source created without textOnly keeps the PDF as normal', async () => {
+    const source = await createSource(emptyEntry('x2020'), { pdfFile: pdfFile(1000), pageTexts: ['text'], textOnly: false })
+    expect(source.pdfBlobId).toBeDefined()
+    expect(source.textOnly).toBeUndefined()
+  })
+})
+
+describe('searchPdfBank whitespace tolerance', () => {
+  it('finds a query spanning a preserved line break in the extracted text', async () => {
+    await createSource(emptyEntry('x2020'), { pageTexts: ['This wraps across a\nline break here.'] })
+    const hits = await searchPdfBank('across a line break')
+    expect(hits).toHaveLength(1)
+    expect(hits[0].snippet).toContain('across a line break')
+  })
+
+  it('collapses a line break inside the returned snippet to a single space', async () => {
+    await createSource(emptyEntry('x2020'), { pageTexts: ['Some words\nsplit by a line break in the middle.'] })
+    const hits = await searchPdfBank('split by')
+    expect(hits).toHaveLength(1)
+    expect(hits[0].snippet).not.toContain('\n')
   })
 })
 

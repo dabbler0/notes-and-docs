@@ -1,5 +1,6 @@
 import { useEffect, useRef } from 'preact/hooks'
 import type { ComponentChildren } from 'preact'
+import { buildSearchRegex } from '../../lib/pdf'
 import { usePageSearch } from '../../lib/usePageSearch'
 import { PageSearchBar } from './PageSearchBar'
 import type { Source } from '../../models/types'
@@ -92,32 +93,38 @@ export function TextViewer({
 }
 
 /**
- * Wraps every case-insensitive occurrence of `query` in `text` with a
- * `<mark>`, numbering them starting from `startIndex` (this paragraph's
- * matches are a contiguous run within the whole page's match count, since
- * paragraphs are scanned in the same reading order `findPdfMatches` scans
- * the raw page string in) so the one at `activeIndexOnPage` can be marked
- * as the current hit. Returns how many matches this paragraph contributed,
- * so the caller can keep a running count across paragraphs.
+ * Wraps every occurrence of `query` in `text` with a `<mark>`, numbering
+ * them starting from `startIndex` (this paragraph's matches are a
+ * contiguous run within the whole page's match count, since paragraphs are
+ * scanned in the same reading order `findPdfMatches` scans the raw page
+ * string in) so the one at `activeIndexOnPage` can be marked as the
+ * current hit. Matching goes through the same whitespace-tolerant regex
+ * `findPdfMatches` uses (see `buildSearchRegex`), so a query typed with an
+ * ordinary space still finds — and highlights — a match that happens to
+ * wrap across one of this paragraph's own preserved line breaks. Returns
+ * how many matches this paragraph contributed, so the caller can keep a
+ * running count across paragraphs.
  */
 function highlightMatches(text: string, query: string, activeIndexOnPage: number | null, startIndex: number): { nodes: ComponentChildren; count: number } {
-  if (!query) return { nodes: text, count: 0 }
-  const lower = text.toLowerCase()
-  const q = query.toLowerCase()
+  const regex = buildSearchRegex(query)
+  if (!regex) return { nodes: text, count: 0 }
   const nodes: ComponentChildren[] = []
   let cursor = 0
-  let idx: number
   let count = 0
-  while ((idx = lower.indexOf(q, cursor)) !== -1) {
+  let m: RegExpExecArray | null
+  while ((m = regex.exec(text)) !== null) {
+    const idx = m.index
+    const matched = m[0]
     if (idx > cursor) nodes.push(text.slice(cursor, idx))
     const matchNumber = startIndex + count
     nodes.push(
       <mark key={idx} className={matchNumber === activeIndexOnPage ? 'text-search-hit text-search-hit-active' : 'text-search-hit'}>
-        {text.slice(idx, idx + query.length)}
+        {matched}
       </mark>,
     )
     count++
-    cursor = idx + query.length
+    cursor = idx + matched.length
+    if (matched.length === 0) regex.lastIndex++
   }
   if (cursor < text.length) nodes.push(text.slice(cursor))
   return { nodes, count }

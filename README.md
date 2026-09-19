@@ -144,6 +144,17 @@ back to `TextViewer` — see below — everywhere `PdfViewer` would otherwise
 show the PDF itself, so viewing and quoting keep working exactly as before,
 just from the extracted text instead of the rendered page.
 
+The same choice is offered up front, too: "Add a source"'s file picker
+reveals an "Extract text only" checkbox the moment a PDF is chosen. Checked,
+`createSource` (`sourcesRepo.ts`) never writes the PDF's bytes to the blob
+store at all — not stored-then-deleted, just never `put` in the first
+place — only its extracted `pageTexts` and a `textOnly` source are created
+directly. The point isn't just local disk space: a PDF large enough to be
+worth discarding is also large enough to be worth never risking a sync
+upload of, and skipping the write here means it's simply never in local
+storage for a sync pass to pick up, rather than relying on the user to
+remember to convert it away again before that happens.
+
 `TextViewer.tsx` reads a source's `pageTexts` as plain, paginated prose,
 with the same page-by-page navigation, in-document search (via the
 `usePageSearch` hook and `PageSearchBar` component both viewers now share —
@@ -161,21 +172,38 @@ source" tab, which now offers it for a text-only source the same way it
 already did for a PDF, rather than falling back to typing the quote in by
 hand the way it still does for a source with neither.
 
-Getting readable paragraphs out of a PDF in the first place took a bit of
-care: pdf.js hands back text items in reading order but with no structural
-markup at all, not even line breaks, so the original `extractPageTexts`
-flattened every page into one giant run-on line — fine for substring
-search, unusable for actually reading. `reflowTextItems` in `lib/pdf.ts`
-rejoins those items into paragraphs using a heuristic on the vertical gap
-between each item's baseline and the one before it, relative to that
-text's own font height: a small gap reads as the next word or the next
-wrapped line of the same paragraph and gets joined with a plain space; a
-gap noticeably larger than a normal line height reads as a new paragraph
-and gets a blank line instead. It's not real layout analysis — an unusual
-one (multi-column text, dense tables) can reflow oddly — but it only ever
-*adds* paragraph breaks relative to the old one-line-per-page format, so
-substring search and quote-matching over the result work exactly the same
-as they did before.
+Getting readable text out of a PDF in the first place took a bit of care:
+pdf.js hands back text items in reading order but with no structural markup
+at all, not even line breaks, so the original `extractPageTexts` flattened
+every page into one giant run-on line — fine for substring search,
+unusable for actually reading. `reflowTextItems` in `lib/pdf.ts` rejoins
+those items using a heuristic on the vertical gap between each item's
+baseline and the one before it, relative to that text's own font height: a
+tiny gap is the next word on the same line, joined with a plain space; a
+moderate gap is a real line break in the source document — PDF text is
+never soft-wrapped the way HTML is, so every line's items are genuinely,
+explicitly positioned by the document itself — joined with a single `\n`;
+a gap noticeably larger than a normal line height is a new paragraph,
+joined with a blank line instead. `TextViewer`'s CSS renders those single
+line breaks as actual line breaks (`white-space: pre-line`), so a page
+reads with the same line and paragraph structure the original PDF had,
+not just as one wrapped block of prose. It's not real layout analysis —
+an unusual layout (multi-column text, dense tables) can reflow oddly —
+but it's enough to make most PDFs read naturally.
+
+Preserving those line breaks meant search needed a small adjustment to
+match: a query typed with an ordinary space needs to still find a phrase
+that happens to wrap across one of these breaks, where a plain substring
+search would fail because a space and a newline aren't the same character.
+`buildSearchRegex` in `lib/pdf.ts` builds a case-insensitive regex where
+any run of whitespace *in the query* matches any run of whitespace *in the
+text* — used by `findPdfMatches` (in-document search in both viewers),
+`TextViewer`'s own match highlighting, and `searchPdfBank` (the global
+"Search PDFs" tab), so all three keep finding matches exactly as they did
+before line breaks were added back into the extracted text. The "Search
+PDFs" tab's own result snippets still collapse any such break back down to
+a single space, since a snippet is meant to read as a short, single-line
+preview rather than reproduce the source's own line layout.
 
 **Essay trees & versioning.** An essay is a tree of `EssayNode`s (sections/
 subsections). Each node has:

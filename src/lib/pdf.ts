@@ -48,39 +48,49 @@ export async function extractPageTexts(doc: PdfDoc): Promise<string[]> {
 }
 
 /**
- * Rejoins a PDF page's raw text items into readable paragraphs. pdf.js
- * hands back text items in reading order but with no structural markup at
- * all — not even line breaks — so without this, every page would flatten
- * into one giant run-on line (which is exactly what this function used to
- * do). The heuristic: track the vertical gap between each item's baseline
- * and the previous one, relative to that text's own font height. A small
- * gap means "next word on the same line" (or the same line exactly); a
- * moderate gap means "wrapped to the next line of the same paragraph;" a
- * large gap means "new paragraph." This is not real layout analysis — an
- * unusual layout (multi-column text, dense tables) may reflow oddly — but
- * it's enough to make the extracted text readable in `TextViewer`, and it
- * only ever *adds* paragraph breaks relative to the old always-one-line
- * format, so substring search and quote-matching over the result still
- * work exactly the same as before.
+ * Rejoins a PDF page's raw text items into readable text, preserving the
+ * original document's own line and paragraph breaks. pdf.js hands back
+ * text items in reading order but with no structural markup at all — not
+ * even line breaks — so without this, every page would flatten into one
+ * giant run-on line (which is exactly what this function used to do). The
+ * heuristic: track the vertical gap between each item's baseline and the
+ * previous one, relative to that text's own font height.
+ *   - A tiny gap means "next word on the same line" — joined with a space.
+ *   - A moderate gap means "the next line of the source document" — a real
+ *     line break in the original, since PDF text is never soft-wrapped the
+ *     way HTML is; every line's items are explicitly positioned by the
+ *     document itself. Joined with a single `\n`.
+ *   - A large gap means "new paragraph" — joined with a blank line (`\n\n`).
+ * This is not real layout analysis — an unusual layout (multi-column text,
+ * dense tables) may reflow oddly — but it's enough to make the extracted
+ * text read like the original in `TextViewer`. Search and quote-matching
+ * over the result stay whitespace-tolerant (see `buildSearchRegex`) so a
+ * query typed with an ordinary space still finds text that happens to wrap
+ * across one of these line breaks.
  */
 export function reflowTextItems(items: { str?: string; transform: number[] }[]): string {
-  const parts: string[] = []
+  let text = ''
   let prevY: number | null = null
   let prevHeight = 10
   for (const item of items) {
     if (!('str' in item) || !item.str) continue
     const height = Math.hypot(item.transform[2], item.transform[3]) || prevHeight
     const y = item.transform[5]
-    if (prevY !== null && prevY - y > height * 1.6) parts.push('\n\n')
-    parts.push(item.str)
+    if (prevY === null) {
+      text += item.str
+    } else {
+      const gap = prevY - y
+      if (gap > height * 1.6) text += '\n\n' + item.str
+      else if (gap > height * 0.3) text += '\n' + item.str
+      else text += ' ' + item.str
+    }
     prevY = y
     prevHeight = height
   }
-  return parts
-    .join(' ')
-    .replace(/ ?\n\n ?/g, '\n\n')
-    .replace(/\n{3,}/g, '\n\n')
+  return text
     .replace(/[ \t]+/g, ' ')
+    .replace(/[ \t]*\n[ \t]*/g, '\n')
+    .replace(/\n{3,}/g, '\n\n')
     .trim()
 }
 
@@ -121,23 +131,42 @@ export interface PdfMatch {
   indexInPage: number
 }
 
+/**
+ * Builds a case-insensitive, whitespace-tolerant search regex for a plain
+ * (non-regex) query — special characters are escaped, and any run of
+ * whitespace *in the query* matches any run of whitespace *in the text*.
+ * Extracted PDF text now preserves the original document's line and
+ * paragraph breaks (see `reflowTextItems`), so a query typed with an
+ * ordinary space needs to still find a phrase that happens to wrap across
+ * one of those breaks in the text — plain substring search wouldn't, since
+ * a space and a newline aren't the same character. Returns null for a
+ * blank query.
+ */
+export function buildSearchRegex(query: string): RegExp | null {
+  const trimmed = query.trim()
+  if (!trimmed) return null
+  const escaped = trimmed.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/\s+/g, '\\s+')
+  return new RegExp(escaped, 'gi')
+}
+
 /** Finds every case-insensitive occurrence of `query` across a PDF's
  * per-page extracted text (as produced by `extractPageTexts`), in reading
- * order. Used to drive in-PDF search: which pages to jump to, and an
- * overall "N of M" count, without re-parsing the PDF itself. */
+ * order — tolerant of the query's whitespace matching a line/paragraph
+ * break in the text (see `buildSearchRegex`). Used to drive in-PDF search:
+ * which pages to jump to, and an overall "N of M" count, without
+ * re-parsing the PDF itself. */
 export function findPdfMatches(pageTexts: string[], query: string): PdfMatch[] {
-  const q = query.trim().toLowerCase()
-  if (!q) return []
+  const regex = buildSearchRegex(query)
+  if (!regex) return []
   const matches: PdfMatch[] = []
   for (let p = 0; p < pageTexts.length; p++) {
-    const text = pageTexts[p].toLowerCase()
-    let from = 0
+    regex.lastIndex = 0
     let indexInPage = 0
-    let idx: number
-    while ((idx = text.indexOf(q, from)) !== -1) {
+    let m: RegExpExecArray | null
+    while ((m = regex.exec(pageTexts[p])) !== null) {
       matches.push({ page: p + 1, indexInPage })
       indexInPage++
-      from = idx + q.length
+      if (m[0].length === 0) regex.lastIndex++
     }
   }
   return matches

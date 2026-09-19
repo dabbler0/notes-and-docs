@@ -1637,6 +1637,11 @@ select {
 
 .text-viewer-page p {
   margin: 0 0 1em;
+  /* Preserves the single `\n` line breaks reflowTextItems inserts for the
+     original document's own line breaks (paragraph breaks are already
+     separate <p> elements) — without this, normal HTML whitespace
+     collapsing would silently fold every line back into one run-on line. */
+  white-space: pre-line;
 }
 
 .text-viewer-page p:last-child {

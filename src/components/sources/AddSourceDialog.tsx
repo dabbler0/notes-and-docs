@@ -16,6 +16,7 @@ export function AddSourceDialog({ onClose, onCreated }: { onClose: () => void; o
   const [manualNote, setManualNote] = useState('')
   const [comment, setComment] = useState('')
   const [file, setFile] = useState<File | null>(null)
+  const [textOnly, setTextOnly] = useState(false)
   const [busy, setBusy] = useState(false)
   const [status, setStatus] = useState('')
 
@@ -47,7 +48,7 @@ export function AddSourceDialog({ onClose, onCreated }: { onClose: () => void; o
         pageTexts = await extractPageTexts(doc)
       }
 
-      await createSource(entry, { comment, pdfFile: file ?? undefined, pageTexts })
+      await createSource(entry, { comment, pdfFile: file ?? undefined, pageTexts, textOnly })
       onCreated()
     } finally {
       setBusy(false)
@@ -61,8 +62,22 @@ export function AddSourceDialog({ onClose, onCreated }: { onClose: () => void; o
       <form onSubmit={handleSubmit}>
         <div className="field">
           <label>PDF (optional)</label>
-          <input type="file" accept="application/pdf" onChange={(e) => setFile((e.target as HTMLInputElement).files?.[0] ?? null)} />
+          <input
+            type="file"
+            accept="application/pdf"
+            onChange={(e) => {
+              const f = (e.target as HTMLInputElement).files?.[0] ?? null
+              setFile(f)
+              if (!f) setTextOnly(false)
+            }}
+          />
         </div>
+        {file && (
+          <label className="muted" style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: -8, marginBottom: 14 }}>
+            <input type="checkbox" checked={textOnly} onChange={(e) => setTextOnly((e.target as HTMLInputElement).checked)} />
+            Extract text only — don't keep the PDF file itself (good for a very large PDF you don't want stored or synced at all)
+          </label>
+        )}
         <div className="field">
           <label>Paste a BibTeX entry (optional — leave blank to fill fields manually below)</label>
           <textarea rows={6} placeholder="@article{smith2020learning, title = {...}, author = {...}, year = {2020} }" value={bibtexText} onInput={(e) => setBibtexText((e.target as HTMLTextAreaElement).value)} />

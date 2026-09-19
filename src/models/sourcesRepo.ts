@@ -1,6 +1,7 @@
 import { backend } from '../storage'
 import { id } from '../lib/id'
 import { displayAuthors, displayTitle } from '../lib/bibtex'
+import { buildSearchRegex } from '../lib/pdf'
 import type { BibtexEntry, Source } from './types'
 
 const COLLECTION = 'sources'
@@ -14,7 +15,10 @@ export async function getSource(sourceId: string): Promise<Source | undefined> {
   return backend.docs.get<Source>(COLLECTION, sourceId)
 }
 
-export async function createSource(bibtex: BibtexEntry, opts: { comment?: string; pdfFile?: File; pageTexts?: string[] } = {}): Promise<Source> {
+export async function createSource(
+  bibtex: BibtexEntry,
+  opts: { comment?: string; pdfFile?: File; pageTexts?: string[]; textOnly?: boolean } = {},
+): Promise<Source> {
   const now = Date.now()
   const source: Source = {
     id: id(),
@@ -25,9 +29,18 @@ export async function createSource(bibtex: BibtexEntry, opts: { comment?: string
     updatedAt: now,
   }
   if (opts.pdfFile) {
-    source.pdfBlobId = id()
     source.pdfFileName = opts.pdfFile.name
-    await backend.blobs.put(source.pdfBlobId, opts.pdfFile)
+    if (opts.textOnly) {
+      // The whole point of this option is that the PDF's bytes never touch
+      // storage (local or, eventually, synced) at all — not even briefly —
+      // for a PDF large enough that the user doesn't want to risk it. Only
+      // the filename (for reference) and the already-extracted pageTexts
+      // are kept.
+      source.textOnly = true
+    } else {
+      source.pdfBlobId = id()
+      await backend.blobs.put(source.pdfBlobId, opts.pdfFile)
+    }
   }
   await backend.docs.put(COLLECTION, source)
   return source
@@ -154,20 +167,26 @@ export interface PdfSearchHit {
   snippet: string
 }
 
-/** Naive substring search across every source's extracted page text. */
+/** Naive substring search across every source's extracted page text —
+ * whitespace-tolerant (see `buildSearchRegex`) so a query typed with an
+ * ordinary space still finds a phrase that happens to wrap across one of
+ * the line/paragraph breaks `reflowTextItems` now preserves. The snippet
+ * itself collapses any such break back down to a plain space, since it's
+ * meant to read as a short, single-line preview rather than reproduce the
+ * source's own line layout. */
 export async function searchPdfBank(query: string): Promise<PdfSearchHit[]> {
-  const q = query.trim().toLowerCase()
-  if (!q) return []
+  const regex = buildSearchRegex(query)
+  if (!regex) return []
   const sources = await listSources()
   const hits: PdfSearchHit[] = []
   for (const source of sources) {
     source.pageTexts.forEach((text, idx) => {
-      const lower = text.toLowerCase()
-      const pos = lower.indexOf(q)
-      if (pos !== -1) {
-        const start = Math.max(0, pos - 60)
-        const end = Math.min(text.length, pos + q.length + 60)
-        const snippet = (start > 0 ? '…' : '') + text.slice(start, end) + (end < text.length ? '…' : '')
+      regex.lastIndex = 0
+      const m = regex.exec(text)
+      if (m) {
+        const start = Math.max(0, m.index - 60)
+        const end = Math.min(text.length, m.index + m[0].length + 60)
+        const snippet = ((start > 0 ? '…' : '') + text.slice(start, end) + (end < text.length ? '…' : '')).replace(/\s+/g, ' ')
         hits.push({ source, page: idx + 1, snippet })
       }
     })
