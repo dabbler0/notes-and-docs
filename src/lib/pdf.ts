@@ -35,16 +35,53 @@ export async function loadPdf(data: ArrayBuffer): Promise<PdfDoc> {
   return task.promise
 }
 
-/** Extracts plain text per page, for search indexing and quoting. */
+/** Extracts plain text per page, for search indexing, quoting, and the
+ * text-only reading view (`TextViewer`). */
 export async function extractPageTexts(doc: PdfDoc): Promise<string[]> {
   const pages: string[] = []
   for (let p = 1; p <= doc.numPages; p++) {
     const page = await doc.getPage(p)
     const content = await page.getTextContent()
-    const text = content.items.map((it: any) => ('str' in it ? it.str : '')).join(' ')
-    pages.push(text.replace(/\s+/g, ' ').trim())
+    pages.push(reflowTextItems(content.items as any[]))
   }
   return pages
+}
+
+/**
+ * Rejoins a PDF page's raw text items into readable paragraphs. pdf.js
+ * hands back text items in reading order but with no structural markup at
+ * all — not even line breaks — so without this, every page would flatten
+ * into one giant run-on line (which is exactly what this function used to
+ * do). The heuristic: track the vertical gap between each item's baseline
+ * and the previous one, relative to that text's own font height. A small
+ * gap means "next word on the same line" (or the same line exactly); a
+ * moderate gap means "wrapped to the next line of the same paragraph;" a
+ * large gap means "new paragraph." This is not real layout analysis — an
+ * unusual layout (multi-column text, dense tables) may reflow oddly — but
+ * it's enough to make the extracted text readable in `TextViewer`, and it
+ * only ever *adds* paragraph breaks relative to the old always-one-line
+ * format, so substring search and quote-matching over the result still
+ * work exactly the same as before.
+ */
+export function reflowTextItems(items: { str?: string; transform: number[] }[]): string {
+  const parts: string[] = []
+  let prevY: number | null = null
+  let prevHeight = 10
+  for (const item of items) {
+    if (!('str' in item) || !item.str) continue
+    const height = Math.hypot(item.transform[2], item.transform[3]) || prevHeight
+    const y = item.transform[5]
+    if (prevY !== null && prevY - y > height * 1.6) parts.push('\n\n')
+    parts.push(item.str)
+    prevY = y
+    prevHeight = height
+  }
+  return parts
+    .join(' ')
+    .replace(/ ?\n\n ?/g, '\n\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .replace(/[ \t]+/g, ' ')
+    .trim()
 }
 
 export interface PageTextItem {

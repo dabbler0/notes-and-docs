@@ -332,6 +332,10 @@ select {
   background: var(--surface-2);
 }
 
+.badge.text-only {
+  background: var(--blue);
+}
+
 .chip {
   padding: 3px 10px;
   border-radius: 999px;
@@ -1604,6 +1608,49 @@ select {
   display: flex;
   align-items: center;
   gap: 10px;
+}
+
+.text-viewer {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  align-items: center;
+  max-width: 100%;
+}
+
+.text-viewer-page {
+  box-shadow: var(--shadow-soft);
+  background: white;
+  color: #1a1a1a;
+  max-width: 640px;
+  width: 100%;
+  padding: 32px 36px;
+  border-radius: var(--radius-sm);
+  font-family: Georgia, 'Times New Roman', serif;
+  font-size: 15.5px;
+  line-height: 1.7;
+  box-sizing: border-box;
+  max-height: 70vh;
+  overflow-y: auto;
+  user-select: text;
+}
+
+.text-viewer-page p {
+  margin: 0 0 1em;
+}
+
+.text-viewer-page p:last-child {
+  margin-bottom: 0;
+}
+
+.text-viewer-page mark.text-search-hit {
+  background: rgba(255, 213, 79, 0.65);
+  color: inherit;
+  border-radius: 2px;
+}
+
+.text-viewer-page mark.text-search-hit-active {
+  background: rgba(255, 152, 0, 0.85);
 }
 
 .citation-list {

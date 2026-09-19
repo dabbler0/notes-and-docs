@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'preact/hooks'
 import { Modal } from '../Modal'
 import { PdfViewer } from '../sources/PdfViewer'
+import { TextViewer } from '../sources/TextViewer'
 import { Icon } from '../Icon'
 import { citationLabel, displayAuthors, displayTitle } from '../../lib/bibtex'
 import { listSources, matchesSourceQuery } from '../../models/sourcesRepo'
@@ -36,15 +37,21 @@ export function QuoteInsertDialog({
   const active: Picked | null = tab === 'source' ? (pdfSource ? { source: pdfSource, quote: pdfQuote, page: pdfPage } : null) : picked
   const quote = active?.quote.trim() ?? ''
   const hasPdf = !!pdfSource?.pdfBlobId
+  // A text-only source (its PDF discarded via "Discard PDF, keep text
+  // only" — see SourceDetailDialog) still has real pages to browse and
+  // select from via TextViewer, same as a source with a PDF attached —
+  // only a source with neither falls back to typing the quote in by hand.
+  const hasExtractedText = !!pdfSource && pdfSource.pageTexts.length > 0
+  const hasViewer = hasPdf || hasExtractedText
 
   function handlePickSource(s: Source) {
     setPdfSource(s)
     setPdfQuote('')
-    // A PDF has a real "current page" to track as the viewer turns pages;
-    // a source with no PDF has nothing to default it from, so it starts
-    // unset (0 — falsy, so citationHtml() below leaves the page number off
-    // entirely until/unless the user types one in by hand).
-    setPdfPage(s.pdfBlobId ? 1 : 0)
+    // A PDF or text-only source has a real "current page" to track as the
+    // viewer turns pages; a source with neither has nothing to default it
+    // from, so it starts unset (0 — falsy, so citationHtml() below leaves
+    // the page number off entirely until/unless the user types one in).
+    setPdfPage(s.pdfBlobId || s.pageTexts.length > 0 ? 1 : 0)
   }
 
   return (
@@ -67,19 +74,24 @@ export function QuoteInsertDialog({
                 <p className="muted">Drag to select text in the PDF below, or type/paste it into the box.</p>
                 <PdfViewer source={pdfSource} page={pdfPage} onPageChange={setPdfPage} onSelectionChange={setPdfQuote} />
               </>
+            ) : hasExtractedText ? (
+              <>
+                <p className="muted">This source is stored as text only — drag to select text below, or type/paste it into the box.</p>
+                <TextViewer source={pdfSource} page={pdfPage} onPageChange={setPdfPage} onSelectionChange={setPdfQuote} />
+              </>
             ) : (
               <p className="muted">This source has no PDF attached — type or paste the quoted text in by hand.</p>
             )}
             <div className="field" style={{ marginTop: 16 }}>
               <label>Quoted text — {displayTitle(pdfSource.bibtex)}</label>
               <textarea
-                rows={hasPdf ? 3 : 5}
+                rows={hasViewer ? 3 : 5}
                 value={pdfQuote}
                 onInput={(e) => setPdfQuote((e.target as HTMLTextAreaElement).value)}
-                placeholder={hasPdf ? 'Select text above, or type/paste it here' : 'Type or paste the quoted text here'}
+                placeholder={hasViewer ? 'Select text above, or type/paste it here' : 'Type or paste the quoted text here'}
               />
             </div>
-            {!hasPdf && (
+            {!hasViewer && (
               <div className="field" style={{ marginTop: 10, maxWidth: 160 }}>
                 <label>Page (optional)</label>
                 <input
@@ -161,7 +173,7 @@ function InlineSourcePicker({ onSelect }: { onSelect: (s: Source) => void }) {
             <div className="card-title">{displayTitle(s.bibtex)}</div>
             <div className="card-meta">
               {displayAuthors(s.bibtex) || 'Unknown author'} {s.bibtex.fields.year ? `· ${s.bibtex.fields.year}` : ''}
-              {!s.pdfBlobId && ' · no PDF attached'}
+              {!s.pdfBlobId && (s.textOnly && s.pageTexts.length > 0 ? ' · text only' : ' · no PDF attached')}
             </div>
           </div>
         ))}

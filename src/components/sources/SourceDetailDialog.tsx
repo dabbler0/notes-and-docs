@@ -1,9 +1,12 @@
 import { useState } from 'preact/hooks'
 import { Modal } from '../Modal'
 import { PdfViewer } from './PdfViewer'
+import { TextViewer } from './TextViewer'
 import { formatBibtex, parseBibtex } from '../../lib/bibtex'
 import { extractPageTexts, loadPdf } from '../../lib/pdf'
-import { deleteSource, removeSourcePdf, setSourcePdf, updateSource } from '../../models/sourcesRepo'
+import { formatBytes } from '../../lib/format'
+import { useSourceStorageBytes } from '../../lib/useSourceStorageBytes'
+import { convertSourceToTextOnly, deleteSource, removeSourcePdf, setSourcePdf, updateSource } from '../../models/sourcesRepo'
 import { addQuoteToBank } from '../../models/quoteBankRepo'
 import type { Source } from '../../models/types'
 
@@ -31,6 +34,11 @@ export function SourceDetailDialog({
   const [quoteAnnotation, setQuoteAnnotation] = useState('')
   const [savingQuote, setSavingQuote] = useState(false)
   const [quoteSaved, setQuoteSaved] = useState(false)
+  // Only meaningful once there's actually a PDF to choose between viewing
+  // modes for — a text-only source (no pdfBlobId) always reads as text,
+  // whatever this says.
+  const [viewMode, setViewMode] = useState<'pdf' | 'text'>('pdf')
+  const storageBytes = useSourceStorageBytes(source)
 
   async function saveComment() {
     source.comment = comment
@@ -66,6 +74,7 @@ export function SourceDetailDialog({
       const pageTexts = await extractPageTexts(doc)
       await setSourcePdf(source, file, pageTexts)
       setPage(1)
+      setViewMode('pdf')
       onChanged()
     } finally {
       setPdfBusy(false)
@@ -78,6 +87,18 @@ export function SourceDetailDialog({
     setPdfBusy(true)
     try {
       await removeSourcePdf(source)
+      onChanged()
+    } finally {
+      setPdfBusy(false)
+    }
+  }
+
+  async function handleConvertToTextOnly() {
+    if (!confirm("Discard the PDF file and keep only its extracted text? This can't be undone — you'd need to re-upload the PDF to get the file itself back.")) return
+    setPdfBusy(true)
+    try {
+      await convertSourceToTextOnly(source)
+      setViewMode('text')
       onChanged()
     } finally {
       setPdfBusy(false)
@@ -162,7 +183,17 @@ export function SourceDetailDialog({
         <div>
           <div className="field-header-row">
             <h4>PDF</h4>
-            <div style={{ display: 'flex', gap: 8 }}>
+            <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+              {source.pdfBlobId && (
+                <div className="tab-row" style={{ margin: 0 }}>
+                  <button type="button" className={`btn btn-sm${viewMode === 'pdf' ? ' btn-primary' : ' btn-ghost'}`} onClick={() => setViewMode('pdf')}>
+                    PDF
+                  </button>
+                  <button type="button" className={`btn btn-sm${viewMode === 'text' ? ' btn-primary' : ' btn-ghost'}`} onClick={() => setViewMode('text')}>
+                    Text
+                  </button>
+                </div>
+              )}
               <label className="btn btn-ghost btn-sm" style={{ cursor: pdfBusy ? 'default' : 'pointer' }}>
                 {source.pdfBlobId ? 'Replace' : 'Add PDF'}
                 <input
@@ -184,17 +215,38 @@ export function SourceDetailDialog({
               )}
             </div>
           </div>
+          <p className="muted" style={{ marginTop: 0 }}>
+            {storageBytes == null
+              ? ''
+              : source.pdfBlobId
+                ? `Stored as a PDF file — ${formatBytes(storageBytes)}`
+                : source.textOnly
+                  ? `Stored as extracted text only — ${formatBytes(storageBytes)}`
+                  : ''}
+            {source.pdfBlobId && source.pageTexts.length > 0 && (
+              <>
+                {' · '}
+                <button type="button" className="btn-link-muted" disabled={pdfBusy} onClick={handleConvertToTextOnly}>
+                  Discard PDF, keep text only
+                </button>
+              </>
+            )}
+          </p>
           {pdfStatus && <p className="muted">{pdfStatus}</p>}
-          {source.pdfBlobId ? (
+          {source.pdfBlobId || (source.textOnly && source.pageTexts.length > 0) ? (
             <>
-              <PdfViewer source={source} page={page} onPageChange={setPage} onSelectionChange={setPendingQuote} />
+              {source.pdfBlobId && viewMode === 'pdf' ? (
+                <PdfViewer source={source} page={page} onPageChange={setPage} onSelectionChange={setPendingQuote} />
+              ) : (
+                <TextViewer source={source} page={page} onPageChange={setPage} onSelectionChange={setPendingQuote} />
+              )}
               <div className="field" style={{ marginTop: 12 }}>
                 <label>Add to quote bank</label>
                 <textarea
                   rows={2}
                   value={pendingQuote}
                   onInput={(e) => setPendingQuote((e.target as HTMLTextAreaElement).value)}
-                  placeholder="Drag-select text in the PDF above, or type/paste a quote here"
+                  placeholder="Drag-select text above, or type/paste a quote here"
                 />
                 <input
                   style={{ marginTop: 6 }}

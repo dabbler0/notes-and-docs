@@ -16,6 +16,16 @@ export interface Source {
   pdfFileName?: string
   /** Per-page extracted text, for search and quoting. Empty if no PDF. */
   pageTexts: string[]
+  /**
+   * True once the original PDF has been discarded and only its extracted
+   * `pageTexts` are kept (see `convertSourceToTextOnly` in
+   * `sourcesRepo.ts`) — a way to reclaim a large PDF's storage while still
+   * keeping the ability to browse and quote it via `TextViewer`. Absent
+   * (falsy) for both "has a real PDF" and "BibTeX + comment only" sources;
+   * only `pdfBlobId`'s presence/absence actually distinguishes those two,
+   * exactly as before this field existed.
+   */
+  textOnly?: boolean
   createdAt: number
   updatedAt: number
   /**

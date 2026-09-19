@@ -61,6 +61,28 @@ export async function getSourcePdfBlob(source: Source): Promise<Blob | undefined
 }
 
 /**
+ * How many bytes this source is actually taking up in local storage: the
+ * PDF blob's own size if it has one, or the extracted text's size if it's
+ * been converted to text-only (see `convertSourceToTextOnly`), or 0 for a
+ * BibTeX-only source with nothing attached. Used purely for the "how much
+ * space is this using" UI — never for anything that needs to be exact
+ * (sync payload size, quota checks), so a rough `Blob([...]).size` over the
+ * extracted text (real UTF-8 byte length, not just character count) is fine
+ * even though it doesn't account for the JSON structure it's actually
+ * stored under.
+ */
+export async function getSourceStorageBytes(source: Source): Promise<number> {
+  if (source.pdfBlobId) {
+    const blob = await backend.blobs.get(source.pdfBlobId)
+    return blob?.size ?? 0
+  }
+  if (source.pageTexts.length > 0) {
+    return new Blob(source.pageTexts).size
+  }
+  return 0
+}
+
+/**
  * Attaches a PDF to a source that doesn't have one yet, or swaps out an
  * existing one, given its already-extracted `pageTexts`. Always mints a
  * *fresh* blob id for the new file rather than overwriting the old one in
@@ -77,6 +99,7 @@ export async function setSourcePdf(source: Source, file: File, pageTexts: string
   source.pdfBlobId = newBlobId
   source.pdfFileName = file.name
   source.pageTexts = pageTexts
+  source.textOnly = false
   await updateSource(source)
   if (oldBlobId) await backend.blobs.delete(oldBlobId)
 }
@@ -88,8 +111,34 @@ export async function removeSourcePdf(source: Source): Promise<void> {
   source.pdfBlobId = undefined
   source.pdfFileName = undefined
   source.pageTexts = []
+  source.textOnly = false
   await updateSource(source)
   await backend.blobs.delete(oldBlobId)
+}
+
+/**
+ * Discards a source's PDF file for good, keeping only its already-extracted
+ * `pageTexts` — the point being to reclaim whatever space the original PDF
+ * (often the large majority of a source's footprint) was taking up, for a
+ * source where the text alone is enough to keep browsing and quoting from
+ * via `TextViewer`. One-way: there's no PDF byte to restore afterward, only
+ * "attach a new one" via `setSourcePdf`, which is why the caller is expected
+ * to confirm with the user first.
+ */
+export async function convertSourceToTextOnly(source: Source): Promise<void> {
+  const oldBlobId = source.pdfBlobId
+  if (!oldBlobId) return
+  source.pdfBlobId = undefined
+  source.textOnly = true
+  await updateSource(source)
+  await backend.blobs.delete(oldBlobId)
+}
+
+/** Whether a source has anything (a PDF, or its extracted text kept on its
+ * own via `convertSourceToTextOnly`) to drag-select a quote from — as
+ * opposed to typing one in by hand. */
+export function hasQuotableText(source: Source): boolean {
+  return !!source.pdfBlobId || source.pageTexts.length > 0
 }
 
 export function matchesSourceQuery(source: Source, query: string): boolean {

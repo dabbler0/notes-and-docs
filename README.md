@@ -119,6 +119,64 @@ with `initialPage` set (as the Quotes tab's "View in source" link does)
 opens straight to the PDF tab, since there's no reason to land on BibTeX
 first when the whole point was to jump to a specific page.
 
+**How much space a source is using.** Since everything lives in the
+browser's own IndexedDB rather than someone else's server, storage is a
+finite, visible resource — a source's card (in the Sources grid) and its
+own detail dialog both show a size, computed by `getSourceStorageBytes` in
+`sourcesRepo.ts`: the attached PDF blob's own byte size if it has one, or
+the byte size of its extracted text if it doesn't (`formatBytes` in
+`lib/format.ts` renders that as "26 KB", "3.4 MB", etc). It's read lazily,
+through `useSourceStorageBytes` — an IndexedDB blob read is cheap but still
+async, so a card shows no size for an instant before its own hook resolves
+rather than blocking the whole grid on it.
+
+**Trading the PDF for its text.** A PDF is usually the large majority of a
+source's footprint, while the reason it's there at all — being able to
+read it and pull quotes out of it — is served just as well by its already-
+extracted text for most papers. "Discard PDF, keep text only," next to the
+size readout in the PDF tab, calls `convertSourceToTextOnly` in
+`sourcesRepo.ts`: it deletes the PDF blob for good and sets a new
+`Source.textOnly` flag, keeping the `pageTexts` that were already extracted
+at upload time. This is one-way (there's no PDF byte left to reconstruct
+from, only "attach a new one" via the ordinary Replace flow, which clears
+the flag again), so the button confirms first. A text-only source falls
+back to `TextViewer` — see below — everywhere `PdfViewer` would otherwise
+show the PDF itself, so viewing and quoting keep working exactly as before,
+just from the extracted text instead of the rendered page.
+
+`TextViewer.tsx` reads a source's `pageTexts` as plain, paginated prose,
+with the same page-by-page navigation, in-document search (via the
+`usePageSearch` hook and `PageSearchBar` component both viewers now share —
+factored out of what used to be `PdfViewer`'s own search box, since the
+underlying logic never actually depended on there being a PDF at all, just
+a `pageTexts` array), and drag-to-quote that `PdfViewer` offers, but backed
+by ordinary DOM text instead of a canvas rendering plus a synthetic
+selectable text layer — a real practical difference, not just an
+implementation detail, since it's what makes text-only mode strictly
+lighter than keeping the PDF around for these purposes. It's available
+from the "Text" toggle next to a PDF-backed source's viewer, from
+`SourceDetailDialog` directly for a text-only source (no toggle needed —
+there's no PDF to switch back to), and from `QuoteInsertDialog`'s "From a
+source" tab, which now offers it for a text-only source the same way it
+already did for a PDF, rather than falling back to typing the quote in by
+hand the way it still does for a source with neither.
+
+Getting readable paragraphs out of a PDF in the first place took a bit of
+care: pdf.js hands back text items in reading order but with no structural
+markup at all, not even line breaks, so the original `extractPageTexts`
+flattened every page into one giant run-on line — fine for substring
+search, unusable for actually reading. `reflowTextItems` in `lib/pdf.ts`
+rejoins those items into paragraphs using a heuristic on the vertical gap
+between each item's baseline and the one before it, relative to that
+text's own font height: a small gap reads as the next word or the next
+wrapped line of the same paragraph and gets joined with a plain space; a
+gap noticeably larger than a normal line height reads as a new paragraph
+and gets a blank line instead. It's not real layout analysis — an unusual
+one (multi-column text, dense tables) can reflow oddly — but it only ever
+*adds* paragraph breaks relative to the old one-line-per-page format, so
+substring search and quote-matching over the result work exactly the same
+as they did before.
+
 **Essay trees & versioning.** An essay is a tree of `EssayNode`s (sections/
 subsections). Each node has:
 - `draftContent` — a live, freely-editable working copy of its own text.

@@ -1,0 +1,104 @@
+/**
+ * The storage-size accounting (`getSourceStorageBytes`) and the "discard
+ * the PDF, keep its extracted text" conversion (`convertSourceToTextOnly`)
+ * — the two pieces behind the storage-size UI and the text-only viewer.
+ */
+import { beforeEach, describe, expect, it } from 'vitest'
+import { convertSourceToTextOnly, createSource, getSourcePdfBlob, getSourceStorageBytes, hasQuotableText, removeSourcePdf, setSourcePdf } from '../sourcesRepo'
+import { emptyEntry } from '../../lib/bibtex'
+
+interface FakeStorageModule {
+  createFakeBackend(): unknown
+  __setActiveBackend(b: unknown): void
+}
+
+beforeEach(async () => {
+  const storageMod = (await import('../../storage')) as unknown as FakeStorageModule
+  storageMod.__setActiveBackend(storageMod.createFakeBackend())
+})
+
+function pdfFile(bytes: number, name = 'paper.pdf'): File {
+  return new File([new Uint8Array(bytes)], name, { type: 'application/pdf' })
+}
+
+describe('getSourceStorageBytes', () => {
+  it('is 0 for a BibTeX-only source with no PDF and no extracted text', async () => {
+    const source = await createSource(emptyEntry('x2020'))
+    expect(await getSourceStorageBytes(source)).toBe(0)
+  })
+
+  it("matches the attached PDF's own byte size", async () => {
+    const source = await createSource(emptyEntry('x2020'), { pdfFile: pdfFile(12_345), pageTexts: ['some text'] })
+    expect(await getSourceStorageBytes(source)).toBe(12_345)
+  })
+
+  it("matches the extracted text's byte size once converted to text-only", async () => {
+    const source = await createSource(emptyEntry('x2020'), { pdfFile: pdfFile(50_000), pageTexts: ['page one', 'page two'] })
+    await convertSourceToTextOnly(source)
+    const expectedBytes = new Blob(['page one', 'page two']).size
+    expect(await getSourceStorageBytes(source)).toBe(expectedBytes)
+    expect(expectedBytes).toBeLessThan(50_000)
+  })
+})
+
+describe('convertSourceToTextOnly', () => {
+  it('deletes the PDF blob, clears pdfBlobId, sets textOnly, and keeps pageTexts', async () => {
+    const source = await createSource(emptyEntry('x2020'), { pdfFile: pdfFile(1000), pageTexts: ['the extracted text'] })
+    const blobId = source.pdfBlobId!
+
+    await convertSourceToTextOnly(source)
+
+    expect(source.pdfBlobId).toBeUndefined()
+    expect(source.textOnly).toBe(true)
+    expect(source.pageTexts).toEqual(['the extracted text'])
+    expect(await getSourcePdfBlob(source)).toBeUndefined()
+
+    // The old blob is actually gone, not just detached from the source.
+    const { backend } = (await import('../../storage')) as unknown as { backend: { blobs: { get(id: string): Promise<Blob | undefined> } } }
+    expect(await backend.blobs.get(blobId)).toBeUndefined()
+  })
+
+  it('is a no-op on a source with no PDF to begin with', async () => {
+    const source = await createSource(emptyEntry('x2020'))
+    await convertSourceToTextOnly(source)
+    expect(source.textOnly).toBeUndefined()
+  })
+
+  it('re-attaching a PDF afterward clears textOnly again', async () => {
+    const source = await createSource(emptyEntry('x2020'), { pdfFile: pdfFile(1000), pageTexts: ['old text'] })
+    await convertSourceToTextOnly(source)
+    expect(source.textOnly).toBe(true)
+
+    await setSourcePdf(source, pdfFile(2000), ['new text'])
+    expect(source.textOnly).toBe(false)
+    expect(source.pdfBlobId).toBeDefined()
+  })
+
+  it('removing the PDF entirely also clears textOnly', async () => {
+    const source = await createSource(emptyEntry('x2020'), { pdfFile: pdfFile(1000), pageTexts: ['text'] })
+    await convertSourceToTextOnly(source)
+    await setSourcePdf(source, pdfFile(500), ['re-added'])
+    await removeSourcePdf(source)
+    expect(source.textOnly).toBe(false)
+    expect(source.pdfBlobId).toBeUndefined()
+    expect(source.pageTexts).toEqual([])
+  })
+})
+
+describe('hasQuotableText', () => {
+  it('is false for a BibTeX-only source', async () => {
+    const source = await createSource(emptyEntry('x2020'))
+    expect(hasQuotableText(source)).toBe(false)
+  })
+
+  it('is true for a source with a PDF attached', async () => {
+    const source = await createSource(emptyEntry('x2020'), { pdfFile: pdfFile(1000), pageTexts: ['text'] })
+    expect(hasQuotableText(source)).toBe(true)
+  })
+
+  it('is true for a text-only source', async () => {
+    const source = await createSource(emptyEntry('x2020'), { pdfFile: pdfFile(1000), pageTexts: ['text'] })
+    await convertSourceToTextOnly(source)
+    expect(hasQuotableText(source)).toBe(true)
+  })
+})

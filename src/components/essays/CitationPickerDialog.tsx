@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'preact/hooks'
 import { Modal } from '../Modal'
-import { listSources, matchesSourceQuery } from '../../models/sourcesRepo'
+import { hasQuotableText, listSources, matchesSourceQuery } from '../../models/sourcesRepo'
 import { displayAuthors, displayTitle } from '../../lib/bibtex'
 import type { Source } from '../../models/types'
 
@@ -24,7 +24,7 @@ export function CitationPickerDialog({
     listSources().then(setSources)
   }, [])
 
-  const filtered = sources.filter((s) => matchesSourceQuery(s, query) && (!pdfOnly || !!s.pdfBlobId) && (!requireUrl || !!s.bibtex.fields.url))
+  const filtered = sources.filter((s) => matchesSourceQuery(s, query) && (!pdfOnly || hasQuotableText(s)) && (!requireUrl || !!s.bibtex.fields.url))
 
   return (
     <Modal onClose={onClose}>
@@ -41,7 +41,7 @@ export function CitationPickerDialog({
       ) : (
         <label className="muted" style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 10 }}>
           <input type="checkbox" checked={pdfOnly} onChange={(e) => setPdfOnly((e.target as HTMLInputElement).checked)} />
-          Only sources with a PDF (needed to extract a quote)
+          Only sources with extractable text (needed to pull a quote from a PDF or text-only source)
         </label>
       )}
       <div className="citation-list">

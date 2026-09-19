@@ -1,7 +1,9 @@
-import { useEffect, useMemo, useRef, useState } from 'preact/hooks'
+import { useEffect, useRef, useState } from 'preact/hooks'
 import * as pdfjsLib from 'pdfjs-dist'
 import { getSourcePdfBlob } from '../../models/sourcesRepo'
-import { findPdfMatches, loadPdf, renderPageToCanvas, type PdfDoc } from '../../lib/pdf'
+import { loadPdf, renderPageToCanvas, type PdfDoc } from '../../lib/pdf'
+import { usePageSearch } from '../../lib/usePageSearch'
+import { PageSearchBar } from './PageSearchBar'
 import type { Source } from '../../models/types'
 
 /**
@@ -22,36 +24,17 @@ export function PdfViewer({
 }) {
   const [doc, setDoc] = useState<PdfDoc | null>(null)
   const [error, setError] = useState<string | null>(null)
-  const [searchQuery, setSearchQuery] = useState('')
-  const [matchIndex, setMatchIndex] = useState(0)
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const textLayerRef = useRef<HTMLDivElement>(null)
 
-  const matches = useMemo(() => findPdfMatches(source.pageTexts ?? [], searchQuery), [source.pageTexts, searchQuery])
-  const activeMatch = matches[matchIndex] ?? null
-
-  function jumpToMatch(nextIndex: number) {
-    if (matches.length === 0) return
-    const wrapped = ((nextIndex % matches.length) + matches.length) % matches.length
-    setMatchIndex(wrapped)
-    const target = matches[wrapped]
-    if (target.page !== page) onPageChange(target.page)
-  }
-
-  // A fresh query always starts from its first hit — landing wherever the
-  // cursor happened to be left from a previous search would be confusing.
-  useEffect(() => {
-    setMatchIndex(0)
-    if (matches.length > 0 && matches[0].page !== page) onPageChange(matches[0].page)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [searchQuery])
+  const search = usePageSearch(source.pageTexts ?? [], page, onPageChange)
+  const { searchQuery, activeMatch } = search
 
   useEffect(() => {
     let cancelled = false
     setDoc(null)
     setError(null)
-    setSearchQuery('')
-    setMatchIndex(0)
+    search.reset()
     getSourcePdfBlob(source).then(async (blob) => {
       if (!blob) {
         if (!cancelled) setError('No PDF attached to this source.')
@@ -68,6 +51,7 @@ export function PdfViewer({
     return () => {
       cancelled = true
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [source.id])
 
   useEffect(() => {
@@ -146,30 +130,7 @@ export function PdfViewer({
 
   return (
     <div className="pdf-viewer">
-      <div className="pdf-search-row">
-        <input
-          className="pdf-search-input"
-          placeholder="Search in this PDF…"
-          value={searchQuery}
-          onInput={(e) => setSearchQuery((e.target as HTMLInputElement).value)}
-          onKeyDown={(e) => {
-            if (e.key !== 'Enter') return
-            e.preventDefault()
-            jumpToMatch(matchIndex + (e.shiftKey ? -1 : 1))
-          }}
-        />
-        {searchQuery.trim() && (
-          <>
-            <span className="muted pdf-search-count">{matches.length === 0 ? 'No matches' : `${matchIndex + 1} of ${matches.length}`}</span>
-            <button type="button" className="btn btn-sm" disabled={matches.length === 0} onClick={() => jumpToMatch(matchIndex - 1)}>
-              ↑
-            </button>
-            <button type="button" className="btn btn-sm" disabled={matches.length === 0} onClick={() => jumpToMatch(matchIndex + 1)}>
-              ↓
-            </button>
-          </>
-        )}
-      </div>
+      <PageSearchBar search={search} placeholder="Search in this PDF…" />
       <div className="pdf-controls">
         <button className="btn btn-sm" disabled={page <= 1} onClick={() => onPageChange(page - 1)}>
           ← Prev
