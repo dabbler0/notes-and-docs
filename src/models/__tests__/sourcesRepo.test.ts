@@ -6,6 +6,16 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { commitOcrPreview, convertSourceToTextOnly, createSource, discardOcrPreview, getSource, getSourcePdfBlob, getSourceStorageBytes, hasQuotableText, listSources, removeSourcePdf, searchPdfBank, setSourcePdf, stageOcrPreview } from '../sourcesRepo'
 import { emptyEntry } from '../../lib/bibtex'
+import { gzipCompress, gzipDecompress } from '../../lib/compression'
+
+/** `getSourceStorageBytes`' own expected value for a text-only source: the
+ * compressed size actually written to disk (see `sourcesRepo.ts`'s doc
+ * comment on `StoredSource`), not the plain-text size — computed the same
+ * way that module does, so these tests assert the real on-disk shape
+ * rather than duplicating a guess at gzip's output size. */
+async function compressedPageHtmlSize(pageHtml: string[]): Promise<number> {
+  return (await gzipCompress(JSON.stringify(pageHtml))).byteLength
+}
 
 interface FakeStorageModule {
   createFakeBackend(): unknown
@@ -32,10 +42,19 @@ describe('getSourceStorageBytes', () => {
     expect(await getSourceStorageBytes(source)).toBe(12_345)
   })
 
-  it("matches the extracted text's byte size once converted to text-only", async () => {
+  it('is meaningfully smaller than the plain-text size for the layout extractor\'s own repetitive markup', async () => {
+    const repetitiveHtml = '<span style="position:absolute;left:10px;top:20px;font-size:12px;color:#000;">word</span>'.repeat(500)
+    const source = await createSource(emptyEntry('x2020'), { pdfFile: pdfFile(50_000), pageHtml: [repetitiveHtml] })
+    await convertSourceToTextOnly(source)
+    const plainBytes = new Blob([repetitiveHtml]).size
+    const storedBytes = await getSourceStorageBytes(source)
+    expect(storedBytes).toBeLessThan(plainBytes * 0.1)
+  })
+
+  it("matches the extracted text's compressed byte size once converted to text-only", async () => {
     const source = await createSource(emptyEntry('x2020'), { pdfFile: pdfFile(50_000), pageHtml: ['page one', 'page two'] })
     await convertSourceToTextOnly(source)
-    const expectedBytes = new Blob(['page one', 'page two']).size
+    const expectedBytes = await compressedPageHtmlSize(['page one', 'page two'])
     expect(await getSourceStorageBytes(source)).toBe(expectedBytes)
     expect(expectedBytes).toBeLessThan(50_000)
   })
@@ -96,7 +115,7 @@ describe('createSource with textOnly', () => {
     expect(source.textOnly).toBe(true)
     expect(source.pageHtml).toEqual(['extracted text'])
     expect(source.pdfFileName).toBe('paper.pdf')
-    expect(await getSourceStorageBytes(source)).toBe(new Blob(['extracted text']).size)
+    expect(await getSourceStorageBytes(source)).toBe(await compressedPageHtmlSize(['extracted text']))
     // The whole point: the PDF's bytes are never written to the blob store
     // at all — not stored-then-deleted, just never put in the first place.
     expect(putSpy).not.toHaveBeenCalled()
@@ -219,14 +238,23 @@ describe('migrating an old source stored with pageTexts instead of pageHtml', ()
     expect(sources[0].pageHtml).toEqual(['<p>First paragraph.<br>With a line break.</p>', '<p>Second page.</p>'])
   })
 
-  it('persists the migration so a second read never sees pageTexts again', async () => {
+  it('persists the migration (compressed) so a second read never sees pageTexts again', async () => {
     await putLegacySource()
     await getSource('legacy-1')
 
     const { backend } = (await import('../../storage')) as unknown as { backend: { docs: { get: (collection: string, id: string) => Promise<any> } } }
     const raw = await backend.docs.get('sources', 'legacy-1')
     expect(raw.pageTexts).toBeUndefined()
-    expect(raw.pageHtml).toEqual(['<p>First paragraph.<br>With a line break.</p>', '<p>Second page.</p>'])
+    expect(raw.pageHtml).toBeUndefined()
+    // Not `toBeInstanceOf(Uint8Array)` — this project's own worker-pool test
+    // setup can hand back a `Uint8Array` from a different realm than this
+    // file's own `Uint8Array` binding (confirmed directly: `instanceof`
+    // failed here despite `Object.prototype.toString` correctly saying
+    // `[object Uint8Array]`), the same real cross-realm gotcha
+    // `lib/crypto.ts`'s `jsonReplacer` had to work around for the same
+    // reason. Checking the tag directly instead is realm-agnostic.
+    expect(Object.prototype.toString.call(raw.pageHtmlCompressed)).toBe('[object Uint8Array]')
+    expect(JSON.parse(await gzipDecompress(raw.pageHtmlCompressed))).toEqual(['<p>First paragraph.<br>With a line break.</p>', '<p>Second page.</p>'])
   })
 
   it('does not touch updatedAt — the migration is a pure local storage-shape upgrade, not a real edit', async () => {
@@ -235,9 +263,28 @@ describe('migrating an old source stored with pageTexts instead of pageHtml', ()
     expect(source!.updatedAt).toBe(12345)
   })
 
-  it('is a no-op for a source that already has pageHtml', async () => {
+  it('round-trips a source already on the current compressed shape unchanged', async () => {
     const source = await createSource(emptyEntry('x2020'), { pageHtml: ['<p>Already migrated.</p>'] })
     const reloaded = await getSource(source.id)
     expect(reloaded!.pageHtml).toEqual(['<p>Already migrated.</p>'])
+  })
+
+  it('migrates an old *uncompressed* pageHtml shape (from before compression existed) to the compressed one', async () => {
+    const { backend } = (await import('../../storage')) as unknown as { backend: { docs: { put: (collection: string, doc: any) => Promise<void>; get: (collection: string, id: string) => Promise<any> } } }
+    await backend.docs.put('sources', {
+      id: 'uncompressed-1',
+      bibtex: emptyEntry('uncompressed2020'),
+      comment: '',
+      pageHtml: ['<p>Not compressed yet.</p>'],
+      createdAt: 1,
+      updatedAt: 1,
+    })
+
+    const source = await getSource('uncompressed-1')
+    expect(source!.pageHtml).toEqual(['<p>Not compressed yet.</p>'])
+
+    const raw = await backend.docs.get('sources', 'uncompressed-1')
+    expect(raw.pageHtml).toBeUndefined()
+    expect(Object.prototype.toString.call(raw.pageHtmlCompressed)).toBe('[object Uint8Array]')
   })
 })

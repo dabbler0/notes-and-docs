@@ -75,16 +75,35 @@ import type { Source } from '../models/types'
  * what: Firestore needs to filter/sort on it server-side for incremental
  * sync's own `where('updatedAt', '>', cursor)` queries to work at all.
  *
- * `sources.pageHtml` was `pageTexts` before `Source` moved from storing
- * plain extracted text to real HTML (see `types.ts`) — same field, same
- * sensitivity, just renamed; not an encryption-policy change, so it didn't
- * need a `CURRENT_ENCRYPTION_VERSION` bump the way an actual change to
- * *which* fields get encrypted would.
+ * `sources.pageHtmlCompressed` was `pageHtml` (and, before that,
+ * `pageTexts`) before `sourcesRepo.ts` started storing it gzip-compressed
+ * (see that module's own doc comment on `StoredSource`) — same field, same
+ * sensitivity, just renamed and now carrying a `Uint8Array` instead of a
+ * `string[]`; not an encryption-policy change, so it didn't need a
+ * `CURRENT_ENCRYPTION_VERSION` bump the way an actual change to *which*
+ * fields get encrypted would. `encryptJson`/`decryptJson` (`lib/crypto.ts`)
+ * already know how to carry a `Uint8Array` value through JSON untouched, so
+ * this field needs no special handling here beyond its name — compression
+ * happens below this module entirely, in `sourcesRepo.ts`, before a doc
+ * ever reaches here to be encrypted, which is also why the *encrypted*
+ * payload ends up smaller too, not just what's stored locally.
+ *
+ * `pageHtml` and `pageTexts` stay listed here too, even though nothing
+ * ever *writes* those field names anymore — this module reads a source's
+ * raw stored shape straight off `backend.docs.list`, bypassing
+ * `sourcesRepo.ts`'s own read path (`listSources`/`getSource`), which is
+ * the only place that actually migrates an old shape to the current one.
+ * A source that predates this device's upgrade and hasn't been opened
+ * (and thus migrated) yet could still be sitting in local storage under
+ * either older name the moment a sync pass runs — dropping them from this
+ * list the moment the field was renamed would have pushed that doc's
+ * still-unmigrated, still-sensitive page content as *plaintext* metadata
+ * instead of encrypting it.
  */
 const SENSITIVE_FIELDS: Record<SyncedCollection, string[]> = {
   essays: ['title'],
   nodes: ['title', 'draftContent', 'versions', 'footnotes'],
-  sources: ['bibtex', 'comment', 'pdfFileName', 'pageHtml'],
+  sources: ['bibtex', 'comment', 'pdfFileName', 'pageHtmlCompressed', 'pageHtml', 'pageTexts'],
   quotes: ['quoteText', 'annotation', 'page'],
   graveyard: ['html', 'nodeTitle'],
 }

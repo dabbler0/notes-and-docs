@@ -1,6 +1,7 @@
 import { backend } from '../storage'
 import { id } from '../lib/id'
 import { displayAuthors, displayTitle } from '../lib/bibtex'
+import { gzipCompress, gzipDecompress } from '../lib/compression'
 import { buildSearchRegex } from '../lib/pdf'
 import { htmlToPlainText, plainTextToHtml } from '../lib/textExtraction'
 import type { BibtexEntry, Source } from './types'
@@ -8,41 +9,114 @@ import type { BibtexEntry, Source } from './types'
 const COLLECTION = 'sources'
 
 /**
- * Upgrades a source loaded straight from storage that still has the old
- * `pageTexts: string[]` shape (from before `pageHtml` existed) into the
- * current one — `pageHtml`, real (if plain) HTML rather than a flat plain
- * string, via `plainTextToHtml` (which, by construction, renders identically
- * to how the old plain text used to). Every read path (`listSources`,
- * `getSource`) runs every source through this before handing it out, so the
- * rest of the app never has to know the old shape existed.
+ * The shape a source actually has on disk (and, via `SENSITIVE_FIELDS` in
+ * `sync/syncEngine.ts`, in its encrypted synced form) — `pageHtml` gzipped
+ * down to `pageHtmlCompressed` rather than kept as a plain string array.
+ * `Source.pageHtml` is often the large majority of a source's footprint
+ * (a whole PDF's worth of markup, base64 image data and all), and it's also
+ * some of the most repetitive text this app ever stores: the layout
+ * extractor's own inline `style` attributes repeat the same handful of CSS
+ * property names on every single run, and a scanned/OCR'd page can add a
+ * multi-hundred-KB base64 image on top of that — exactly what gzip is good
+ * at, and a much smaller, lower-risk way to claw that space back than
+ * inventing a whole new binary document format and its own renderer would
+ * have been (which would also have traded one set of security
+ * considerations — the sanitizer/sandboxed-iframe pair `TextViewer` and
+ * `sanitizePageHtml` already rely on — for another: a hand-rolled binary
+ * parser and renderer is new, untested attack surface of its own, not zero
+ * risk just because it isn't HTML).
  *
- * Deliberately mutates and persists in place with a raw `backend.docs.put`
- * rather than `updateSource` — this is a one-time, purely local storage-
- * shape upgrade, not a real edit, so it shouldn't bump `updatedAt` and
- * trigger a sync push: the transformation is a pure function of data every
- * device already has, so every device that opens this source converges on
- * the identical result on its own, with nothing that needs propagating.
- * Idempotent and cheap to call unconditionally — a source that's already
- * been migrated (or was created after `pageHtml` existed) has no
- * `pageTexts` left to find, so this is a no-op for it.
+ * Compression happens purely at the storage boundary — `pageHtml` stays a
+ * plain `string[]` everywhere else in the app (`TextViewer`, search, the
+ * OCR/scanned-PDF check, ...); nothing above this module ever sees or
+ * needs to know about `pageHtmlCompressed` at all. And it happens
+ * *before* encryption, not after: sync encrypts whatever's actually in
+ * this field (see `SENSITIVE_FIELDS`), and encrypted ciphertext is
+ * indistinguishable from random noise, which gzip can't shrink at all — so
+ * compressing first and encrypting the smaller result second is the only
+ * order that gets both properties (small *and* encrypted) rather than one
+ * pretending to be the other.
  */
-async function migrateSource(source: Source & { pageTexts?: string[] }): Promise<Source> {
-  if (!source.pageTexts) return source
-  const { pageTexts, ...rest } = source
-  const migrated: Source = { ...rest, pageHtml: pageTexts.map(plainTextToHtml) }
-  await backend.docs.put(COLLECTION, migrated)
-  return migrated
+type StoredSource = Omit<Source, 'pageHtml'> & {
+  pageHtmlCompressed?: Uint8Array
+  /** Only ever present on a not-yet-migrated doc — see `normalizeSource`. */
+  pageHtml?: string[]
+  /** Only ever present on a not-yet-migrated doc from before `pageHtml` existed at all. */
+  pageTexts?: string[]
+}
+
+async function compressPageHtml(pageHtml: string[]): Promise<Uint8Array> {
+  return gzipCompress(JSON.stringify(pageHtml))
+}
+
+async function decompressPageHtml(bytes: Uint8Array): Promise<string[]> {
+  return JSON.parse(await gzipDecompress(bytes))
+}
+
+/** The one place a `Source` is ever actually written to storage — every
+ * write path in this module (`createSource`, `updateSource`,
+ * `normalizeSource`'s own migration, and everything downstream of
+ * `updateSource`) goes through this, so `pageHtml` is compressed
+ * consistently no matter which one triggered the write, and the plain
+ * uncompressed array is never what actually lands in storage (storing
+ * both would defeat the entire point of compressing it in the first
+ * place). */
+async function persistSource(source: Source): Promise<void> {
+  const { pageHtml, ...rest } = source
+  const stored: StoredSource = { ...rest, pageHtmlCompressed: await compressPageHtml(pageHtml) }
+  await backend.docs.put(COLLECTION, stored)
+}
+
+/**
+ * Upgrades a source loaded straight from storage into the current shape —
+ * `pageHtml` decompressed back to a plain `string[]` for the rest of the
+ * app to use — handling every storage shape this field has ever had:
+ * `pageTexts: string[]` (genuine plain text, from before `pageHtml`
+ * existed at all; converted via `plainTextToHtml`, which by construction
+ * renders identically to how the old plain text used to), an uncompressed
+ * `pageHtml: string[]` (from before this compression scheme existed), or
+ * the current `pageHtmlCompressed: Uint8Array`. Every read path
+ * (`listSources`, `getSource`) runs every source through this before
+ * handing it out, so the rest of the app never has to know any of the
+ * older shapes existed.
+ *
+ * Deliberately persists an actual migration (the `pageTexts` or
+ * uncompressed-`pageHtml` cases) in place via `persistSource` rather than
+ * through `updateSource` — this is a one-time, purely local storage-shape
+ * upgrade, not a real edit, so it shouldn't bump `updatedAt` and trigger a
+ * sync push: the transformation is a pure function of data every device
+ * already has, so every device that opens this source converges on the
+ * identical result on its own, with nothing that needs propagating.
+ * Idempotent and cheap to call unconditionally — a source already on the
+ * current `pageHtmlCompressed` shape just gets decompressed, with nothing
+ * written back.
+ */
+async function normalizeSource(stored: StoredSource): Promise<Source> {
+  if (stored.pageTexts) {
+    const { pageTexts, pageHtml: _ignored, pageHtmlCompressed: _ignoredToo, ...rest } = stored
+    const migrated: Source = { ...rest, pageHtml: pageTexts.map(plainTextToHtml) }
+    await persistSource(migrated)
+    return migrated
+  }
+  if (stored.pageHtml) {
+    const { pageHtml, pageHtmlCompressed: _ignored, ...rest } = stored
+    const migrated: Source = { ...rest, pageHtml }
+    await persistSource(migrated)
+    return migrated
+  }
+  const { pageHtmlCompressed, ...rest } = stored
+  return { ...rest, pageHtml: pageHtmlCompressed ? await decompressPageHtml(pageHtmlCompressed) : [] }
 }
 
 export async function listSources(): Promise<Source[]> {
-  const sources = await backend.docs.list<Source>(COLLECTION)
-  const migrated = await Promise.all(sources.map(migrateSource))
-  return migrated.filter((s) => !s.deleted).sort((a, b) => b.updatedAt - a.updatedAt)
+  const sources = await backend.docs.list<StoredSource>(COLLECTION)
+  const normalized = await Promise.all(sources.map(normalizeSource))
+  return normalized.filter((s) => !s.deleted).sort((a, b) => b.updatedAt - a.updatedAt)
 }
 
 export async function getSource(sourceId: string): Promise<Source | undefined> {
-  const source = await backend.docs.get<Source>(COLLECTION, sourceId)
-  return source ? migrateSource(source) : undefined
+  const source = await backend.docs.get<StoredSource>(COLLECTION, sourceId)
+  return source ? normalizeSource(source) : undefined
 }
 
 export async function createSource(
@@ -72,13 +146,13 @@ export async function createSource(
       await backend.blobs.put(source.pdfBlobId, opts.pdfFile)
     }
   }
-  await backend.docs.put(COLLECTION, source)
+  await persistSource(source)
   return source
 }
 
 export async function updateSource(source: Source): Promise<void> {
   source.updatedAt = Date.now()
-  await backend.docs.put(COLLECTION, source)
+  await persistSource(source)
 }
 
 /**
@@ -105,14 +179,15 @@ export async function getSourcePdfBlob(source: Source): Promise<Blob | undefined
 
 /**
  * How many bytes this source is actually taking up in local storage: the
- * PDF blob's own size if it has one, or the extracted text's size if it's
- * been converted to text-only (see `convertSourceToTextOnly`), or 0 for a
- * BibTeX-only source with nothing attached. Used purely for the "how much
- * space is this using" UI — never for anything that needs to be exact
- * (sync payload size, quota checks), so a rough `Blob([...]).size` over the
- * extracted text (real UTF-8 byte length, not just character count) is fine
- * even though it doesn't account for the JSON structure it's actually
- * stored under.
+ * PDF blob's own size if it has one, or the extracted text's *compressed*
+ * size if it's been converted to text-only (see `convertSourceToTextOnly`)
+ * — the same `pageHtmlCompressed` bytes actually written to disk (see this
+ * module's own doc comment on `StoredSource`), not the plain-text size,
+ * since the whole point of compressing it is for this number to reflect
+ * that — or 0 for a BibTeX-only source with nothing attached. Used purely
+ * for the "how much space is this using" UI — never for anything that
+ * needs to be exact (sync payload size, quota checks), so this doesn't
+ * account for the rest of the JSON structure it's actually stored under.
  */
 export async function getSourceStorageBytes(source: Source): Promise<number> {
   if (source.pdfBlobId) {
@@ -120,7 +195,7 @@ export async function getSourceStorageBytes(source: Source): Promise<number> {
     return blob?.size ?? 0
   }
   if (source.pageHtml.length > 0) {
-    return new Blob(source.pageHtml).size
+    return (await compressPageHtml(source.pageHtml)).byteLength
   }
   return 0
 }

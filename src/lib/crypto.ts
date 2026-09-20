@@ -51,9 +51,51 @@ export interface EncryptedField {
   data: string
 }
 
+// `JSON.stringify` has no native way to carry a `Uint8Array` (e.g.
+// `sources.pageHtmlCompressed` — see `sourcesRepo.ts`) — left alone, it'd
+// serialize one as `{"0":31,"1":139,...}`, one JSON number per byte, which
+// is both wrong to read back and far larger than the bytes it's supposed to
+// represent. This replacer/reviver pair means any sensitive field can
+// transparently carry binary data through `encryptJson`/`decryptJson`
+// without every caller needing its own encoding step: a `Uint8Array` becomes
+// a small tagged object carrying its own base64 on the way in, and unwraps
+// back to a real `Uint8Array` on the way out. Every other value type is
+// untouched, so this changes nothing for the plain strings/numbers/objects
+// every other sensitive field already uses.
+const BYTES_TAG = '__bytes__'
+
+// `instanceof Uint8Array` is deliberately *not* used here: it depends on
+// the exact realm the `Uint8Array` constructor being compared against
+// belongs to, and a byte array that reached this function via a Web Stream
+// (`gzipCompress`'s `Response.arrayBuffer()` — see `compression.ts`) can
+// easily be a `Uint8Array` from a different realm than the one this module
+// itself runs in (confirmed directly: under Vitest's worker pool, exactly
+// this happened — `instanceof` came back `false` for a value whose own
+// `Object.prototype.toString` and constructor name both plainly said
+// `Uint8Array`). `Object.prototype.toString` is realm-agnostic — it reads
+// the value's own internal `[[Class]]`/`Symbol.toStringTag` rather than
+// comparing against a specific constructor's `.prototype` — so it
+// identifies a real `Uint8Array` correctly no matter which realm's
+// constructor produced it.
+function isUint8Array(value: unknown): value is Uint8Array {
+  return Object.prototype.toString.call(value) === '[object Uint8Array]'
+}
+
+function jsonReplacer(_key: string, value: unknown): unknown {
+  if (isUint8Array(value)) return { [BYTES_TAG]: bufToB64(value.slice().buffer) }
+  return value
+}
+
+function jsonReviver(_key: string, value: unknown): unknown {
+  if (value && typeof value === 'object' && BYTES_TAG in (value as Record<string, unknown>)) {
+    return new Uint8Array(b64ToBuf((value as Record<string, string>)[BYTES_TAG]))
+  }
+  return value
+}
+
 export async function encryptJson(cryptoKey: CryptoKey, value: unknown): Promise<EncryptedField> {
   const iv = crypto.getRandomValues(new Uint8Array(12))
-  const plaintext = new TextEncoder().encode(JSON.stringify(value))
+  const plaintext = new TextEncoder().encode(JSON.stringify(value, jsonReplacer))
   const cipher = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, cryptoKey, plaintext)
   return { iv: bufToB64(iv.buffer), data: bufToB64(cipher) }
 }
@@ -62,7 +104,7 @@ export async function decryptJson<T>(cryptoKey: CryptoKey, field: EncryptedField
   const iv = new Uint8Array(b64ToBuf(field.iv))
   const cipher = b64ToBuf(field.data)
   const plaintext = await crypto.subtle.decrypt({ name: 'AES-GCM', iv }, cryptoKey, cipher)
-  return JSON.parse(new TextDecoder().decode(plaintext))
+  return JSON.parse(new TextDecoder().decode(plaintext), jsonReviver)
 }
 
 export async function encryptBytes(cryptoKey: CryptoKey, data: ArrayBuffer): Promise<{ iv: string; cipher: ArrayBuffer }> {

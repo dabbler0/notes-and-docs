@@ -152,18 +152,102 @@ viewers' own in-document search goes through it rather than assuming
 
 A source saved before `pageHtml` existed (when this field held plain text
 directly, as `pageTexts: string[]`) is upgraded the moment it's next
-loaded: `migrateSource` in `sourcesRepo.ts`, run by both `listSources` and
+loaded: `normalizeSource` in `sourcesRepo.ts`, run by both `listSources` and
 `getSource` on every doc they hand back, converts a lingering `pageTexts`
 into the equivalent `pageHtml` via `plainTextToHtml` — by construction, an
 identical rendered appearance to what the old plain-text rendering used to
-produce — and persists the upgraded shape with a raw `backend.docs.put`
-rather than `updateSource`, deliberately *not* bumping `updatedAt`: this is
-a one-time, purely local storage-shape fix, not a real edit, and every
-device converges on the identical result from the same source data on its
-own, so there's nothing that actually needs to sync. Idempotent and cheap
-to call unconditionally — a source with no lingering `pageTexts` (already
-migrated, or created after `pageHtml` existed) just passes through
-untouched.
+produce — and persists the upgraded shape (see "Compressed at rest" below
+for the *current* on-disk shape it's upgraded *to*) rather than through
+`updateSource`, deliberately *not* bumping `updatedAt`: this is a one-time,
+purely local storage-shape fix, not a real edit, and every device converges
+on the identical result from the same source data on its own, so there's
+nothing that actually needs to sync. Idempotent and cheap to call
+unconditionally — a source already on the current shape just passes
+through untouched.
+
+**Compressed at rest.** `pageHtml` is often the large majority of a
+source's footprint, and it's also some of the most repetitive text this app
+ever stores: the layout extractor's own inline `style` attributes repeat
+the same handful of CSS property names on every single run, and either
+extractor's output can carry a sizeable base64 image on top of that. Two
+ways to shrink it were on the table — a lean custom binary format (text
+runs plus binary position/color/size fields and binary image data, with its
+own renderer) versus compressing the existing HTML at rest — and the
+second won out. A hand-rolled binary format would trade the sanitizer/
+sandboxed-iframe pair (`sanitizePageHtml`, `TextViewer`'s iframe — see
+"Rendering arbitrary HTML as content" above) for a different set of
+security considerations, not zero ones: a binary parser and renderer is new
+attack surface of its own (bounds-checked position/size fields, image
+decoding, resource-exhaustion guards against a malformed or hostile
+record), and years less battle-tested than "the browser's own HTML/CSS
+engine, sandboxed." It would also mean giving up everything that engine
+already provides for free — text layout, font fallback, native selection —
+and reimplementing it, badly, in a renderer built to be small. Compression
+gets most of the same space back for a much smaller, lower-risk change,
+and it keeps the app's storage in an existing, well-understood shape rather
+than inventing a new one only this app's own code can ever read back.
+
+`sourcesRepo.ts` is the only module that knows about this: `pageHtml` is
+gzip-compressed (`lib/compression.ts`, via the browser's own
+`CompressionStream`/`DecompressionStream` — no extra dependency) into
+`pageHtmlCompressed` the moment a source is written (`persistSource`, the
+one function every write path funnels through), and decompressed back to
+the plain `string[]` shape the rest of the app already expects the moment
+it's read (`normalizeSource`, alongside the older `pageTexts`/uncompressed-
+`pageHtml` migrations above). Nothing above this module — `TextViewer`,
+search, the scanned-PDF check — ever sees or needs to know
+`pageHtmlCompressed` exists at all. The size win scales with how repetitive
+a given page's markup is: a plain-extracted page's `<p>`/`<br>` prose
+compresses well (rough measurement on a real PDF: about half the size),
+while a layout-extracted page carrying a cropped chart or photo compresses
+less dramatically in *proportion* (rough measurement on the same PDF: a bit
+over a quarter smaller) simply because a base64 PNG is already
+near-incompressible — gzip is squeezing genuinely redundant text out, not
+performing magic on data that has none left to give up.
+
+This also flows straight through to sync: `pageHtmlCompressed` (not
+`pageHtml`) is what's actually in `SENSITIVE_FIELDS` in
+`sync/syncEngine.ts` now, so it's the *compressed* bytes that get
+encrypted and uploaded — compression happens before encryption, never
+after, since encrypted ciphertext is high-entropy noise that gzip can't
+shrink at all, so doing it in that order is the only one that gets both
+properties (small *and* encrypted) rather than one masquerading as the
+other. Carrying a `Uint8Array` through the existing per-field
+encrypt/decrypt pipeline needed one small addition: `encryptJson`/
+`decryptJson` (`lib/crypto.ts`) previously assumed every sensitive field
+was plain JSON-safe data, and `JSON.stringify` has no native way to
+represent a byte array (it would serialize one as `{"0":31,"1":139,...}` —
+both wrong to read back and far larger than the bytes it's supposed to
+represent) — a small replacer/reviver pair now transparently base64-encodes
+a `Uint8Array` on the way in and decodes it back on the way out, so every
+other sensitive field (still plain strings/numbers/objects) is completely
+unaffected. `SENSITIVE_FIELDS` also still lists the older `pageHtml`/
+`pageTexts` names alongside the current one, purely as a safety net: sync
+reads a source's *raw* stored shape directly, bypassing the
+`normalizeSource` migration `sourcesRepo.ts`'s own read path runs, so a
+source that predates this device's upgrade and hasn't been opened (and
+thus migrated) yet could still be sitting in local storage under an older
+field name the moment a sync pass runs — dropping those names the moment
+the field was renamed would have pushed that doc's still-sensitive page
+content as *plaintext* metadata instead of encrypting it.
+
+One implementation gotcha worth recording: `value instanceof Uint8Array`
+is *not* how that replacer checks for a byte array, deliberately — under
+this project's own test setup (Vitest's worker pool), a `Uint8Array`
+produced via a Web Stream (`gzipCompress`'s `Response.arrayBuffer()`) and
+then round-tripped through `structuredClone` came back as a `Uint8Array`
+from a *different realm* than the one the checking code ran in: its own
+`Object.prototype.toString` and constructor name both plainly said
+`Uint8Array`, but `instanceof` returned `false` anyway, since `instanceof`
+compares against a specific realm's constructor identity rather than
+asking "what kind of thing is this." Confirmed directly — it manifested as
+sync hanging indefinitely, since JSON.stringify's default (misidentifying
+the byte array as a plain object and serializing it byte-by-byte) fed a
+corrupted record forward until something further down blocked, not as an
+outright thrown error. `Object.prototype.toString.call(value) ===
+'[object Uint8Array]'` sidesteps the whole issue, since it reads the
+value's own internal tag rather than comparing against any particular
+realm's constructor.
 
 **Trading the PDF for its text.** A PDF is usually the large majority of a
 source's footprint, while the reason it's there at all — being able to

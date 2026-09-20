@@ -27,8 +27,14 @@ export interface Source {
    * `htmlToPlainText` (`lib/textExtraction.ts`) reduces it back down first
    * — nothing else should assume this is plain text. A source saved before
    * `pageHtml` existed (when this field was `pageTexts: string[]`, genuine
-   * plain text) gets migrated the moment it's loaded, via
-   * `migratePlainTextSources` in `sourcesRepo.ts` — see its own doc comment.
+   * plain text) gets migrated the moment it's loaded — see `sourcesRepo.ts`'s
+   * own doc comment on `normalizeSource`.
+   *
+   * This is the shape every other part of the app sees and works with —
+   * `sourcesRepo.ts` is the only place that ever touches how it's actually
+   * stored, which is gzip-compressed (see that module's doc comment) rather
+   * than this plain array; nothing outside that module should assume
+   * anything about the on-disk shape from this field's type.
    */
   pageHtml: string[]
   /**
