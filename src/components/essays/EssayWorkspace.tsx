@@ -194,7 +194,7 @@ export function EssayWorkspace({ essayId, onBack }: { essayId: string; onBack: (
     const node = activeNode()
     if (!range || !el || !node) return
     el.focus()
-    const html = `<blockquote class="quote" data-source-id="${source.id}" data-page="${page}">${escapeHtml(quote)}</blockquote><p>${citationHtml(source, { page })}</p>`
+    const html = `<blockquote class="quote" data-source-id="${source.id}" data-page="${page}">${escapeHtml(quote)}</blockquote><p>${citationHtml(source, { page })}&nbsp;</p>`
     insertHtmlAtRange(range, html)
     await persistActiveNode(node)
     reload()

@@ -259,6 +259,7 @@ export function SectionBlock({
               onCaptureRange()
             }}
             onInput={handleShardInput}
+            onKeyDown={handleShardKeyDown}
             onKeyUp={onCaptureRange}
           />
         ) : nodeMap.has(seg.childId) ? (
@@ -489,6 +490,81 @@ function FootnoteRow({
 
 function cssEscapeId(s: string): string {
   return typeof CSS !== 'undefined' && CSS.escape ? CSS.escape(s) : s.replace(/["\\]/g, '\\$&')
+}
+
+/**
+ * The standard "exit a block quote" gesture most editors support (Notion,
+ * Google Docs, Word all do some version of it for quotes and lists alike):
+ * pressing Enter right at the trailing edge of the block breaks out into a
+ * fresh, ordinary paragraph after it, instead of continuing to type inside
+ * it. A bare contentEditable `<blockquote>` has no such behavior built in —
+ * with nothing else after it to click or arrow past whenever it's the last
+ * thing in a section, Enter (or just typing) there normally just keeps
+ * extending the quote, which is exactly the "stuck inside it" complaint this
+ * fixes. Only fires when the caret has nothing to its right inside the
+ * quote (or its attached citation line right after it — the two are always
+ * inserted as a pair by insertQuote in EssayWorkspace.tsx, and are meant to
+ * be exited together), so pressing Enter in the *middle* of a quote's own
+ * text still behaves normally.
+ */
+function handleShardKeyDown(e: KeyboardEvent) {
+  if (e.key !== 'Enter' || e.shiftKey || e.ctrlKey || e.metaKey || e.altKey) return
+  const sel = window.getSelection()
+  if (!sel || !sel.isCollapsed || sel.rangeCount === 0) return
+  const range = sel.getRangeAt(0)
+  const startEl = (range.startContainer.nodeType === Node.ELEMENT_NODE ? (range.startContainer as HTMLElement) : range.startContainer.parentElement) as HTMLElement | null
+  const shard = startEl?.closest<HTMLElement>('.node-content')
+  if (!shard) return
+
+  // The top-level child of the shard the caret sits within or right after —
+  // a blockquote and its citation paragraph are always direct children of
+  // the shard, so this is the one node worth checking, however deep inside
+  // it (e.g. inside the <cite> itself) the caret actually is. Collapsing a
+  // selection to "the end of the document" (a very ordinary way to arrive
+  // right after a trailing quote) leaves the range's boundary sitting in the
+  // shard itself, one offset past its last child, rather than inside any
+  // text node — the childNodes[offset - 1] case below is exactly that.
+  let contextNode: Node | null
+  if (range.startContainer === shard) {
+    contextNode = range.startOffset > 0 ? shard.childNodes[range.startOffset - 1] : null
+  } else {
+    let node: Node = range.startContainer
+    while (node.parentNode && node.parentNode !== shard) node = node.parentNode
+    contextNode = node.parentNode === shard ? node : null
+  }
+  if (!contextNode || contextNode.nodeType !== Node.ELEMENT_NODE) return
+  const el = contextNode as HTMLElement
+  const prev = el.previousElementSibling
+  const isQuote = el.tagName === 'BLOCKQUOTE' && el.classList.contains('quote')
+  const isCitationAfterQuote = prev?.tagName === 'BLOCKQUOTE' && prev.classList.contains('quote')
+  if (!isQuote && !isCitationAfterQuote) return
+  const quoteEl = el
+
+  // Only escape when there's nothing left to the right of the caret inside
+  // this element — otherwise Enter should keep its normal, in-place meaning.
+  const tail = document.createRange()
+  tail.selectNodeContents(quoteEl)
+  tail.setStart(range.startContainer, range.startOffset)
+  if (tail.toString().replace(/ /g, ' ').trim() !== '') return
+
+  e.preventDefault()
+  // Land past the citation line too when escaping from the quote text
+  // itself, so either trailing edge (the quote or its citation) exits the
+  // whole quote+citation unit in one keystroke.
+  const insertAfter = quoteEl.tagName === 'BLOCKQUOTE' && quoteEl.nextElementSibling?.tagName === 'P' ? (quoteEl.nextElementSibling as HTMLElement) : quoteEl
+  const p = document.createElement('p')
+  p.appendChild(document.createElement('br'))
+  insertAfter.after(p)
+  const newRange = document.createRange()
+  newRange.setStart(p, 0)
+  newRange.collapse(true)
+  sel.removeAllRanges()
+  sel.addRange(newRange)
+  // No native 'input' event fires for a DOM mutation we made ourselves (we
+  // preventDefault()'d the key that would have triggered one) — dispatch
+  // one so the shard's own onInput (handleShardInput) picks this up and
+  // schedules a save exactly like any other edit.
+  shard.dispatchEvent(new Event('input', { bubbles: true }))
 }
 
 const AUTOLIST_BLOCK_TAGS = new Set(['P', 'DIV', 'LI', 'H1', 'H2', 'H3', 'H4', 'H5', 'H6', 'BLOCKQUOTE'])

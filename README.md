@@ -503,6 +503,31 @@ inline span's surrounding quote marks are literal characters in the
 content, so it falls through the same plain-inline-text handling a citation
 or source link already gets.
 
+**Exiting a block quote.** A bare contentEditable `<blockquote>` has no
+built-in way to "leave" it — with nothing else after it to click or arrow
+past whenever the inserted quote (plus its citation paragraph right after,
+which `insertQuote` always adds alongside it) is the last thing in a
+section, typing there by default just keeps extending the quote or its
+citation, which used to mean getting stuck inside either one. `SectionBlock`
+now implements the same gesture most block editors use for quotes and lists
+alike: pressing Enter right at the trailing edge of the block breaks out
+into a fresh, ordinary paragraph after it instead. `handleShardKeyDown`
+resolves the caret to the top-level child of the shard it sits within or
+right after (the blockquote and its citation `<p>` are always direct
+children of the shard, however deep inside one — e.g. inside the citation's
+own `<cite>`/`<a>` — the caret actually is); if that's the blockquote itself
+or the citation paragraph immediately following one, and there's nothing
+left to the right of the caret inside it, Enter is intercepted: a new empty
+paragraph is inserted right after the pair (escaping from the quote text
+itself skips past its citation too, so either trailing edge exits the whole
+unit in one keystroke) and the caret moves into it. Pressing Enter in the
+*middle* of a quote's own text is untouched — that still splits the quote
+in place, same as any other paragraph. Since this bypasses the browser's
+own default (`preventDefault()`) rather than dispatching a real `input`
+event, the shard's own input handling is invoked manually afterward (a
+synthetic `input` event, same handler `autoListify` already runs through)
+so the change gets picked up and saved exactly like any other edit.
+
 **Searching within a PDF.** `PdfViewer` — used both from a source's own
 detail view and from the "From a source" tab of `QuoteInsertDialog` — has its
 own search box above the page controls, independent of the global "Search
