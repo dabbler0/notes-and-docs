@@ -116,18 +116,35 @@ export function SectionBlock({
   // differs from the incoming segment — a freshly (re)mounted shard from a
   // structural change (e.g. a demote) starts out empty and always needs it;
   // an already-populated, unfocused one that already matches doesn't.
+  //
+  // Also, every time this runs on an unfocused shard, sweep it for any
+  // already-empty citation/inline-quote/source-link chip and remove it —
+  // handleSourceChipEmptying (below) stops a *new* one from ever being
+  // created going forward, but can't reach one left over from before that
+  // existed (or synced in from a browser inconsistent about cleaning up
+  // empty inline elements on its own), since there's no way to place a
+  // caret inside a chip with nothing in it to click or arrow onto. Sweeping
+  // it here instead — on every render this shard isn't actively focused,
+  // load included — fixes it without the user ever needing to interact
+  // with the broken chip at all, which is what made a document with one
+  // stuck: nothing in it could be clicked into, typed into, or deleted.
   useEffect(() => {
     if (syncedContent.current.node === node && syncedContent.current.html === node.draftContent) return
     const shardEls = wrapperRef.current ? (Array.from(wrapperRef.current.querySelectorAll(':scope > .node-content')) as HTMLDivElement[]) : []
     let i = 0
+    let anyCleaned = false
     for (const seg of segments) {
       if (seg.kind !== 'text') continue
       const el = shardEls[i]
-      if (el && el !== document.activeElement && el.innerHTML !== seg.html) el.innerHTML = seg.html
+      if (el && el !== document.activeElement) {
+        if (el.innerHTML !== seg.html) el.innerHTML = seg.html
+        if (removeEmptySourceChips(el)) anyCleaned = true
+      }
       i++
     }
     syncedContent.current = { node, html: node.draftContent }
     setDirty(node.draftContent !== head.content)
+    if (anyCleaned) scheduleSave()
   }, [node, node.draftContent, segments])
 
   useEffect(() => {
@@ -509,8 +526,8 @@ function cssEscapeId(s: string): string {
 }
 
 /**
- * Two related "leave the block quote formatting behind" gestures most block
- * editors support, both keyed off the same trailing/collapsed-caret shape:
+ * Three related "leave the special formatting behind" gestures most block
+ * editors support, all keyed off the same trailing/collapsed-caret shape:
  *
  * - Enter right at the trailing edge of a quote (or its attached citation
  *   line right after it) breaks out into a fresh, ordinary paragraph after
@@ -529,21 +546,33 @@ function cssEscapeId(s: string): string {
  *   plain empty paragraph in place, rather than merging into whatever's
  *   before or after it the way deleting inside an empty `<blockquote>`
  *   normally would.
+ * - Backspace or Delete that would empty a citation chip, inline quote, or
+ *   "link to source" (see handleSourceChipEmptying below) removes the whole
+ *   inline element itself, rather than trusting the browser's own —
+ *   inconsistent across engines — cleanup of empty inline elements to do
+ *   it, since a browser that doesn't can leave an unfocusable husk behind
+ *   that makes the whole section look stuck (nothing clicks, types, or
+ *   deletes) — the actual bug this was written to fix.
  */
 function handleShardKeyDown(e: KeyboardEvent) {
   if (e.shiftKey || e.ctrlKey || e.metaKey || e.altKey) return
   const sel = window.getSelection()
-  if (!sel || !sel.isCollapsed || sel.rangeCount === 0) return
+  if (!sel || sel.rangeCount === 0) return
   const range = sel.getRangeAt(0)
   const startEl = (range.startContainer.nodeType === Node.ELEMENT_NODE ? (range.startContainer as HTMLElement) : range.startContainer.parentElement) as HTMLElement | null
   const shard = startEl?.closest<HTMLElement>('.node-content')
   if (!shard) return
 
   if (e.key === 'Backspace' || e.key === 'Delete') {
+    // Checked first and independently of the selection-collapsed
+    // requirement below (a chip can be emptied by selecting all of its
+    // text and deleting, not just by backspacing character by character).
+    if (handleSourceChipEmptying(e, sel, range, shard)) return
+    if (!sel.isCollapsed) return
     handleEmptyQuoteDeletion(e, sel, range, shard)
     return
   }
-  if (e.key !== 'Enter') return
+  if (e.key !== 'Enter' || !sel.isCollapsed) return
 
   // The top-level child of the shard the caret sits within or right after —
   // a blockquote and its citation paragraph are always direct children of
@@ -617,6 +646,96 @@ function handleEmptyQuoteDeletion(e: KeyboardEvent, sel: Selection, range: Range
   sel.removeAllRanges()
   sel.addRange(newRange)
   shard.dispatchEvent(new Event('input', { bubbles: true }))
+}
+
+/** Nearest ancestor of `node` (stopping at `shard`) matching `test`. */
+function findAncestor(node: Node, shard: HTMLElement, test: (el: HTMLElement) => boolean): HTMLElement | null {
+  let n: Node | null = node
+  while (n && n !== shard) {
+    if (n.nodeType === Node.ELEMENT_NODE && test(n as HTMLElement)) return n as HTMLElement
+    n = n.parentNode
+  }
+  return null
+}
+
+/** A citation chip, an inline quote, or a "link to source" — every inline
+ * element the editor's own insert tools tag with `data-source-id` (see
+ * EssayWorkspace.tsx), as opposed to the block-level `<blockquote>` (also
+ * tagged, but handled separately above — it degrades to an empty `<br>`
+ * rather than an unfocusable husk once its own text is gone). */
+function isSourceChip(el: HTMLElement): boolean {
+  return el.hasAttribute('data-source-id') && el.tagName !== 'BLOCKQUOTE'
+}
+
+/** Removes any already-empty citation/inline-quote/source-link chip found
+ * anywhere inside `root` (a whole shard, swept on every unfocused resync —
+ * see the effect above) — the reactive half of the same cleanup
+ * `handleSourceChipEmptying` does proactively during live editing, for a
+ * chip that's already stuck empty and has no caret position left inside it
+ * to trigger that on. Returns whether anything was actually removed, so the
+ * caller knows to persist the fix. */
+function removeEmptySourceChips(root: HTMLElement): boolean {
+  let removed = false
+  root.querySelectorAll<HTMLElement>('[data-source-id]').forEach((chip) => {
+    if (chip.tagName === 'BLOCKQUOTE' || (chip.textContent || '').length > 0) return
+    chip.replaceWith(document.createTextNode(''))
+    removed = true
+  })
+  return removed
+}
+
+/** How many characters into `el`'s own text the (container, offset) boundary point sits. */
+function offsetWithin(el: HTMLElement, container: Node, offset: number): number {
+  const r = document.createRange()
+  r.selectNodeContents(el)
+  r.setEnd(container, offset)
+  return r.toString().length
+}
+
+/**
+ * Backspace/Delete's usual behavior removes an inline element (a citation
+ * chip, an inline quote, a "link to source") once every character inside
+ * it is gone — but that cleanup is a browser-specific nicety, not something
+ * contentEditable guarantees, and it isn't consistent across engines. A
+ * browser that *doesn't* do it can leave a technically-empty but no-longer-
+ * focusable husk of the chip behind — indistinguishable, from the outside,
+ * from an entire section that's simply stuck: nothing can be clicked into,
+ * typed into, or deleted, because there's no valid caret position left
+ * anywhere in it. Rather than lean on the browser's own cleanup (which is
+ * exactly what left a real user stuck this way), this intercepts the exact
+ * keystroke that would empty one of these chips — whether by Backspacing
+ * or Delete-ing its last remaining character, or by selecting all of its
+ * text and pressing either — and removes the whole element itself, so the
+ * outcome is the same, deterministic "back to plain text" everywhere. Also
+ * catches a chip that's *already* empty (e.g. one left behind by a browser
+ * that didn't clean up before this fix existed, or synced in from one that
+ * doesn't) the moment the caret manages to land inside it at all.
+ */
+function handleSourceChipEmptying(e: KeyboardEvent, sel: Selection, range: Range, shard: HTMLElement): boolean {
+  const chip = findAncestor(range.startContainer, shard, isSourceChip)
+  if (!chip) return false
+  const text = chip.textContent || ''
+
+  let wouldEmpty = false
+  if (!sel.isCollapsed) {
+    const endChip = findAncestor(range.endContainer, shard, isSourceChip)
+    if (endChip === chip) wouldEmpty = range.toString() === text
+  } else if (text.length <= 1) {
+    const offset = offsetWithin(chip, range.startContainer, range.startOffset)
+    wouldEmpty = e.key === 'Backspace' ? offset === text.length : offset === 0
+  }
+  if (!wouldEmpty) return false
+
+  e.preventDefault()
+  const marker = document.createTextNode('')
+  chip.replaceWith(marker)
+  const newRange = document.createRange()
+  newRange.setStart(marker, 0)
+  newRange.collapse(true)
+  sel.removeAllRanges()
+  sel.addRange(newRange)
+  shard.dispatchEvent(new Event('input', { bubbles: true }))
+  return true
 }
 
 const AUTOLIST_BLOCK_TAGS = new Set(['P', 'DIV', 'LI', 'H1', 'H2', 'H3', 'H4', 'H5', 'H6', 'BLOCKQUOTE'])

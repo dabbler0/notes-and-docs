@@ -547,6 +547,40 @@ genuinely empty (not just visually — an emptied blockquote still holds a
 quote text that's still there behaves normally (deletes one character, same
 as any other line).
 
+A citation chip, inline quote, or "link to source" — every inline element
+the editor's own insert tools tag `data-source-id` (`EssayWorkspace.tsx`),
+as opposed to the block-level blockquote above — has a sharper version of
+the same problem: unlike a `<blockquote>`, which a browser leaves behind
+(empty but present, holding a `<br>`) once its content is gone, an inline
+element like `<cite>` or `<a>` is often cleaned up automatically by the
+browser the instant it empties out — but that cleanup is a browser-specific
+nicety, not something contentEditable guarantees, and it isn't consistent
+across engines. A browser that *doesn't* clean it up leaves a technically-
+empty, but no-longer-focusable, husk behind — and since there's then no
+valid caret position left inside it (or, it turned out, even reliably
+*next* to it) to interact with, the entire section reads as permanently
+stuck: nothing in it can be clicked into, typed into, or deleted, which is
+exactly the bug reported and reproduced here. `handleSourceChipEmptying`
+(`SectionBlock.tsx`) stops relying on that cleanup: it intercepts the exact
+Backspace/Delete keystroke that would empty one of these chips — the last
+character going by Backspace or Delete, or the whole chip's text getting
+selected and deleted in one shot — and removes the whole element itself
+first, so the outcome is the same, deterministic "back to plain text"
+everywhere, regardless of what a given browser would have done on its own.
+
+That still leaves any chip that was already stuck empty *before* this fix
+existed (or synced in from a browser that left one behind) with no way for
+the keystroke-based fix above to ever reach it — there's no caret position
+inside a truly empty, unfocusable chip to trigger a keydown from in the
+first place. The DOM-resync effect right above `handleShardKeyDown` in
+`SectionBlock.tsx` (see the next paragraph for the rest of what it does)
+closes that gap: every time it runs against an unfocused shard — on load
+included — it also sweeps that shard for any already-empty
+`[data-source-id]` chip and removes it (`removeEmptySourceChips`),
+persisting the fix via the normal debounced save. A previously-broken
+document self-heals the moment it's reopened, with no need to ever
+interact with the broken chip directly.
+
 This gesture is only reliable because of a second fix alongside it, in the
 DOM-resync effect right above `handleShardKeyDown` in `SectionBlock.tsx`.
 Every insert-a-citation/quote/footnote/link action ends in a `reload()`
