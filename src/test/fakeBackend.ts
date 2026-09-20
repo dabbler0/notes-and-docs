@@ -60,6 +60,10 @@ class InMemoryBlobStore implements BlobStore {
   async has(id: string): Promise<boolean> {
     return this.data.has(id)
   }
+
+  async sizeOf(id: string): Promise<number | undefined> {
+    return this.data.get(id)?.size
+  }
 }
 
 export function createFakeBackend(): Backend {
@@ -102,6 +106,9 @@ export const backend: Backend = {
     },
     has(id: string) {
       return active.blobs.has(id)
+    },
+    sizeOf(id: string) {
+      return active.blobs.sizeOf(id)
     },
   } as BlobStore,
 }

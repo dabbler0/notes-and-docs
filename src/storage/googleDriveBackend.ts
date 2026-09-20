@@ -59,6 +59,9 @@ class GoogleDriveBlobStore implements BlobStore {
   async has(_id: string): Promise<boolean> {
     throw new Error('Google Drive backend not implemented in this prototype')
   }
+  async sizeOf(_id: string): Promise<number | undefined> {
+    throw new Error('Google Drive backend not implemented in this prototype')
+  }
 }
 
 export function createGoogleDriveBackend(getAccessToken: () => Promise<string>): Backend {

@@ -17,6 +17,15 @@ export interface BlobStore {
   get(id: string): Promise<Blob | undefined>
   delete(id: string): Promise<void>
   has(id: string): Promise<boolean>
+  /**
+   * The blob's own on-disk footprint, without reading (or, for a backend
+   * that compresses at rest, decompressing) its full content — used for
+   * "how much space is this using" displays, which shouldn't have to pay
+   * for a full read (and, for a several-MB PDF stored compressed, a full
+   * decompression) of every blob in a list just to show a number next to
+   * each one. `undefined` if there's no such blob.
+   */
+  sizeOf(id: string): Promise<number | undefined>
 }
 
 export interface Backend {

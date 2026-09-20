@@ -210,6 +210,21 @@ class IndexedDbBlobStore implements BlobStore {
     // re-compressing) an entire PDF just to answer "is anything there."
     return (await rawBlobGet(id)) !== undefined
   }
+
+  async sizeOf(id: string): Promise<number | undefined> {
+    // Reads straight off whichever shape is actually stored — the
+    // compressed record's own `compressed.byteLength` (the real on-disk
+    // footprint, which is the number a "how much space is this using"
+    // display should show) or a legacy value's own `.size` — never routed
+    // through `get`, so this never decompresses (or, for a legacy value,
+    // re-compresses) the blob just to answer a size question. This is what
+    // makes a storage-size badge on every card in a list of many sources
+    // cheap instead of decompressing every one of their PDFs at once.
+    const stored = await rawBlobGet(id)
+    if (stored === undefined) return undefined
+    if (isCompressedRecord(stored)) return stored.compressed.byteLength
+    return (stored as Blob).size
+  }
 }
 
 export function createLocalBackend(): Backend {

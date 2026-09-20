@@ -8,12 +8,21 @@ import { SourceDetailDialog } from './SourceDetailDialog'
 
 export function SourcesView() {
   const [sources, setSources] = useState<Source[]>([])
+  // Distinct from "sources is empty" — `listSources` decompresses every
+  // source's own extracted text on the way out (see `sourcesRepo.ts`'s own
+  // doc comment on `StoredSource`), which for a real-sized library is real,
+  // measurable work, not instant. Without this, the very first render
+  // (before that first `reload()` resolves) was indistinguishable from a
+  // genuinely empty library, so a library that just hadn't loaded yet
+  // flashed "No sources yet" — misleading, since the two look identical.
+  const [loading, setLoading] = useState(true)
   const [query, setQuery] = useState('')
   const [adding, setAdding] = useState(false)
   const [selected, setSelected] = useState<Source | null>(null)
 
   async function reload() {
     setSources(await listSources())
+    setLoading(false)
   }
 
   useEffect(() => {
@@ -38,7 +47,9 @@ export function SourcesView() {
         </button>
       </div>
 
-      {filtered.length === 0 ? (
+      {loading ? (
+        <p className="muted">Loading sources…</p>
+      ) : filtered.length === 0 ? (
         <p className="empty-state">{sources.length === 0 ? 'No sources yet. Add a PDF or a BibTeX entry to get started.' : 'No sources match your search.'}</p>
       ) : (
         <div className="card-grid">

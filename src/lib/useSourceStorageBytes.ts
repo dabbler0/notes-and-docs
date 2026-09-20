@@ -3,9 +3,11 @@ import { getSourceStorageBytes } from '../models/sourcesRepo'
 import type { Source } from '../models/types'
 
 /** Loads a source's on-disk footprint (see `getSourceStorageBytes`) lazily
- * — it's an IndexedDB read of the PDF blob (or a `Blob([...]).size` over
- * the extracted text), cheap but still async, so this starts out `null`
- * ("not known yet") rather than blocking whatever renders it. */
+ * — a metadata-only IndexedDB read (`blobs.sizeOf`, not a full read of the
+ * PDF blob's own possibly-compressed bytes) or a `gzipCompress(...)
+ * .byteLength` over the extracted text, cheap but still async, so this
+ * starts out `null` ("not known yet") rather than blocking whatever
+ * renders it. */
 export function useSourceStorageBytes(source: Source): number | null {
   const [bytes, setBytes] = useState<number | null>(null)
 

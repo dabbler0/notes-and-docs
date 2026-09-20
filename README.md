@@ -278,6 +278,37 @@ redundancy left to squeeze out (a real PDF measured directly: about 4%
 smaller) — a real one for the PDFs that aren't (a scan with uncompressed
 raster pages, say), for the same cost either way.
 
+Compressing the PDF blob introduced its own real, measured cost, though,
+and it's worth recording since it isn't obvious from the code alone: the
+Sources tab's own "how much space is this using" badge on each card
+(`SourceCard`, via `useSourceStorageBytes`/`getSourceStorageBytes`) used
+to just read `blob.size` off whatever `blobs.get` returned — cheap when
+that was a plain, uncompressed `Blob`, but once `get` on a compressed blob
+means *decompressing the entire PDF first*, doing that for every card in a
+list is a lot of needless work: measured directly, decompressing 100
+several-MB PDFs at once (one per card, since every card mounts and fires
+its own effect around the same time) took nearly 2 seconds, which is
+exactly the kind of thing that shows up as "the Sources tab takes a while
+to populate." `BlobStore` gained a `sizeOf(id)` method for this reason —
+it reads a compressed record's own `compressed.byteLength` (the real
+on-disk footprint, which is what this badge should show anyway) straight
+off the stored record, without decompressing anything, and
+`getSourceStorageBytes` now calls that instead of `blobs.get(...).size`.
+Measured effect: the same 100-card badge computation dropped from ~1.9s to
+~20ms.
+
+The remaining, much smaller cost in populating that tab is `listSources`
+itself, which decompresses every source's `pageHtml` on the way out (real
+but modest: on the order of 2ms/source for a typical layout-mode page, so
+noticeable mainly for a large library, not a rounding error but not the
+dominant cost either) — `SourcesView` tracks its own `loading` state
+distinctly from "the list came back empty," rather than folding both into
+one check the way it used to, so a library that just hasn't finished
+loading yet shows "Loading sources…" instead of flashing the same "No
+sources yet" a genuinely empty library shows; the two used to be visually
+identical, which is what made the tab's own true load time read as worse
+than it was.
+
 **Trading the PDF for its text.** A PDF is usually the large majority of a
 source's footprint, while the reason it's there at all — being able to
 read it and pull quotes out of it — is served just as well by its already-

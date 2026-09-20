@@ -188,11 +188,21 @@ export async function getSourcePdfBlob(source: Source): Promise<Blob | undefined
  * for the "how much space is this using" UI — never for anything that
  * needs to be exact (sync payload size, quota checks), so this doesn't
  * account for the rest of the JSON structure it's actually stored under.
+ *
+ * Reads the PDF case via `blobs.sizeOf`, deliberately not `blobs.get(...)
+ * .size` — `get` on a compressed blob has to decompress the whole thing
+ * first, and this function runs once per source *every time a list of
+ * them renders* (`SourceCard`, via `useSourceStorageBytes`); confirmed
+ * directly that doing this for every card in a real-sized library was the
+ * actual cause of the Sources tab visibly taking a while to settle after
+ * the PDF-blob compression this reads from — decompressing every single
+ * PDF at once just to print a size next to each one. `sizeOf` answers the
+ * same question by reading the stored record's own compressed byte count
+ * straight off disk, without ever decompressing anything.
  */
 export async function getSourceStorageBytes(source: Source): Promise<number> {
   if (source.pdfBlobId) {
-    const blob = await backend.blobs.get(source.pdfBlobId)
-    return blob?.size ?? 0
+    return (await backend.blobs.sizeOf(source.pdfBlobId)) ?? 0
   }
   if (source.pageHtml.length > 0) {
     return (await compressPageHtml(source.pageHtml)).byteLength
