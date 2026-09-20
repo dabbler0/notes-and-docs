@@ -100,6 +100,22 @@ export function SectionBlock({
   // but only when the node's saved content actually changed underneath us
   // (not on every render) — otherwise this would stomp on in-progress
   // typing every time an unrelated bit of state changes elsewhere.
+  //
+  // Any insert-a-citation/quote/footnote/link action ends with a reload()
+  // (see EssayWorkspace.tsx), which hands every SectionBlock a freshly
+  // *refetched* node object — a different reference even when its content
+  // string hasn't actually changed for this node. That reload can complete
+  // a beat after the insert itself, i.e. after the user has already kept
+  // typing (or used the new "exit a block quote" Enter gesture) — the
+  // debounced save from that typing hasn't necessarily flushed yet, so the
+  // freshly-fetched node's draftContent can be a moment stale relative to
+  // what's live in the DOM. Two checks, not one, are what keep that race
+  // from clobbering those keystrokes: skip a shard outright while it's the
+  // one actually focused (nothing overwrites live typing out from under
+  // the user), and only touch a shard's innerHTML at all when it demonstrably
+  // differs from the incoming segment — a freshly (re)mounted shard from a
+  // structural change (e.g. a demote) starts out empty and always needs it;
+  // an already-populated, unfocused one that already matches doesn't.
   useEffect(() => {
     if (syncedContent.current.node === node && syncedContent.current.html === node.draftContent) return
     const shardEls = wrapperRef.current ? (Array.from(wrapperRef.current.querySelectorAll(':scope > .node-content')) as HTMLDivElement[]) : []
@@ -107,7 +123,7 @@ export function SectionBlock({
     for (const seg of segments) {
       if (seg.kind !== 'text') continue
       const el = shardEls[i]
-      if (el) el.innerHTML = seg.html
+      if (el && el !== document.activeElement && el.innerHTML !== seg.html) el.innerHTML = seg.html
       i++
     }
     syncedContent.current = { node, html: node.draftContent }

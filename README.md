@@ -526,7 +526,34 @@ in place, same as any other paragraph. Since this bypasses the browser's
 own default (`preventDefault()`) rather than dispatching a real `input`
 event, the shard's own input handling is invoked manually afterward (a
 synthetic `input` event, same handler `autoListify` already runs through)
-so the change gets picked up and saved exactly like any other edit.
+so the change gets picked up and saved exactly like any other edit. Shift+Enter
+at the same trailing edge deliberately does nothing special — it's excluded
+from the gesture up front, so it falls through to the browser's own default
+Shift+Enter handling (a plain `<br>`, in place), for anyone who actually
+wants to keep extending the quote or citation by hand.
+
+This gesture is only reliable because of a second fix alongside it, in the
+DOM-resync effect right above `handleShardKeyDown` in `SectionBlock.tsx`.
+Every insert-a-citation/quote/footnote/link action ends in a `reload()`
+(`EssayWorkspace.tsx`), which hands every `SectionBlock` a freshly *refetched*
+node object — a different reference even when the content string hasn't
+actually changed for this node — and that reload can finish a beat after the
+insert itself, i.e. after the user has already kept typing (pressed Enter to
+exit the quote, say) but before that keystroke's own debounced save has
+flushed. The old resync effect treated any such reference change as reason
+enough to blindly overwrite the shard's `innerHTML` from the (now
+one-keystroke-stale) refetched content — silently eating whatever was just
+typed, or worse: if the browser's *own* default Enter-in-`<blockquote>`
+handling won the race instead of `handleShardKeyDown`'s `preventDefault()`,
+it would just extend the blockquote (a second, sibling `<blockquote>`)
+rather than exit it, which is what "pressing Enter makes a new blockquote"
+actually was. The effect now does two things before touching any shard:
+skips it outright while it's the one currently focused (nothing overwrites
+live typing out from under the user), and only writes `innerHTML` when it
+actually differs from the incoming segment — so an already-correct,
+unfocused shard is left alone, while a genuinely stale one (an external sync
+pull, a version revert) or a freshly (re)mounted empty one (a demote,
+reshaping which shards exist at all) still gets populated exactly as before.
 
 **Searching within a PDF.** `PdfViewer` — used both from a source's own
 detail view and from the "From a source" tab of `QuoteInsertDialog` — has its
