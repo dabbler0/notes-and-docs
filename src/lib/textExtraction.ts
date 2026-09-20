@@ -115,7 +115,7 @@ async function extractPlainPageHtml(doc: PdfDoc, pageNumber: number): Promise<st
 // blurry, anti-aliased edge pixels far more often than clean ink/background.
 const LAYOUT_RENDER_SCALE = 2
 
-interface Rect {
+export interface Rect {
   x: number
   y: number
   width: number
@@ -137,12 +137,14 @@ interface Rect {
  * - Color has no equivalent in pdf.js's `getTextContent()` at all (it only
  *   reports position, size, and font, not fill color) — the actual PDF
  *   content stream would need interpreting to get that properly. Instead,
- *   `sampleTextColor` renders the page to a canvas and samples a handful of
- *   pixels near where each run's glyphs should be, picking whichever
- *   sampled pixel looks most like ink rather than background. Works well
- *   for the common case (dark text on a light page); can sample the wrong
- *   pixel entirely for light text on a dark background, a tightly rotated
- *   run, or text sitting on a busy image.
+ *   `sampleTextColor` renders the page to a canvas and samples a grid of
+ *   pixels across where each run's glyphs should be, picking whichever
+ *   sampled pixel looks most like ink rather than background, then snaps
+ *   anything close to grayscale to plain black (see that function's own
+ *   doc comment for why). Works well for the common case (dark text on a
+ *   light page); can sample the wrong pixel entirely for light text on a
+ *   dark background, a tightly rotated run, or text sitting on a busy
+ *   image.
  * - Images aren't decoded from the PDF's own embedded XObject data at all
  *   (variable color spaces and filters make that its own project) —
  *   `computeImageRegions` instead walks the page's operator list purely to
@@ -151,7 +153,13 @@ interface Rect {
  *   crops that exact rectangle back out of the already-rendered canvas.
  *   Simple and always visually correct for what it does capture, but it
  *   only finds axis-aligned-enough regions and won't separate two images
- *   placed right next to each other with nothing in between.
+ *   placed right next to each other with nothing in between. A region that
+ *   `regionIsMostlyText` judges to already be mostly covered by text runs
+ *   that are about to be rendered as their own `<span>`s anyway — the
+ *   telltale shape of an OCR'd scan, where the "image" is a raster of the
+ *   very words an invisible text layer already reproduces — is dropped
+ *   rather than embedded, since keeping it would just double the page's
+ *   size for a picture of text sitting right underneath that same text.
  * - There's no paragraph structure at all — every run is its own
  *   absolutely-positioned element, with an `&nbsp;` or a `<br>` (the same
  *   gap heuristic `reflowTextItems` uses — see `separatorForGap`) sitting
@@ -180,8 +188,10 @@ async function extractLayoutPageHtml(doc: PdfDoc, pageNumber: number): Promise<s
   const pixels = renderCtx.getImageData(0, 0, renderCanvas.width, renderCanvas.height)
 
   const parts: string[] = []
+  const textBoxes = computeTextBoxes(content.items as any[], viewport)
 
   for (const region of computeImageRegions(opList, viewport)) {
+    if (regionIsMostlyText(region, textBoxes)) continue
     const dataUrl = cropImageRegion(renderCanvas, region)
     if (dataUrl) {
       parts.push(`<img src="${escapeAttr(dataUrl)}" alt="" style="position:absolute;left:${region.x}px;top:${region.y}px;width:${region.width}px;height:${region.height}px;">`)
@@ -278,6 +288,65 @@ function applyMatrix(m: number[], x: number, y: number): [number, number] {
   return [m[0] * x + m[2] * y + m[4], m[1] * x + m[3] * y + m[5]]
 }
 
+export interface TextBox {
+  x: number
+  y: number
+  width: number
+  height: number
+  chars: number
+}
+
+/** A rough page-space bounding box (plus character count) for every
+ * non-blank text item, in the same units `computeImageRegions` reports its
+ * regions in — used purely to measure how much of an image region is
+ * already covered by text that's about to be rendered as its own `<span>`s
+ * (see `regionIsMostlyText`). Width is the same `height * length * 0.55`
+ * estimate the main rendering loop below effectively uses for its own
+ * separator-gap heuristic; exact glyph metrics aren't needed for a coverage
+ * *estimate*. */
+export function computeTextBoxes(items: any[], viewport: { transform: number[] }): TextBox[] {
+  const boxes: TextBox[] = []
+  for (const item of items) {
+    if (!('str' in item) || !item.str || !item.str.trim()) continue
+    const tx = pdfjsLib.Util.transform(viewport.transform, item.transform)
+    const height = Math.hypot(tx[2], tx[3]) || 10
+    const width = height * item.str.length * 0.55
+    boxes.push({ x: tx[4], y: tx[5] - height, width, height, chars: item.str.trim().length })
+  }
+  return boxes
+}
+
+/** True when `region` is already mostly covered by text runs that will be
+ * rendered as their own `<span>`s anyway — the shape of a page that's been
+ * run through OCR, where the "image" is a raster of the very words an
+ * invisible (or, after re-extraction, visible) text layer already
+ * reproduces on top of it. Keeping that image would double the page's
+ * size for a picture of text sitting directly underneath the same text,
+ * defeating the point of extracting text in the first place. An ordinary
+ * photo or figure with just a caption or a small label near or over it —
+ * the common real case for an embedded image — only has a sliver of its
+ * area covered by text this way, so both a fairly high coverage ratio and
+ * a minimum absolute amount of text are required before a region counts as
+ * "mostly text"; either alone would risk misclassifying a normal figure
+ * with a longish caption, or a large mostly-blank region a single text box
+ * happens to fully span. */
+export function regionIsMostlyText(region: Rect, textBoxes: TextBox[]): boolean {
+  const regionArea = region.width * region.height
+  if (regionArea <= 0) return false
+  let coveredArea = 0
+  let totalChars = 0
+  for (const box of textBoxes) {
+    const ix = Math.max(region.x, box.x)
+    const iy = Math.max(region.y, box.y)
+    const iw = Math.min(region.x + region.width, box.x + box.width) - ix
+    const ih = Math.min(region.y + region.height, box.y + box.height) - iy
+    if (iw <= 0 || ih <= 0) continue
+    coveredArea += iw * ih
+    totalChars += box.chars
+  }
+  return totalChars >= 40 && coveredArea / regionArea >= 0.12
+}
+
 /** Crops `region` (page-space, i.e. `viewport({scale: 1})` units) directly
  * out of the already-rendered `renderCanvas` (rendered at
  * `LAYOUT_RENDER_SCALE`) and returns it as a PNG data URL — see
@@ -297,37 +366,62 @@ function cropImageRegion(renderCanvas: HTMLCanvasElement, region: Rect): string 
   return out.toDataURL('image/png')
 }
 
-/** Best-effort fill color for one text run: samples a handful of points
- * along its baseline (at `LAYOUT_RENDER_SCALE` resolution, matching
- * `pixels`) and picks whichever looks most like ink rather than background
- * — the darkest sample, on the (usually true) assumption that the page
- * itself is light. See `extractLayoutPageHtml`'s doc comment for when this
- * guesses wrong. */
-function sampleTextColor(pixels: ImageData, tx: number[], height: number, strLength: number): string {
+/** Best-effort fill color for one text run: samples a grid of points across
+ * where its glyphs should sit (at `LAYOUT_RENDER_SCALE` resolution,
+ * matching `pixels`) — several positions along the baseline direction
+ * *and* several heights above it, rather than a single fixed height — and
+ * picks whichever looks most like ink rather than background: the darkest
+ * sample, on the (usually true) assumption that the page itself is light.
+ * A single sampling height (this function's original approach) turned out
+ * to miss real ink far more often than expected: a fixed fraction of a
+ * run's height above the baseline lands inside the x-height band for some
+ * glyphs but in the gap above or below the ink for others (an "n" and a
+ * "p" don't have their strokes at the same height), so a short run
+ * sampled at just one or two points along one height would frequently
+ * catch nothing but anti-aliased edge or bare background — which is
+ * exactly what a "much brighter shade of gray, or almost white" instead of
+ * black looks like when it happens to ordinary black text. Sampling
+ * several heights per position fixes the common case directly; the
+ * grayscale check below is the backstop for whatever it still misses
+ * (a page's actual body text is overwhelmingly black or a very dark near-
+ * black, so a sample that comes back both colorless *and* clearly lighter
+ * than that is far more likely a missed sample than a real light-gray
+ * ink — snapping it to black is right far more often than not). Genuinely
+ * colorful text (a blue link, a red heading) is untouched, since it isn't
+ * grayscale at all. See `extractLayoutPageHtml`'s doc comment for the
+ * cases (light text on dark, tightly rotated runs, text over a busy image)
+ * this still can't fully solve. */
+export function sampleTextColor(pixels: ImageData, tx: number[], height: number, strLength: number): string {
   const scale = LAYOUT_RENDER_SCALE
   const dirLen = Math.hypot(tx[0], tx[1]) || 1
   const ux = tx[0] / dirLen
   const uy = tx[1] / dirLen
   const estimatedWidth = height * strLength * 0.55
-  const steps = Math.max(2, Math.min(6, strLength))
+  const xSteps = Math.max(3, Math.min(10, strLength * 2))
+  const yFractions = [0.12, 0.3, 0.48, 0.66, 0.82]
   let best: [number, number, number] | null = null
   let bestScore = -1
-  for (let i = 0; i < steps; i++) {
-    const t = (estimatedWidth * (i + 0.5)) / steps
-    const px = Math.round((tx[4] + ux * t) * scale)
-    const py = Math.round((tx[5] - height * 0.32) * scale)
-    if (px < 0 || py < 0 || px >= pixels.width || py >= pixels.height) continue
-    const idx = (py * pixels.width + px) * 4
-    const r = pixels.data[idx]
-    const g = pixels.data[idx + 1]
-    const b = pixels.data[idx + 2]
-    const a = pixels.data[idx + 3]
-    if (a === 0) continue
-    const score = 255 * 3 - (r + g + b)
-    if (score > bestScore) {
-      bestScore = score
-      best = [r, g, b]
+  for (let i = 0; i < xSteps; i++) {
+    const t = (estimatedWidth * (i + 0.5)) / xSteps
+    for (const yFraction of yFractions) {
+      const px = Math.round((tx[4] + ux * t) * scale)
+      const py = Math.round((tx[5] - height * yFraction) * scale)
+      if (px < 0 || py < 0 || px >= pixels.width || py >= pixels.height) continue
+      const idx = (py * pixels.width + px) * 4
+      const a = pixels.data[idx + 3]
+      if (a === 0) continue
+      const r = pixels.data[idx]
+      const g = pixels.data[idx + 1]
+      const b = pixels.data[idx + 2]
+      const score = 255 * 3 - (r + g + b)
+      if (score > bestScore) {
+        bestScore = score
+        best = [r, g, b]
+      }
     }
   }
-  return best ? `rgb(${best[0]}, ${best[1]}, ${best[2]})` : '#000'
+  if (!best) return '#000'
+  const [r, g, b] = best
+  if (Math.max(r, g, b) - Math.min(r, g, b) < 18) return '#000'
+  return `rgb(${r}, ${g}, ${b})`
 }

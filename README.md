@@ -386,11 +386,25 @@ none of what it recovers beyond position/size is exact:
   interpreting the PDF's own content stream operators would be its own
   project. Instead, `sampleTextColor` renders the page to a canvas (like
   OCR does, at a similarly higher-than-viewing resolution) and samples a
-  handful of pixels near where each run's glyphs should sit, picking
-  whichever looks most like ink rather than background. Works well for the
-  common case — dark text on a light page — and can sample the wrong pixel
-  for light text on a dark background, a rotated run, or text sitting on a
-  busy image.
+  grid of pixels across where each run's glyphs should sit — several
+  positions along the run *and* several heights above the baseline, not
+  just one — picking whichever looks most like ink rather than background.
+  A single sampling height (this function's first version) missed real ink
+  more often than not: a fixed height above the baseline lands inside the
+  x-height band for some glyphs but in the gap above or below the ink for
+  others, so a short run sampled at just one or two points along that one
+  height would often catch nothing but an anti-aliased edge or bare
+  background — which looks exactly like "much brighter shade of gray, or
+  almost white" instead of black for perfectly ordinary black text.
+  Sampling several heights fixes the common miss directly; as a backstop
+  for whatever it still misses, a result that comes back both colorless
+  *and* clearly lighter than near-black is snapped to plain black outright,
+  since real body text is overwhelmingly black or a very dark near-black —
+  a colorless sample lighter than that is far more likely a missed sample
+  than genuinely light-gray ink. Genuinely colorful text (a blue link, a
+  red heading) is untouched, since it isn't colorless to begin with. Can
+  still sample the wrong pixel for light text on a dark background, a
+  rotated run, or text sitting on a busy image.
 - **Images** aren't decoded from the PDF's own embedded XObject data at all
   (variable color spaces and filters make that its own project too) —
   `computeImageRegions` instead walks the page's operator list purely to
@@ -400,7 +414,19 @@ none of what it recovers beyond position/size is exact:
   already-rendered canvas rather than touching the image's own data.
   Simple and always visually correct for what it does capture, but it only
   finds axis-aligned-enough regions and won't separate two images placed
-  right next to each other with nothing in between.
+  right next to each other with nothing in between. A region is skipped
+  entirely, though, when `regionIsMostlyText` finds it's already mostly
+  covered by text runs that are about to be rendered as their own `<span>`s
+  anyway — the shape of a page that's been run through OCR, where the
+  "image" is a raster of the very words an invisible text layer already
+  reproduces on top of it. Keeping that image would double the page's size
+  for a picture of text sitting directly under the same text, defeating the
+  point of extracting text at all. The check is deliberately conservative —
+  both a fairly high fraction of the region's area covered by text
+  bounding boxes *and* a minimum absolute amount of text are required — so
+  an ordinary photo or figure with just a caption or a small label near or
+  over it (the common real case for an embedded image) still keeps its
+  image; only a region that's overwhelmingly text loses it.
 - There's no paragraph structure at all in the result — every run is its
   own absolutely-positioned element, with an `&nbsp;` or a `<br>` (the same
   gap heuristic as `reflowTextItems`, via `separatorForGap`) sitting
