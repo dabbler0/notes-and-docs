@@ -36,14 +36,28 @@ function pipe(stream: ReadableStream<Uint8Array>, transform: CompressionStream |
   return stream.pipeThrough(transform as unknown as ReadableWritablePair<Uint8Array, Uint8Array>)
 }
 
-export async function gzipCompress(text: string): Promise<Uint8Array> {
-  const stream = pipe(toReadableStream(new TextEncoder().encode(text)), new CompressionStream('gzip'))
+/** The byte-level primitives — used directly by `localBackend.ts` to
+ * compress a PDF blob's own raw bytes (no text encoding step involved, and
+ * usually little to gain: a PDF's own internal streams are very often
+ * already Flate/DCT-compressed, so this mostly helps the PDFs that
+ * *aren't* — a scanned PDF with uncompressed raster pages, for instance),
+ * and by `gzipCompress`/`gzipDecompress` below for the plain-string case. */
+export async function gzipCompressBytes(bytes: Uint8Array): Promise<Uint8Array> {
+  const stream = pipe(toReadableStream(bytes), new CompressionStream('gzip'))
   const buf = await new Response(stream).arrayBuffer()
   return new Uint8Array(buf)
 }
 
-export async function gzipDecompress(bytes: Uint8Array): Promise<string> {
+export async function gzipDecompressBytes(bytes: Uint8Array): Promise<Uint8Array> {
   const stream = pipe(toReadableStream(bytes), new DecompressionStream('gzip'))
   const buf = await new Response(stream).arrayBuffer()
-  return new TextDecoder().decode(buf)
+  return new Uint8Array(buf)
+}
+
+export async function gzipCompress(text: string): Promise<Uint8Array> {
+  return gzipCompressBytes(new TextEncoder().encode(text))
+}
+
+export async function gzipDecompress(bytes: Uint8Array): Promise<string> {
+  return new TextDecoder().decode(await gzipDecompressBytes(bytes))
 }

@@ -249,6 +249,23 @@ outright thrown error. `Object.prototype.toString.call(value) ===
 value's own internal tag rather than comparing against any particular
 realm's constructor.
 
+The PDF blob itself gets the same treatment, in `storage/localBackend.ts`'s
+`IndexedDbBlobStore` rather than `sourcesRepo.ts` (a PDF's bytes live in a
+completely separate blob store, addressed only by id, so this doesn't
+interact with `SENSITIVE_FIELDS`/`encryptJson` at all — sync already
+encrypts a PDF blob's bytes on its own separate path, chunked through
+Firestore, see `sync/syncEngine.ts`): `put` always writes the current
+`{ compressed, type }` shape, and `get` tells that apart from a bare `Blob`
+— what every PDF already in storage before this compression existed looks
+like — structurally (via the same realm-agnostic `Object.prototype.toString`
+check, not `instanceof Blob`) rather than by inspecting the bytes, and
+migrates a legacy one the moment it's read, the same lazy pattern as
+`pageHtml`'s own migration. Usually a smaller win here than for `pageHtml`:
+a PDF's own internal streams are very often already Flate/DCT-compressed,
+so gzip has much less redundancy left to squeeze out (a real PDF measured
+directly: about 4% smaller) — a real one for the PDFs that aren't (a scan
+with uncompressed raster pages, say), for the same cost either way.
+
 **Trading the PDF for its text.** A PDF is usually the large majority of a
 source's footprint, while the reason it's there at all — being able to
 read it and pull quotes out of it — is served just as well by its already-

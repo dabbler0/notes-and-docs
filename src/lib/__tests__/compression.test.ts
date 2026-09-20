@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { gzipCompress, gzipDecompress } from '../compression'
+import { gzipCompress, gzipCompressBytes, gzipDecompress, gzipDecompressBytes } from '../compression'
 
 describe('gzipCompress / gzipDecompress', () => {
   it('round-trips an ordinary string', async () => {
@@ -28,5 +28,27 @@ describe('gzipCompress / gzipDecompress', () => {
   it('returns a Uint8Array, not something JSON.stringify would mangle', async () => {
     const compressed = await gzipCompress('x')
     expect(compressed).toBeInstanceOf(Uint8Array)
+  })
+})
+
+describe('gzipCompressBytes / gzipDecompressBytes', () => {
+  it('round-trips arbitrary binary data byte-for-byte', async () => {
+    const bytes = new Uint8Array(2000)
+    for (let i = 0; i < bytes.length; i++) bytes[i] = (i * 37) % 256
+    const compressed = await gzipCompressBytes(bytes)
+    const decompressed = await gzipDecompressBytes(compressed)
+    expect(Array.from(decompressed)).toEqual(Array.from(bytes))
+  })
+
+  it('round-trips an empty byte array', async () => {
+    const compressed = await gzipCompressBytes(new Uint8Array(0))
+    const decompressed = await gzipDecompressBytes(compressed)
+    expect(decompressed.length).toBe(0)
+  })
+
+  it("compressed output starts with the gzip magic bytes (what PDF-blob compression detection relies on)", async () => {
+    const compressed = await gzipCompressBytes(new Uint8Array([1, 2, 3]))
+    expect(compressed[0]).toBe(0x1f)
+    expect(compressed[1]).toBe(0x8b)
   })
 })
