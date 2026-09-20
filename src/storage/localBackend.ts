@@ -112,14 +112,24 @@ interface CompressedBlobRecord {
   type: string
 }
 
-// Not `value instanceof Blob` — realm identity isn't guaranteed to line up
-// for a value that's round-tripped through IndexedDB's own structured
-// clone (confirmed directly for the exact same reason with `Uint8Array` in
-// `lib/crypto.ts` — see that module's own doc comment), so this checks the
-// value's own internal tag instead, which doesn't depend on which realm's
-// `Blob` constructor produced it.
-function isBlobValue(value: unknown): value is Blob {
-  return Object.prototype.toString.call(value) === '[object Blob]'
+// Checked by the presence of `compressed` — the field only the *current*
+// shape ever has — rather than by testing whether the raw value looks like
+// a `Blob`. A first version of this did exactly that (`Object.prototype
+// .toString.call(value) === '[object Blob]'`, chosen over `instanceof
+// Blob` for the same realm-identity reason `lib/crypto.ts`'s `Uint8Array`
+// check has — see that module's own doc comment), and it was wrong: every
+// PDF already in storage from before this compression existed was put
+// there as a `File` (`sourcesRepo.ts` passes the `File` straight from the
+// upload `<input>` to `blobs.put` — never wrapped in `new Blob(...)`), and
+// a `File`'s own tag is `[object File]`, not `[object Blob]` — so every
+// pre-existing PDF failed that check, fell through to the "already
+// compressed" branch, and broke outright (`stored.compressed` was
+// `undefined` on a `File`, which `gzipDecompressBytes` can't do anything
+// with). Checking for the new shape's own marker field instead is correct
+// regardless of what a legacy value's class happens to be — `Blob`,
+// `File`, or anything else `blobs.put` might ever have been handed.
+function isCompressedRecord(value: unknown): value is CompressedBlobRecord {
+  return !!value && typeof value === 'object' && 'compressed' in value
 }
 
 /**
@@ -164,20 +174,24 @@ class IndexedDbBlobStore implements BlobStore {
   async get(id: string): Promise<Blob | undefined> {
     const stored = await rawBlobGet(id)
     if (stored === undefined) return undefined
-    if (isBlobValue(stored)) {
-      const bytes = new Uint8Array(await stored.arrayBuffer())
-      const compressed = await gzipCompressBytes(bytes)
-      await rawBlobPut(id, { compressed, type: stored.type } satisfies CompressedBlobRecord)
-      return stored
+    if (isCompressedRecord(stored)) {
+      const bytes = await gzipDecompressBytes(stored.compressed)
+      // TypeScript's DOM lib types `BlobPart` as only ever backed by a
+      // plain `ArrayBuffer`, never the more general `ArrayBufferLike` a
+      // `Uint8Array` is typed with — `bytes` really is one (it comes
+      // straight off a `Response.arrayBuffer()` in `gzipDecompressBytes`),
+      // so this is a type-only cast, not a runtime one.
+      return new Blob([bytes as unknown as BlobPart], { type: stored.type })
     }
-    const { compressed, type } = stored as CompressedBlobRecord
-    const bytes = await gzipDecompressBytes(compressed)
-    // TypeScript's DOM lib types `BlobPart` as only ever backed by a plain
-    // `ArrayBuffer`, never the more general `ArrayBufferLike` a `Uint8Array`
-    // is typed with — `bytes` really is one (it comes straight off a
-    // `Response.arrayBuffer()` in `gzipDecompressBytes`), so this is a type-
-    // only cast, not a runtime one.
-    return new Blob([bytes as unknown as BlobPart], { type })
+    // Legacy shape: whatever `blobs.put` was ever handed directly (a
+    // `Blob`, or — every real PDF, in practice — a `File`) before this
+    // compression scheme existed. `.arrayBuffer()`/`.type` work the same
+    // way on either, so no need to tell them apart any further than that.
+    const legacy = stored as Blob
+    const bytes = new Uint8Array(await legacy.arrayBuffer())
+    const compressed = await gzipCompressBytes(bytes)
+    await rawBlobPut(id, { compressed, type: legacy.type } satisfies CompressedBlobRecord)
+    return legacy
   }
 
   async delete(id: string): Promise<void> {

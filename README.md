@@ -255,16 +255,28 @@ completely separate blob store, addressed only by id, so this doesn't
 interact with `SENSITIVE_FIELDS`/`encryptJson` at all — sync already
 encrypts a PDF blob's bytes on its own separate path, chunked through
 Firestore, see `sync/syncEngine.ts`): `put` always writes the current
-`{ compressed, type }` shape, and `get` tells that apart from a bare `Blob`
-— what every PDF already in storage before this compression existed looks
-like — structurally (via the same realm-agnostic `Object.prototype.toString`
-check, not `instanceof Blob`) rather than by inspecting the bytes, and
-migrates a legacy one the moment it's read, the same lazy pattern as
-`pageHtml`'s own migration. Usually a smaller win here than for `pageHtml`:
-a PDF's own internal streams are very often already Flate/DCT-compressed,
-so gzip has much less redundancy left to squeeze out (a real PDF measured
-directly: about 4% smaller) — a real one for the PDFs that aren't (a scan
-with uncompressed raster pages, say), for the same cost either way.
+`{ compressed, type }` shape, and `get` tells that apart from a legacy
+value — whatever `blobs.put` was ever handed directly before this
+compression existed — by checking for the `compressed` field the current
+shape alone has, migrating a legacy one to the current shape the moment
+it's read, the same lazy pattern as `pageHtml`'s own migration. That
+detection shape isn't incidental: a first version instead pattern-matched
+the *old* shape, checking whether the stored value's own
+`Object.prototype.toString` tag read `[object Blob]` (chosen over
+`instanceof Blob` for the same realm-identity reason `lib/crypto.ts`'s
+`Uint8Array` check has), which broke every PDF already in storage outright
+— `sourcesRepo.ts` has only ever handed `blobs.put` a `File` straight from
+the upload `<input>`, never a plain `Blob`, and a `File`'s own tag is
+`[object File]`, not `[object Blob]`. Checking for the new shape's own
+marker field instead of the old shape's class doesn't care what a legacy
+value's class was — `Blob`, `File`, or anything else — since either way
+it's whatever wasn't already the compressed record.
+
+Usually a smaller win here than for `pageHtml`: a PDF's own internal
+streams are very often already Flate/DCT-compressed, so gzip has much less
+redundancy left to squeeze out (a real PDF measured directly: about 4%
+smaller) — a real one for the PDFs that aren't (a scan with uncompressed
+raster pages, say), for the same cost either way.
 
 **Trading the PDF for its text.** A PDF is usually the large majority of a
 source's footprint, while the reason it's there at all — being able to
