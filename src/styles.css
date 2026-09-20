@@ -1622,8 +1622,15 @@ select {
   box-shadow: var(--shadow-soft);
   background: white;
   color: #1a1a1a;
-  max-width: 640px;
-  width: 100%;
+  /* Grows to fit its widest unwrapped line (see `white-space: pre` below)
+     up to the space actually available, rather than a fixed reading
+     width — a line that wasn't wrapped in the original PDF shouldn't get
+     artificially re-wrapped here just because a comfortable reading
+     column happens to be narrower than it. `min-width` keeps a normal
+     paragraph-only page from shrinking to an awkwardly narrow box. */
+  width: max-content;
+  max-width: 100%;
+  min-width: min(640px, 100%);
   padding: 32px 36px;
   border-radius: var(--radius-sm);
   font-family: Georgia, 'Times New Roman', serif;
@@ -1631,17 +1638,25 @@ select {
   line-height: 1.7;
   box-sizing: border-box;
   max-height: 70vh;
-  overflow-y: auto;
+  /* Horizontal scrolling only actually kicks in once a line is wider than
+     the space above already made available to it (see .text-viewer /
+     .pdf-viewer's own overflow-x, and the wide Modal both viewers sit
+     in) — this is the last resort, not the first one. */
+  overflow: auto;
   user-select: text;
 }
 
 .text-viewer-page p {
   margin: 0 0 1em;
-  /* Preserves the single `\n` line breaks reflowTextItems inserts for the
-     original document's own line breaks (paragraph breaks are already
-     separate <p> elements) — without this, normal HTML whitespace
-     collapsing would silently fold every line back into one run-on line. */
-  white-space: pre-line;
+  /* A line that wasn't wrapped in the original PDF shouldn't be wrapped
+     here either — `pre` preserves the single `\n` line breaks
+     reflowTextItems inserts for the source document's own line breaks
+     (paragraph breaks are already separate <p> elements) exactly like
+     `pre-line` did, but never soft-wraps a long one to fit the container;
+     the container grows to fit it instead (see `.text-viewer-page` above),
+     falling back to horizontal scrolling only once it can't grow any
+     further. */
+  white-space: pre;
 }
 
 .text-viewer-page p:last-child {

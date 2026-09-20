@@ -198,11 +198,20 @@ never soft-wrapped the way HTML is, so every line's items are genuinely,
 explicitly positioned by the document itself — joined with a single `\n`;
 a gap noticeably larger than a normal line height is a new paragraph,
 joined with a blank line instead. `TextViewer`'s CSS renders those single
-line breaks as actual line breaks (`white-space: pre-line`), so a page
-reads with the same line and paragraph structure the original PDF had,
-not just as one wrapped block of prose. It's not real layout analysis —
-an unusual layout (multi-column text, dense tables) can reflow oddly —
-but it's enough to make most PDFs read naturally.
+line breaks as actual line breaks and — since a line the original PDF
+never wrapped shouldn't be re-wrapped just because it's now sitting in a
+narrower reading column — never soft-wraps them either (`white-space:
+pre`, not `pre-line`). The reading column itself grows to fit whichever
+line on the page is actually the widest (`width: max-content` on
+`.text-viewer-page`, capped by `max-width: 100%` of the space the dialog
+actually has), so a normal paragraph still reads at a comfortable ~640px
+column while a long bibliography line or table row gets however much
+width it needs, up to the dialog's own edge; only past that does the box
+fall back to horizontal scrolling within itself; a page reads with the
+same line and paragraph structure the original PDF had, not just as one
+wrapped block of prose. It's not real layout analysis — an unusual layout
+(multi-column text, dense tables) can reflow oddly — but it's enough to
+make most PDFs read naturally.
 
 Preserving those line breaks meant search needed a small adjustment to
 match: a query typed with an ordinary space needs to still find a phrase
