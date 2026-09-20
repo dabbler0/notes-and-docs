@@ -68,7 +68,7 @@ export function QuoteBankView() {
               <div className="card quote-bank-card" key={e.id}>
                 <blockquote className="quote-bank-text">“{e.quoteText}”</blockquote>
                 {e.annotation && <p className="quote-bank-annotation">{e.annotation}</p>}
-                <div className="card-meta">{source ? `${citationLabel(source.bibtex)}, p. ${e.page}` : '(source no longer available)'}</div>
+                <div className="card-meta">{source ? `${citationLabel(source.bibtex)}${e.page ? `, p. ${e.page}` : ''}` : '(source no longer available)'}</div>
                 <div className="quote-bank-actions">
                   {source?.pdfBlobId && (
                     <button

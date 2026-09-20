@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { looksLikeScannedPdf } from '../ocr'
+import { describeOcrError, looksLikeScannedPdf } from '../ocr'
 
 describe('looksLikeScannedPdf', () => {
   it('is false for a document with no pages at all', () => {
@@ -25,5 +25,24 @@ describe('looksLikeScannedPdf', () => {
   it('is true when every page individually is sparse, even if the whole document is longer', () => {
     const pages = Array.from({ length: 20 }, () => '1')
     expect(looksLikeScannedPdf(pages)).toBe(true)
+  })
+})
+
+describe('describeOcrError', () => {
+  it('uses a real Error object\'s own message', () => {
+    expect(describeOcrError(new Error('network timed out'))).toBe('network timed out')
+  })
+
+  it('uses a plain string rejection as-is', () => {
+    expect(describeOcrError('worker crashed')).toBe('worker crashed')
+  })
+
+  it('falls back to a readable default for an Error with no message', () => {
+    expect(describeOcrError(new Error())).toContain('unknown error')
+  })
+
+  it('falls back to a readable default for a non-Error, non-string rejection', () => {
+    expect(describeOcrError(undefined)).toContain('unknown error')
+    expect(describeOcrError({ some: 'object' })).toContain('unknown error')
   })
 })

@@ -5,7 +5,7 @@ import { TextViewer } from './TextViewer'
 import { formatBibtex, parseBibtex } from '../../lib/bibtex'
 import { extractPageTexts, loadPdf } from '../../lib/pdf'
 import { formatBytes } from '../../lib/format'
-import { looksLikeScannedPdf, ocrPdf } from '../../lib/ocr'
+import { describeOcrError, looksLikeScannedPdf, ocrImage, ocrPdf } from '../../lib/ocr'
 import { useSourceStorageBytes } from '../../lib/useSourceStorageBytes'
 import { convertSourceToTextOnly, deleteSource, getSourcePdfBlob, removeSourcePdf, setSourcePdf, updateSource } from '../../models/sourcesRepo'
 import { addQuoteToBank } from '../../models/quoteBankRepo'
@@ -33,6 +33,12 @@ export function SourceDetailDialog({
   const [pdfStatus, setPdfStatus] = useState('')
   const [pendingQuote, setPendingQuote] = useState('')
   const [quoteAnnotation, setQuoteAnnotation] = useState('')
+  // A source with no viewer (no PDF, no extracted text) has no "current
+  // page" a drag-selection could come from, so a manually-typed quote
+  // tracks its own optional page number separately from the PDF/text
+  // viewer's own `page` — 0 means "no page given," same convention
+  // QuoteInsertDialog's manual-entry path already uses.
+  const [manualPage, setManualPage] = useState(0)
   const [savingQuote, setSavingQuote] = useState(false)
   const [quoteSaved, setQuoteSaved] = useState(false)
   // Only meaningful once there's actually a PDF to choose between viewing
@@ -41,6 +47,7 @@ export function SourceDetailDialog({
   const [viewMode, setViewMode] = useState<'pdf' | 'text'>('pdf')
   const storageBytes = useSourceStorageBytes(source)
   const isScanned = !!source.pdfBlobId && looksLikeScannedPdf(source.pageTexts)
+  const hasViewer = !!source.pdfBlobId || (source.textOnly && source.pageTexts.length > 0)
 
   async function saveComment() {
     source.comment = comment
@@ -156,6 +163,8 @@ export function SourceDetailDialog({
       await setSourcePdf(source, ocrFile, pageTexts)
       setViewMode('pdf')
       onChanged()
+    } catch (e) {
+      alert('Could not OCR this PDF: ' + describeOcrError(e))
     } finally {
       setPdfBusy(false)
       setPdfStatus('')
@@ -178,13 +187,35 @@ export function SourceDetailDialog({
     if (!pendingQuote.trim()) return
     setSavingQuote(true)
     try {
-      await addQuoteToBank(source.id, page, pendingQuote.trim(), quoteAnnotation.trim())
+      await addQuoteToBank(source.id, hasViewer ? page : manualPage, pendingQuote.trim(), quoteAnnotation.trim())
       setPendingQuote('')
       setQuoteAnnotation('')
+      setManualPage(0)
       setQuoteSaved(true)
       setTimeout(() => setQuoteSaved(false), 1500)
     } finally {
       setSavingQuote(false)
+    }
+  }
+
+  /**
+   * For a source with nothing to drag-select from (no PDF, no extracted
+   * text), typing a quote out by hand is the fallback — but retyping a
+   * quote from a photo or screenshot is exactly the tedious busywork OCR
+   * exists to skip. Recognizes the image's text and drops it straight
+   * into the quote box, the same way drag-selecting text in a PDF would.
+   */
+  async function handleOcrImageChosen(file: File | null) {
+    if (!file) return
+    setPdfBusy(true)
+    setPdfStatus('Recognizing text from image…')
+    try {
+      setPendingQuote(await ocrImage(file))
+    } catch (e) {
+      alert('Could not recognize text from that image: ' + describeOcrError(e))
+    } finally {
+      setPdfBusy(false)
+      setPdfStatus('')
     }
   }
 
@@ -319,35 +350,59 @@ export function SourceDetailDialog({
             </p>
           )}
           {pdfStatus && <p className="muted">{pdfStatus}</p>}
-          {source.pdfBlobId || (source.textOnly && source.pageTexts.length > 0) ? (
-            <>
-              {source.pdfBlobId && viewMode === 'pdf' ? (
-                <PdfViewer source={source} page={page} onPageChange={setPage} onSelectionChange={setPendingQuote} />
-              ) : (
-                <TextViewer source={source} page={page} onPageChange={setPage} onSelectionChange={setPendingQuote} />
-              )}
-              <div className="field" style={{ marginTop: 12 }}>
-                <label>Add to quote bank</label>
-                <textarea
-                  rows={2}
-                  value={pendingQuote}
-                  onInput={(e) => setPendingQuote((e.target as HTMLTextAreaElement).value)}
-                  placeholder="Drag-select text above, or type/paste a quote here"
-                />
-                <input
-                  style={{ marginTop: 6 }}
-                  placeholder="Annotation (optional) — why this quote is worth keeping"
-                  value={quoteAnnotation}
-                  onInput={(e) => setQuoteAnnotation((e.target as HTMLInputElement).value)}
-                />
-                <button className="btn btn-ghost btn-sm" style={{ marginTop: 6 }} disabled={!pendingQuote.trim() || savingQuote} onClick={saveQuoteToBank}>
-                  {quoteSaved ? 'Added!' : '+ Add to quote bank'}
-                </button>
-              </div>
-            </>
+          {hasViewer ? (
+            source.pdfBlobId && viewMode === 'pdf' ? (
+              <PdfViewer source={source} page={page} onPageChange={setPage} onSelectionChange={setPendingQuote} />
+            ) : (
+              <TextViewer source={source} page={page} onPageChange={setPage} onSelectionChange={setPendingQuote} />
+            )
           ) : (
-            <p className="muted">No PDF attached — this source is BibTeX + comment only.</p>
+            <p className="muted">No PDF attached — this source is BibTeX + comment only. You can still add a quote by typing it in, or attach an image below to OCR it.</p>
           )}
+          <div className="field" style={{ marginTop: 12 }}>
+            <label>Add to quote bank</label>
+            <textarea
+              rows={hasViewer ? 2 : 4}
+              value={pendingQuote}
+              onInput={(e) => setPendingQuote((e.target as HTMLTextAreaElement).value)}
+              placeholder={hasViewer ? 'Drag-select text above, or type/paste a quote here' : 'Type or paste a quote here, or attach an image below to OCR it'}
+            />
+            {!hasViewer && (
+              <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginTop: 6 }}>
+                <label className="btn btn-ghost btn-sm" style={{ cursor: pdfBusy ? 'default' : 'pointer' }}>
+                  Attach image to OCR
+                  <input
+                    type="file"
+                    accept="image/*"
+                    disabled={pdfBusy}
+                    style={{ display: 'none' }}
+                    onChange={(e) => {
+                      const f = (e.target as HTMLInputElement).files?.[0] ?? null
+                      ;(e.target as HTMLInputElement).value = ''
+                      handleOcrImageChosen(f)
+                    }}
+                  />
+                </label>
+                <input
+                  type="number"
+                  min="1"
+                  placeholder="Page (optional)"
+                  value={manualPage > 0 ? String(manualPage) : ''}
+                  onInput={(e) => setManualPage(Number((e.target as HTMLInputElement).value) || 0)}
+                  style={{ width: 160, flexShrink: 0 }}
+                />
+              </div>
+            )}
+            <input
+              style={{ marginTop: 6 }}
+              placeholder="Annotation (optional) — why this quote is worth keeping"
+              value={quoteAnnotation}
+              onInput={(e) => setQuoteAnnotation((e.target as HTMLInputElement).value)}
+            />
+            <button className="btn btn-ghost btn-sm" style={{ marginTop: 6 }} disabled={!pendingQuote.trim() || savingQuote} onClick={saveQuoteToBank}>
+              {quoteSaved ? 'Added!' : '+ Add to quote bank'}
+            </button>
+          </div>
         </div>
       )}
       <div className="modal-actions">

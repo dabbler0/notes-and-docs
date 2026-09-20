@@ -13,6 +13,17 @@ export interface OcrProgress {
   status: string
 }
 
+/** A readable message for whatever OCR failed with — tesseract.js's worker
+ * can reject with a plain string, an ErrorEvent, or other non-Error value
+ * depending on where it failed (a network error loading its engine from
+ * the CDN looks nothing like a recognition-time error), so `e.message`
+ * alone is often `undefined`. */
+export function describeOcrError(e: unknown): string {
+  if (e instanceof Error && e.message) return e.message
+  if (typeof e === 'string' && e) return e
+  return 'an unknown error — check your internet connection, since OCR needs to fetch its engine from a CDN the first time it runs'
+}
+
 /**
  * Whether a PDF's already-extracted `pageTexts` look like they came from a
  * scanned document with no real text layer at all, rather than one that
@@ -46,6 +57,25 @@ export async function overlayTextLayer(outDoc: PDFDocument, pageIndex: number, t
   // since the canvas was rendered at a uniform scale of this same page in
   // both dimensions.
   targetPage.drawPage(embeddedTextLayer, { x: 0, y: 0, width: targetPage.getWidth(), height: targetPage.getHeight() })
+}
+
+/**
+ * Recognizes the text in a single image — a photo of a page, a screenshot
+ * of a quote, whatever's easiest to get a hand-typed quote from without
+ * actually typing it — and returns it as plain text. Used for a source
+ * with no PDF and no extracted text at all, where there's nothing to
+ * drag-select from, as an alternative to typing the quote in by hand.
+ * Runs entirely client-side, same as `ocrPdf` (see its own doc comment
+ * for the CDN-fetched-engine caveat, which applies here too).
+ */
+export async function ocrImage(image: File | Blob): Promise<string> {
+  const worker = await createWorker('eng')
+  try {
+    const { data } = await worker.recognize(image)
+    return (data.text ?? '').trim()
+  } finally {
+    await worker.terminate()
+  }
 }
 
 /**

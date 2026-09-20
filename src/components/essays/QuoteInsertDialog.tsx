@@ -4,6 +4,7 @@ import { PdfViewer } from '../sources/PdfViewer'
 import { TextViewer } from '../sources/TextViewer'
 import { Icon } from '../Icon'
 import { citationLabel, displayAuthors, displayTitle } from '../../lib/bibtex'
+import { describeOcrError, ocrImage } from '../../lib/ocr'
 import { listSources, matchesSourceQuery } from '../../models/sourcesRepo'
 import { listQuoteBank, matchesQuoteQuery } from '../../models/quoteBankRepo'
 import type { QuoteBankEntry, Source } from '../../models/types'
@@ -33,6 +34,7 @@ export function QuoteInsertDialog({
   const [pdfPage, setPdfPage] = useState(1)
   const [pdfQuote, setPdfQuote] = useState('')
   const [picked, setPicked] = useState<Picked | null>(null)
+  const [ocrBusy, setOcrBusy] = useState(false)
 
   const active: Picked | null = tab === 'source' ? (pdfSource ? { source: pdfSource, quote: pdfQuote, page: pdfPage } : null) : picked
   const quote = active?.quote.trim() ?? ''
@@ -52,6 +54,24 @@ export function QuoteInsertDialog({
     // from, so it starts unset (0 — falsy, so citationHtml() below leaves
     // the page number off entirely until/unless the user types one in).
     setPdfPage(s.pdfBlobId || s.pageTexts.length > 0 ? 1 : 0)
+  }
+
+  /**
+   * For a source with no PDF and no extracted text, typing a quote by
+   * hand is the fallback — OCR-ing a photo or screenshot of it is a
+   * quicker way to get the same result without retyping it. Recognizes
+   * the image's text and drops it straight into the quote box.
+   */
+  async function handleOcrImageChosen(file: File | null) {
+    if (!file) return
+    setOcrBusy(true)
+    try {
+      setPdfQuote(await ocrImage(file))
+    } catch (e) {
+      alert('Could not recognize text from that image: ' + describeOcrError(e))
+    } finally {
+      setOcrBusy(false)
+    }
   }
 
   return (
@@ -92,14 +112,28 @@ export function QuoteInsertDialog({
               />
             </div>
             {!hasViewer && (
-              <div className="field" style={{ marginTop: 10, maxWidth: 160 }}>
-                <label>Page (optional)</label>
+              <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginTop: 10 }}>
+                <label className="btn btn-ghost btn-sm" style={{ cursor: ocrBusy ? 'default' : 'pointer' }}>
+                  {ocrBusy ? 'Recognizing text…' : 'Attach image to OCR'}
+                  <input
+                    type="file"
+                    accept="image/*"
+                    disabled={ocrBusy}
+                    style={{ display: 'none' }}
+                    onChange={(e) => {
+                      const f = (e.target as HTMLInputElement).files?.[0] ?? null
+                      ;(e.target as HTMLInputElement).value = ''
+                      handleOcrImageChosen(f)
+                    }}
+                  />
+                </label>
                 <input
                   type="number"
                   min="1"
+                  placeholder="Page (optional)"
                   value={pdfPage > 0 ? String(pdfPage) : ''}
                   onInput={(e) => setPdfPage(Number((e.target as HTMLInputElement).value) || 0)}
-                  placeholder="e.g. 42"
+                  style={{ width: 160, flexShrink: 0 }}
                 />
               </div>
             )}
@@ -220,7 +254,8 @@ function QuoteBankPicker({ selectedId, onSelect }: { selectedId: string | null; 
                 “{e.quoteText.length > 140 ? e.quoteText.slice(0, 140) + '…' : e.quoteText}”
               </div>
               <div className="card-meta">
-                {citationLabel(source.bibtex)}, p. {e.page}
+                {citationLabel(source.bibtex)}
+                {e.page ? `, p. ${e.page}` : ''}
               </div>
               {e.annotation && <div className="card-meta">{e.annotation}</div>}
             </div>

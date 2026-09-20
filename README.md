@@ -230,6 +230,35 @@ the app) needs a working internet connection the first time it's used in
 a given browser, and won't work in a fully offline or heavily
 network-restricted setting.
 
+**Quoting a source with nothing to select from.** A source with no PDF and
+no extracted text used to be a dead end for the quote bank — its detail
+view just said "BibTeX + comment only" and left it at that, even though
+`QuoteInsertDialog`'s own "From a source" tab already let a quote be typed
+in by hand for exactly this case. The detail view's "Add to quote bank"
+now offers the same manual path: a plain textarea plus an optional page
+number, saved through the same `addQuoteToBank` any other quote goes
+through. `saveQuoteToBank` tracks two separate page values — the PDF/text
+viewer's own current page when there is one, and a standalone `manualPage`
+(defaulting to 0, meaning "none," the same convention `QuoteInsertDialog`
+already used) when there isn't — and picks whichever one actually applies
+rather than pretending a manually-typed quote has a "current page" to draw
+from. A saved quote with no page now also displays without a stray ", p. 0"
+in both the Quotes tab and the quote-bank picker inside `QuoteInsertDialog`,
+which used to show the page number unconditionally.
+
+Retyping a quote from a photo or screenshot by hand is exactly the
+busywork OCR exists to skip, so both places offer "Attach image to OCR"
+right next to the manual textarea whenever there's no PDF or text to
+select from instead: `ocrImage` (`lib/ocr.ts`) runs tesseract.js against
+the single image directly (no PDF/canvas rendering step needed, unlike
+`ocrPdf`) and drops the recognized text straight into the quote box, the
+same way drag-selecting text in a PDF would. Failures here — most likely
+the same CDN reachability the OCR engine needs on first use — surface as a
+plain, specific alert (`describeOcrError` in `lib/ocr.ts` turns whatever
+tesseract.js's worker actually rejected with, which can be a bare string
+or a value with no usable `.message` depending on where it failed, into a
+readable one) rather than a silent failure or a raw `undefined`.
+
 Getting readable text out of a PDF in the first place took a bit of care:
 pdf.js hands back text items in reading order but with no structural markup
 at all, not even line breaks, so the original `extractPageTexts` flattened
