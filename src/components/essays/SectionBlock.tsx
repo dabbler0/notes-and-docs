@@ -509,28 +509,41 @@ function cssEscapeId(s: string): string {
 }
 
 /**
- * The standard "exit a block quote" gesture most editors support (Notion,
- * Google Docs, Word all do some version of it for quotes and lists alike):
- * pressing Enter right at the trailing edge of the block breaks out into a
- * fresh, ordinary paragraph after it, instead of continuing to type inside
- * it. A bare contentEditable `<blockquote>` has no such behavior built in —
- * with nothing else after it to click or arrow past whenever it's the last
- * thing in a section, Enter (or just typing) there normally just keeps
- * extending the quote, which is exactly the "stuck inside it" complaint this
- * fixes. Only fires when the caret has nothing to its right inside the
- * quote (or its attached citation line right after it — the two are always
- * inserted as a pair by insertQuote in EssayWorkspace.tsx, and are meant to
- * be exited together), so pressing Enter in the *middle* of a quote's own
- * text still behaves normally.
+ * Two related "leave the block quote formatting behind" gestures most block
+ * editors support, both keyed off the same trailing/collapsed-caret shape:
+ *
+ * - Enter right at the trailing edge of a quote (or its attached citation
+ *   line right after it) breaks out into a fresh, ordinary paragraph after
+ *   it, instead of continuing to type inside it. A bare contentEditable
+ *   `<blockquote>` has no such behavior built in — with nothing else after
+ *   it to click or arrow past whenever it's the last thing in a section,
+ *   Enter (or just typing) there normally just keeps extending the quote,
+ *   which is exactly the "stuck inside it" complaint this fixes. Only fires
+ *   when the caret has nothing to its right inside the quote (the two are
+ *   always inserted as a pair by insertQuote in EssayWorkspace.tsx, and are
+ *   meant to be exited together), so pressing Enter in the *middle* of a
+ *   quote's own text still behaves normally.
+ * - Backspace or Delete inside a quote that's been emptied out (every bit
+ *   of its own text deleted some other way — selecting it all and hitting
+ *   Delete, say) removes the blockquote wrapper entirely, turning it into a
+ *   plain empty paragraph in place, rather than merging into whatever's
+ *   before or after it the way deleting inside an empty `<blockquote>`
+ *   normally would.
  */
 function handleShardKeyDown(e: KeyboardEvent) {
-  if (e.key !== 'Enter' || e.shiftKey || e.ctrlKey || e.metaKey || e.altKey) return
+  if (e.shiftKey || e.ctrlKey || e.metaKey || e.altKey) return
   const sel = window.getSelection()
   if (!sel || !sel.isCollapsed || sel.rangeCount === 0) return
   const range = sel.getRangeAt(0)
   const startEl = (range.startContainer.nodeType === Node.ELEMENT_NODE ? (range.startContainer as HTMLElement) : range.startContainer.parentElement) as HTMLElement | null
   const shard = startEl?.closest<HTMLElement>('.node-content')
   if (!shard) return
+
+  if (e.key === 'Backspace' || e.key === 'Delete') {
+    handleEmptyQuoteDeletion(e, sel, range, shard)
+    return
+  }
+  if (e.key !== 'Enter') return
 
   // The top-level child of the shard the caret sits within or right after —
   // a blockquote and its citation paragraph are always direct children of
@@ -580,6 +593,29 @@ function handleShardKeyDown(e: KeyboardEvent) {
   // preventDefault()'d the key that would have triggered one) — dispatch
   // one so the shard's own onInput (handleShardInput) picks this up and
   // schedules a save exactly like any other edit.
+  shard.dispatchEvent(new Event('input', { bubbles: true }))
+}
+
+/** The Backspace/Delete half of handleShardKeyDown's doc comment above. */
+function handleEmptyQuoteDeletion(e: KeyboardEvent, sel: Selection, range: Range, shard: HTMLElement) {
+  let node: Node | null = range.startContainer
+  while (node && node !== shard) {
+    if (node.nodeType === Node.ELEMENT_NODE && (node as HTMLElement).tagName === 'BLOCKQUOTE' && (node as HTMLElement).classList.contains('quote')) break
+    node = node.parentNode
+  }
+  if (!node || node === shard) return
+  const bq = node as HTMLElement
+  if ((bq.textContent || '').replace(/ /g, '').trim() !== '') return
+
+  e.preventDefault()
+  const p = document.createElement('p')
+  p.appendChild(document.createElement('br'))
+  bq.replaceWith(p)
+  const newRange = document.createRange()
+  newRange.setStart(p, 0)
+  newRange.collapse(true)
+  sel.removeAllRanges()
+  sel.addRange(newRange)
   shard.dispatchEvent(new Event('input', { bubbles: true }))
 }
 

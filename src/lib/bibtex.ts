@@ -137,6 +137,23 @@ export function emptyEntry(key: string): BibtexEntry {
 }
 
 /**
+ * Turns a raw page number — always the literal PDF/text-viewer page a quote
+ * was taken from, the same one "View in source" navigates by — into what a
+ * citation should actually display, honoring a source's own page-numbering
+ * preferences (set in `SourceDetailDialog`): `null` (no page shown at all)
+ * for a source marked as having no page numbers of its own, or the raw page
+ * shifted by `pageOffset` for one whose stored PDF has some number of
+ * unnumbered pages (a cover, a title page) before the document's own page 1.
+ * Also `null` for a falsy raw page or an offset big enough to push the
+ * result to zero or below, since neither is a real page to cite.
+ */
+export function citationPage(source: Source, page: number | undefined): number | null {
+  if (!page || source.noPageNumbers) return null
+  const shifted = page - (source.pageOffset ?? 0)
+  return shifted > 0 ? shifted : null
+}
+
+/**
  * The inline citation chip inserted by "Cite," "Quote from PDF," and "Link
  * to source": a `<cite>` when the source has no URL to point at, or an
  * `<a>` wearing the same `.citation` styling when it does — either way
@@ -144,7 +161,8 @@ export function emptyEntry(key: string): BibtexEntry {
  * source it points to.
  */
 export function citationHtml(source: Source, opts: { page?: number } = {}): string {
-  const label = citationLabel(source.bibtex) + (opts.page ? `, p. ${opts.page}` : '')
+  const page = citationPage(source, opts.page)
+  const label = citationLabel(source.bibtex) + (page ? `, p. ${page}` : '')
   const url = source.bibtex.fields.url
   if (url) {
     return `<a class="citation" data-source-id="${source.id}" href="${escapeAttr(url)}" target="_blank" rel="noopener noreferrer">${label}</a>`

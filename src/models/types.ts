@@ -26,6 +26,24 @@ export interface Source {
    * exactly as before this field existed.
    */
   textOnly?: boolean
+  /**
+   * True when this source doesn't have meaningful page numbers of its own
+   * (a web page, a source with no fixed pagination) — citations from it
+   * never show a page number, however a quote's own `page` happens to be
+   * set (that field still tracks the raw PDF/text-viewer page internally,
+   * e.g. for "View in source" to jump back to — this only suppresses it
+   * from the *displayed* citation).
+   */
+  noPageNumbers?: boolean
+  /**
+   * How many pages into the stored PDF the document's own printed page 1
+   * actually starts — e.g. 3 for a PDF with a cover, title page, and blank
+   * page before the numbered content begins. `citationPage` (`lib/bibtex.ts`)
+   * subtracts this from whatever raw page a quote was taken from, so a
+   * citation reads with the document's own page numbers rather than the
+   * PDF viewer's. Irrelevant (and ignored) when `noPageNumbers` is set.
+   */
+  pageOffset?: number
   createdAt: number
   updatedAt: number
   /**

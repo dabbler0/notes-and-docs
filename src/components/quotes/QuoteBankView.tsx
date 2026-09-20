@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'preact/hooks'
 import { deleteQuoteFromBank, listQuoteBank, matchesQuoteQuery } from '../../models/quoteBankRepo'
 import { hasQuotableText, listSources } from '../../models/sourcesRepo'
-import { citationLabel, displayAuthors, displayTitle } from '../../lib/bibtex'
+import { citationLabel, citationPage, displayAuthors, displayTitle } from '../../lib/bibtex'
 import { onSyncApplied } from '../../sync/syncEvents'
 import type { QuoteBankEntry, Source } from '../../models/types'
 import { SourceDetailDialog } from '../sources/SourceDetailDialog'
@@ -71,7 +71,9 @@ export function QuoteBankView() {
               <div className="card quote-bank-card" key={e.id}>
                 <blockquote className="quote-bank-text">“{e.quoteText}”</blockquote>
                 {e.annotation && <p className="quote-bank-annotation">{e.annotation}</p>}
-                <div className="card-meta">{source ? `${citationLabel(source.bibtex)}${e.page ? `, p. ${e.page}` : ''}` : '(source no longer available)'}</div>
+                <div className="card-meta">
+                  {source ? `${citationLabel(source.bibtex)}${citationPage(source, e.page) ? `, p. ${citationPage(source, e.page)}` : ''}` : '(source no longer available)'}
+                </div>
                 <div className="quote-bank-actions">
                   {source && hasQuotableText(source) && (
                     <button

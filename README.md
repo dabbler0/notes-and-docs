@@ -532,6 +532,21 @@ from the gesture up front, so it falls through to the browser's own default
 Shift+Enter handling (a plain `<br>`, in place), for anyone who actually
 wants to keep extending the quote or citation by hand.
 
+The matching gesture the other direction: Backspace or Delete inside a
+block quote that's been emptied out (its own text selected and deleted some
+other way — the Enter-exit gesture never leaves one empty itself)
+removes the blockquote wrapper entirely, converting it to a plain, empty
+paragraph in place — `handleEmptyQuoteDeletion` in `SectionBlock.tsx`,
+sharing `handleShardKeyDown`'s same caret-resolution setup. Without this, a
+bare contentEditable `<blockquote>` with nothing left inside it just sits
+there taking up an indented, styled line forever, since deleting inside an
+empty block normally merges it with whatever's before or after instead of
+removing the formatting. Only fires when the blockquote's `textContent` is
+genuinely empty (not just visually — an emptied blockquote still holds a
+`<br>` after the last character goes), so Backspace/Delete anywhere inside
+quote text that's still there behaves normally (deletes one character, same
+as any other line).
+
 This gesture is only reliable because of a second fix alongside it, in the
 DOM-resync effect right above `handleShardKeyDown` in `SectionBlock.tsx`.
 Every insert-a-citation/quote/footnote/link action ends in a `reload()`
@@ -583,6 +598,33 @@ typing something past the last page jumps to the last page instead), so
 finding a specific page doesn't mean clicking Next repeatedly. It stays in
 sync with the current page whenever that changes some other way — Prev/
 Next, a search landing on a different page, switching sources entirely.
+
+**Page numbers in citations.** A quote's `page` field always tracks the raw
+PDF/text-viewer page it was taken from — the same one "View in source"
+navigates back to — but that's not necessarily the page number a citation
+should actually *show*. Two source-level settings (`Source.noPageNumbers`
+and `Source.pageOffset` in `types.ts`, edited from the "Page numbering in
+citations" section of a source's BibTeX & notes tab) let a citation diverge
+from it: a source with no meaningful pagination of its own (a web page, a
+source that was never really paginated in the first place) can be marked
+"has no page numbers of its own," which drops the page suffix from every
+citation drawn from it, whatever `page` happens to be on file for any given
+quote; a PDF with some number of unnumbered pages before the document's own
+page 1 (a cover, a title page) can instead be given a page offset, so a
+quote from raw PDF page 12 with an offset of 3 cites as page 9 — matching
+the document's own printed numbering instead of the PDF viewer's. Both are
+applied in exactly one place, `citationPage` in `lib/bibtex.ts` — it takes a
+raw page and returns either the shifted number or `null` (also `null` for an
+offset large enough to push the result to zero or below, since that's not a
+real page to cite) — and everywhere a page number is ever displayed next to
+a citation (`citationHtml` itself, the quote bank's own list, and the
+quote-insertion dialog's "From the quote bank" tab) calls it rather than
+formatting `page` directly, so the two settings can't drift out of sync
+between where a citation gets inserted and where a saved quote gets
+browsed. Nothing about how pages are *recorded* changes — quoting, "View in
+source," and the PDF/text viewers themselves all keep working exclusively
+in raw PDF/viewer page numbers throughout; only the final displayed label
+in a citation is ever adjusted.
 
 **The quote bank.** A `QuoteBankEntry` (`quoteBankRepo.ts`) is a quote saved
 out of a source's PDF independently of any essay — from a source's own

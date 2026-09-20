@@ -25,6 +25,8 @@ export function SourceDetailDialog({
 }) {
   const [tab, setTab] = useState<'bibtex' | 'pdf'>(initialPage ? 'pdf' : 'bibtex')
   const [comment, setComment] = useState(source.comment)
+  const [noPageNumbers, setNoPageNumbers] = useState(!!source.noPageNumbers)
+  const [pageOffset, setPageOffset] = useState(source.pageOffset ?? 0)
   const [page, setPage] = useState(initialPage ?? 1)
   const [editingBibtex, setEditingBibtex] = useState(false)
   const [bibtexText, setBibtexText] = useState(() => formatBibtex(source.bibtex))
@@ -51,6 +53,20 @@ export function SourceDetailDialog({
 
   async function saveComment() {
     source.comment = comment
+    await updateSource(source)
+    onChanged()
+  }
+
+  async function handleNoPageNumbersChanged(checked: boolean) {
+    setNoPageNumbers(checked)
+    source.noPageNumbers = checked
+    await updateSource(source)
+    onChanged()
+  }
+
+  async function savePageOffset() {
+    if (pageOffset === (source.pageOffset ?? 0)) return
+    source.pageOffset = pageOffset || undefined
     await updateSource(source)
     onChanged()
   }
@@ -275,7 +291,33 @@ export function SourceDetailDialog({
             <label>Comment / notes</label>
             <textarea rows={4} value={comment} onInput={(e) => setComment((e.target as HTMLTextAreaElement).value)} onBlur={saveComment} />
           </div>
-          <button className="btn btn-danger btn-sm" onClick={handleDelete}>
+          <div className="field" style={{ marginTop: 14 }}>
+            <label>Page numbering in citations</label>
+            <label className="muted" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+              <input type="checkbox" checked={noPageNumbers} onChange={(e) => handleNoPageNumbersChanged((e.target as HTMLInputElement).checked)} />
+              This source has no page numbers of its own — never show one in citations
+            </label>
+            {!noPageNumbers && (
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 8 }}>
+                <span className="muted">Pages before the document's own page 1 (cover, title page, etc.)</span>
+                <input
+                  type="number"
+                  min="0"
+                  placeholder="0"
+                  value={pageOffset > 0 ? String(pageOffset) : ''}
+                  onInput={(e) => setPageOffset(Number((e.target as HTMLInputElement).value) || 0)}
+                  onBlur={savePageOffset}
+                  style={{ width: 70, flexShrink: 0 }}
+                />
+              </div>
+            )}
+            {!noPageNumbers && pageOffset > 0 && (
+              <p className="muted" style={{ marginTop: 4, marginBottom: 0 }}>
+                A quote taken from page {pageOffset + 1} of the PDF will cite as page 1, and so on.
+              </p>
+            )}
+          </div>
+          <button className="btn btn-danger btn-sm" style={{ marginTop: 14 }} onClick={handleDelete}>
             Delete source
           </button>
         </div>

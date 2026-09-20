@@ -3,7 +3,7 @@ import { Modal } from '../Modal'
 import { PdfViewer } from '../sources/PdfViewer'
 import { TextViewer } from '../sources/TextViewer'
 import { Icon } from '../Icon'
-import { citationLabel, displayAuthors, displayTitle } from '../../lib/bibtex'
+import { citationLabel, citationPage, displayAuthors, displayTitle } from '../../lib/bibtex'
 import { describeOcrError, ocrImage } from '../../lib/ocr'
 import { listSources, matchesSourceQuery } from '../../models/sourcesRepo'
 import { listQuoteBank, matchesQuoteQuery } from '../../models/quoteBankRepo'
@@ -255,7 +255,7 @@ function QuoteBankPicker({ selectedId, onSelect }: { selectedId: string | null; 
               </div>
               <div className="card-meta">
                 {citationLabel(source.bibtex)}
-                {e.page ? `, p. ${e.page}` : ''}
+                {citationPage(source, e.page) ? `, p. ${citationPage(source, e.page)}` : ''}
               </div>
               {e.annotation && <div className="card-meta">{e.annotation}</div>}
             </div>
