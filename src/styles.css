@@ -1610,6 +1610,34 @@ select {
   gap: 10px;
 }
 
+.pdf-page-jump {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.pdf-page-jump-input {
+  width: 46px;
+  padding: 2px 4px;
+  text-align: center;
+  /* Matches the surrounding .muted text rather than looking like a
+     normal full-size form field — it's a small inline control, not a
+     form of its own. */
+  font-size: inherit;
+  color: var(--ink);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  -moz-appearance: textfield;
+}
+
+/* Chrome/Safari's spinner arrows just get in the way at this width. */
+.pdf-page-jump-input::-webkit-outer-spin-button,
+.pdf-page-jump-input::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+
 .text-viewer {
   display: flex;
   flex-direction: column;

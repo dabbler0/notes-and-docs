@@ -470,6 +470,16 @@ to be split across two adjacent text items (rare, but possible mid-line) is
 still found and counted by `findPdfMatches`, just not highlighted, since
 highlighting works item-by-item.
 
+The "Page N of M" control between the Prev/Next buttons — `PageControls`,
+shared by `PdfViewer` and `TextViewer` the same way `PageSearchBar` is —
+is a real input, not just a label: typing a number and pressing Enter (or
+clicking away) jumps straight there, clamped to the document's actual page
+range in either direction (typing `0` or a blank box jumps to page 1;
+typing something past the last page jumps to the last page instead), so
+finding a specific page doesn't mean clicking Next repeatedly. It stays in
+sync with the current page whenever that changes some other way — Prev/
+Next, a search landing on a different page, switching sources entirely.
+
 **The quote bank.** A `QuoteBankEntry` (`quoteBankRepo.ts`) is a quote saved
 out of a source's PDF independently of any essay — from a source's own
 detail view (Sources tab), drag-select text in its embedded `PdfViewer` (or

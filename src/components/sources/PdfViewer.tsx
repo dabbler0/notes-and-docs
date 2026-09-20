@@ -3,6 +3,7 @@ import * as pdfjsLib from 'pdfjs-dist'
 import { getSourcePdfBlob } from '../../models/sourcesRepo'
 import { loadPdf, renderPageToCanvas, type PdfDoc } from '../../lib/pdf'
 import { usePageSearch } from '../../lib/usePageSearch'
+import { PageControls } from './PageControls'
 import { PageSearchBar } from './PageSearchBar'
 import type { Source } from '../../models/types'
 
@@ -131,17 +132,7 @@ export function PdfViewer({
   return (
     <div className="pdf-viewer">
       <PageSearchBar search={search} placeholder="Search in this PDF…" />
-      <div className="pdf-controls">
-        <button className="btn btn-sm" disabled={page <= 1} onClick={() => onPageChange(page - 1)}>
-          ← Prev
-        </button>
-        <span className="muted">
-          Page {page} of {doc.numPages}
-        </span>
-        <button className="btn btn-sm" disabled={page >= doc.numPages} onClick={() => onPageChange(page + 1)}>
-          Next →
-        </button>
-      </div>
+      <PageControls page={page} numPages={doc.numPages} onPageChange={onPageChange} />
       <div className="pdf-page-wrap">
         <canvas ref={canvasRef} />
         <div className="pdf-text-layer" ref={textLayerRef} />

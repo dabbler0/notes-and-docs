@@ -2,6 +2,7 @@ import { useEffect, useRef } from 'preact/hooks'
 import type { ComponentChildren } from 'preact'
 import { buildSearchRegex } from '../../lib/pdf'
 import { usePageSearch } from '../../lib/usePageSearch'
+import { PageControls } from './PageControls'
 import { PageSearchBar } from './PageSearchBar'
 import type { Source } from '../../models/types'
 
@@ -74,17 +75,7 @@ export function TextViewer({
   return (
     <div className="text-viewer">
       <PageSearchBar search={search} placeholder="Search in this text…" />
-      <div className="pdf-controls">
-        <button className="btn btn-sm" disabled={clamped <= 1} onClick={() => onPageChange(clamped - 1)}>
-          ← Prev
-        </button>
-        <span className="muted">
-          Page {clamped} of {numPages}
-        </span>
-        <button className="btn btn-sm" disabled={clamped >= numPages} onClick={() => onPageChange(clamped + 1)}>
-          Next →
-        </button>
-      </div>
+      <PageControls page={clamped} numPages={numPages} onPageChange={onPageChange} />
       <div className="text-viewer-page" ref={pageRef}>
         {rendered.length > 0 ? rendered : <p className="muted">This page has no extracted text.</p>}
       </div>
