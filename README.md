@@ -172,6 +172,19 @@ source" tab, which now offers it for a text-only source the same way it
 already did for a PDF, rather than falling back to typing the quote in by
 hand the way it still does for a source with neither.
 
+Extraction only ever runs when a PDF is first attached or swapped for a
+new one — a source added before some improvement to `extractPageTexts`
+(the line-break-preserving reflow described below, or any future one)
+keeps whatever its `pageTexts` looked like at the time forever, since
+nothing re-derives it from the still-stored PDF automatically. "Re-extract
+text," next to "Discard PDF, keep text only," is the escape hatch: it
+re-runs extraction against the same PDF bytes the source already has and
+overwrites `pageTexts` with the result, without needing to re-upload the
+file (which would also mean re-finding it on disk) or losing anything else
+about the source. Only available while there's still a real PDF to
+re-extract from, naturally — a text-only source has no PDF bytes left to
+re-run extraction against.
+
 Getting readable text out of a PDF in the first place took a bit of care:
 pdf.js hands back text items in reading order but with no structural markup
 at all, not even line breaks, so the original `extractPageTexts` flattened

@@ -6,7 +6,7 @@ import { formatBibtex, parseBibtex } from '../../lib/bibtex'
 import { extractPageTexts, loadPdf } from '../../lib/pdf'
 import { formatBytes } from '../../lib/format'
 import { useSourceStorageBytes } from '../../lib/useSourceStorageBytes'
-import { convertSourceToTextOnly, deleteSource, removeSourcePdf, setSourcePdf, updateSource } from '../../models/sourcesRepo'
+import { convertSourceToTextOnly, deleteSource, getSourcePdfBlob, removeSourcePdf, setSourcePdf, updateSource } from '../../models/sourcesRepo'
 import { addQuoteToBank } from '../../models/quoteBankRepo'
 import type { Source } from '../../models/types'
 
@@ -90,6 +90,34 @@ export function SourceDetailDialog({
       onChanged()
     } finally {
       setPdfBusy(false)
+    }
+  }
+
+  /**
+   * Re-runs text extraction against the PDF this source already has,
+   * overwriting `pageTexts` with the result. Extraction only ever happens
+   * when a PDF is first attached (`handlePdfFileChosen`) or swapped for a
+   * new one (`setSourcePdf`) — a source added before some improvement to
+   * `extractPageTexts` (e.g. the line-break-preserving reflow) keeps
+   * whatever its `pageTexts` looked like at the time forever, since
+   * nothing re-derives it from the still-stored PDF automatically. This
+   * is the escape hatch: same PDF bytes, re-extracted under today's rules.
+   */
+  async function handleReExtractText() {
+    if (!source.pdfBlobId) return
+    setPdfBusy(true)
+    setPdfStatus('Re-extracting text from PDF…')
+    try {
+      const blob = await getSourcePdfBlob(source)
+      if (!blob) return
+      const buf = await blob.arrayBuffer()
+      const doc = await loadPdf(buf)
+      source.pageTexts = await extractPageTexts(doc)
+      await updateSource(source)
+      onChanged()
+    } finally {
+      setPdfBusy(false)
+      setPdfStatus('')
     }
   }
 
@@ -223,6 +251,14 @@ export function SourceDetailDialog({
                 : source.textOnly
                   ? `Stored as extracted text only — ${formatBytes(storageBytes)}`
                   : ''}
+            {source.pdfBlobId && (
+              <>
+                {' · '}
+                <button type="button" className="btn-link-muted" disabled={pdfBusy} onClick={handleReExtractText} title="Re-run text extraction against this PDF — useful if it was added before an improvement to how text gets extracted">
+                  Re-extract text
+                </button>
+              </>
+            )}
             {source.pdfBlobId && source.pageTexts.length > 0 && (
               <>
                 {' · '}
