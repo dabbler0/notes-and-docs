@@ -1655,59 +1655,25 @@ select {
   max-width: 100%;
 }
 
+/* The page itself now renders inside a sandboxed iframe (see TextViewer's
+   own doc comment for why) with its own embedded stylesheet — everything
+   content-facing (padding, font, colors, `p`/`mark` rules) lives there now,
+   since a strict CSP means the iframe's document can't reach this
+   stylesheet anyway. What's left here is just how the iframe itself sits
+   in the surrounding layout: full width rather than the old
+   `width: max-content` (an iframe can't be sized by its own content the
+   way a div can — see the dynamic height set after each load), with a wide
+   unwrapped line falling back to the iframe's own native horizontal
+   scrolling instead of growing the box. */
 .text-viewer-page {
   box-shadow: var(--shadow-soft);
-  background: white;
-  color: #1a1a1a;
-  /* Grows to fit its widest unwrapped line (see `white-space: pre` below)
-     up to the space actually available, rather than a fixed reading
-     width — a line that wasn't wrapped in the original PDF shouldn't get
-     artificially re-wrapped here just because a comfortable reading
-     column happens to be narrower than it. `min-width` keeps a normal
-     paragraph-only page from shrinking to an awkwardly narrow box. */
-  width: max-content;
-  max-width: 100%;
-  min-width: min(640px, 100%);
-  padding: 32px 36px;
+  border: none;
   border-radius: var(--radius-sm);
-  font-family: Georgia, 'Times New Roman', serif;
-  font-size: 15.5px;
-  line-height: 1.7;
+  display: block;
+  width: 100%;
+  max-width: 100%;
   box-sizing: border-box;
-  max-height: 70vh;
-  /* Horizontal scrolling only actually kicks in once a line is wider than
-     the space above already made available to it (see .text-viewer /
-     .pdf-viewer's own overflow-x, and the wide Modal both viewers sit
-     in) — this is the last resort, not the first one. */
-  overflow: auto;
   user-select: text;
-}
-
-.text-viewer-page p {
-  margin: 0 0 1em;
-  /* A line that wasn't wrapped in the original PDF shouldn't be wrapped
-     here either — `pre` preserves the single `\n` line breaks
-     reflowTextItems inserts for the source document's own line breaks
-     (paragraph breaks are already separate <p> elements) exactly like
-     `pre-line` did, but never soft-wraps a long one to fit the container;
-     the container grows to fit it instead (see `.text-viewer-page` above),
-     falling back to horizontal scrolling only once it can't grow any
-     further. */
-  white-space: pre;
-}
-
-.text-viewer-page p:last-child {
-  margin-bottom: 0;
-}
-
-.text-viewer-page mark.text-search-hit {
-  background: rgba(255, 213, 79, 0.65);
-  color: inherit;
-  border-radius: 2px;
-}
-
-.text-viewer-page mark.text-search-hit-active {
-  background: rgba(255, 152, 0, 0.85);
 }
 
 .citation-list {

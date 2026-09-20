@@ -19,6 +19,7 @@
 import * as pdfjsLib from 'pdfjs-dist'
 import { escapeHtml, escapeAttr } from './html'
 import { reflowTextItems, renderPageToCanvas, separatorForGap, textItemHeight, type PdfDoc } from './pdf'
+import { sanitizePageHtml } from './sanitizeHtml'
 
 export type ExtractionMode = 'plain' | 'layout'
 
@@ -33,13 +34,22 @@ export type ExtractionMode = 'plain' | 'layout'
  * `pageTexts` (from before `pageHtml` existed) into the new shape with
  * (by construction) an identical rendered appearance — see
  * `migratePlainTextSources` in `sourcesRepo.ts`.
+ *
+ * Every escaped character and fixed tag here already makes this output
+ * safe by construction — no attributes, nothing derived from anything but
+ * `escapeHtml` and a literal `<p>`/`<br>` — but it still goes through
+ * `sanitizePageHtml` before returning, same as the layout extractor's own
+ * output, so *every* path that produces `pageHtml` is sanitized at
+ * extraction time without relying on each one to remember to call it
+ * separately (see `sanitizePageHtml`'s own doc comment for the render-time
+ * half of this).
  */
 export function plainTextToHtml(text: string): string {
   const paragraphs = text
     .split(/\n{2,}/)
     .map((p) => p.trim())
     .filter(Boolean)
-  return paragraphs.map((p) => `<p>${escapeHtml(p).replace(/\n/g, '<br>')}</p>`).join('')
+  return sanitizePageHtml(paragraphs.map((p) => `<p>${escapeHtml(p).replace(/\n/g, '<br>')}</p>`).join(''))
 }
 
 /**
@@ -218,7 +228,13 @@ async function extractLayoutPageHtml(doc: PdfDoc, pageNumber: number): Promise<s
     prevHeight = height
   }
 
-  return `<div style="position:relative;width:${viewport.width}px;height:${viewport.height}px;background:#fff;overflow:hidden;">${parts.join('')}</div>`
+  // Sanitized before returning (see sanitizePageHtml's own doc comment) —
+  // this is the extractor with actual attributes and a data-URL image to
+  // worry about, unlike the plain extractor's fixed tags with no
+  // attributes at all, so this is the pass that actually does something:
+  // stripping anything DOMPurify wouldn't recognize, and restricting the
+  // image's own `src` to the `data:` URI it already is.
+  return sanitizePageHtml(`<div style="position:relative;width:${viewport.width}px;height:${viewport.height}px;background:#fff;overflow:hidden;">${parts.join('')}</div>`)
 }
 
 /** Walks a page's operator list purely to find where an image was painted

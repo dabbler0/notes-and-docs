@@ -190,20 +190,76 @@ upload of, and skipping the write here means it's simply never in local
 storage for a sync pass to pick up, rather than relying on the user to
 remember to convert it away again before that happens.
 
-`TextViewer.tsx` renders a source's `pageHtml` directly (via `innerHTML`,
-not built up as Preact vnodes — see its own doc comment for why: the
-experimental layout extractor's output needs that, and the plain
-extractor's simpler `<p>`/`<br>` markup renders identically either way),
-with the same page-by-page navigation, in-document search (via the
-`usePageSearch` hook and `PageSearchBar` component both viewers now share —
-factored out of what used to be `PdfViewer`'s own search box, since the
-underlying logic never actually depended on there being a PDF at all, just
-a page of plain text — now `htmlToPlainText` over `pageHtml` rather than a
-`pageTexts` array directly), and drag-to-quote that `PdfViewer` offers, but
-backed by ordinary DOM text instead of a canvas rendering plus a synthetic
-selectable text layer — a real practical difference, not just an
-implementation detail, since it's what makes text-only mode strictly
-lighter than keeping the PDF around for these purposes. It's available
+`TextViewer.tsx` renders a source's `pageHtml` (not built up as Preact
+vnodes — see its own doc comment for why: the experimental layout
+extractor's output needs real markup, and the plain extractor's simpler
+`<p>`/`<br>` markup renders identically either way), with the same
+page-by-page navigation, in-document search (via the `usePageSearch` hook
+and `PageSearchBar` component both viewers now share — factored out of what
+used to be `PdfViewer`'s own search box, since the underlying logic never
+actually depended on there being a PDF at all, just a page of plain text —
+now `htmlToPlainText` over `pageHtml` rather than a `pageTexts` array
+directly), and drag-to-quote that `PdfViewer` offers, but backed by
+ordinary DOM text instead of a canvas rendering plus a synthetic selectable
+text layer — a real practical difference, not just an implementation
+detail, since it's what makes text-only mode strictly lighter than keeping
+the PDF around for these purposes.
+
+Rendering arbitrary HTML as content — rather than escaping it and printing
+it as text — is only safe because of two independent layers, neither
+trusted alone to catch everything: **sanitization** and a **sandboxed
+iframe**. `sanitizePageHtml` (`lib/sanitizeHtml.ts`, built on DOMPurify)
+allowlists exactly the tags and attributes either extractor ever produces
+(`<p>`/`<br>`/`<div>`/`<span>`/`<img>`, `style`/`src`/`alt`) and nothing
+else — no `<script>`, no event-handler attributes, no `<iframe>`/`<link>`/
+`<meta>`/`<object>`, and every URL-bearing attribute restricted to `data:`
+URIs, closing off network loads through `src`/`href` outright. It also
+patches a real gap in DOMPurify's default behavior: DOMPurify doesn't
+inspect a `style` attribute's own CSS value, so `style="background:
+url(https://evil.example/track.png)"` would otherwise sail through
+untouched even though `src="https://..."` wouldn't — a custom
+`uponSanitizeAttribute` hook drops any `style` attribute containing a
+non-`data:` `url(...)` instead, safe because neither extractor's inline
+styles (position, size, font, color) ever legitimately need one. This runs
+twice, by design: once at *extract time* (`plainTextToHtml` and
+`extractLayoutPageHtml` in `lib/textExtraction.ts` both sanitize their own
+output before returning it) and again at *render time*, immediately before
+`TextViewer` builds the markup it's about to display — extraction alone
+would trust every other way HTML can land in `pageHtml` (synced from
+another device, restored from a backup, migrated from an old plain-text
+source) to have gone through the same code path; render alone would leave
+whatever's actually stored one bug away from being dangerous the moment
+some other path skips it. Neither pass is assumed sufficient by itself.
+
+On top of that, the sanitized HTML is never handed to `innerHTML` on a
+plain element — it's rendered inside a sandboxed `<iframe>`, built fresh via
+`srcdoc` on every render rather than a persistent `src`. The `sandbox`
+attribute is set to `allow-same-origin` and nothing else — no
+`allow-scripts` — so the iframe's document can never execute script
+regardless of what's in it (the well-known sandbox-escape trick only
+applies when `allow-scripts` and `allow-same-origin` are combined; this
+iframe never sets the former). A restrictive CSP is embedded directly in
+the `srcdoc` document itself, as a `<meta http-equiv="Content-Security-
+Policy">` tag (a `srcdoc` iframe has no real HTTP response to attach a
+header to): `default-src 'none'; img-src data:; script-src 'none';
+base-uri 'none'; form-action 'none'`, plus `style-src 'unsafe-inline'`
+since every layout-mode run carries its own inline `style` attribute and
+the CSP has no way to tell that apart from an injected `<style>` block —
+the sanitizer's own `style`-attribute hook and `img-src data:` together
+close off the one thing that concession could otherwise reopen (a
+CSS-triggered network load). `allow-same-origin` is what makes the iframe
+usable at all despite the sandboxing: a `srcdoc` iframe with that flag
+inherits the embedding page's origin, so the parent can freely read
+`iframe.contentDocument`/`contentWindow` — needed both for search
+highlighting (which now walks and rewrites the iframe's own document, not
+the parent's) and for drag-to-quote, which now reads
+`iframe.contentDocument.getSelection()` instead of the parent document's.
+Since iframes, unlike a plain `<div>`, have no content-driven height, it's
+measured (`contentDocument.documentElement.scrollHeight`) and set
+explicitly once the iframe's `load` event fires, capped the same way the
+old plain-`<div>` rendering capped an overly tall page, with the iframe's
+own document scrolling internally past that cap rather than the page
+growing without bound. It's available
 from the "Text" toggle next to a PDF-backed source's viewer, from
 `SourceDetailDialog` directly for a text-only source (no toggle needed —
 there's no PDF to switch back to), and from `QuoteInsertDialog`'s "From a
