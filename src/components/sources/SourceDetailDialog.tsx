@@ -141,9 +141,15 @@ export function SourceDetailDialog({
     try {
       const blob = await getSourcePdfBlob(source)
       if (!blob) return
-      const buf = await blob.arrayBuffer()
-      const doc = await loadPdf(buf)
-      const ocrBytes = await ocrPdf(buf, doc, (p) => setPdfStatus(`${p.status} (page ${p.page} of ${p.totalPages})`))
+      // Two independent ArrayBuffers, not one reused — pdf.js's
+      // getDocument() transfers its `data` buffer to its worker thread
+      // (for performance), which detaches it in this thread; reusing that
+      // same buffer for pdf-lib afterward throws "Cannot perform Construct
+      // on a detached ArrayBuffer." Blob.arrayBuffer() is cheap to call
+      // twice and each call hands back a fresh, independent buffer.
+      const doc = await loadPdf(await blob.arrayBuffer())
+      const originalBytes = await blob.arrayBuffer()
+      const ocrBytes = await ocrPdf(originalBytes, doc, (p) => setPdfStatus(`${p.status} (page ${p.page} of ${p.totalPages})`))
       const ocrFile = new File([ocrBytes as BlobPart], source.pdfFileName || 'ocr.pdf', { type: 'application/pdf' })
       const ocrDoc = await loadPdf(await ocrFile.arrayBuffer())
       const pageTexts = await extractPageTexts(ocrDoc)
