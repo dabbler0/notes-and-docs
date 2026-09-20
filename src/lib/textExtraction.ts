@@ -13,8 +13,10 @@
  * - `'layout'` (experimental — see `extractLayoutPageHtml`'s own doc
  *   comment): attempts to reproduce the PDF page's actual visual
  *   appearance — each text run's own position, size, and color, plus
- *   images pulled out of the page and reinserted where they were — instead
- *   of collapsing everything down to plain reading-order prose.
+ *   images (raster ones, and anything vector-drawn that isn't text either —
+ *   see `detectVectorArtRegions`) pulled out of the page and reinserted
+ *   where they were — instead of collapsing everything down to plain
+ *   reading-order prose.
  */
 import * as pdfjsLib from 'pdfjs-dist'
 import { escapeHtml, escapeAttr } from './html'
@@ -131,35 +133,57 @@ export interface Rect {
  * "Use experimental layout-preserving extraction" labels) because none of
  * this is exact:
  *
- * - Position and size come straight from the same raw pdf.js text-item
- *   transforms `reflowTextItems` already uses — reliable, the one part of
- *   this that isn't a heuristic.
- * - Color has no equivalent in pdf.js's `getTextContent()` at all (it only
- *   reports position, size, and font, not fill color) — the actual PDF
- *   content stream would need interpreting to get that properly. Instead,
- *   `sampleTextColor` renders the page to a canvas and samples a grid of
- *   pixels across where each run's glyphs should be, picking whichever
- *   sampled pixel looks most like ink rather than background, then snaps
- *   anything close to grayscale to plain black (see that function's own
- *   doc comment for why). Works well for the common case (dark text on a
- *   light page); can sample the wrong pixel entirely for light text on a
- *   dark background, a tightly rotated run, or text sitting on a busy
- *   image.
- * - Images aren't decoded from the PDF's own embedded XObject data at all
- *   (variable color spaces and filters make that its own project) —
- *   `computeImageRegions` instead walks the page's operator list purely to
- *   find *where* an image was painted (tracking the same save/restore/
- *   transform state a real PDF renderer would), then `cropImageRegion`
- *   crops that exact rectangle back out of the already-rendered canvas.
- *   Simple and always visually correct for what it does capture, but it
- *   only finds axis-aligned-enough regions and won't separate two images
- *   placed right next to each other with nothing in between. A region that
- *   `regionIsMostlyText` judges to already be mostly covered by text runs
- *   that are about to be rendered as their own `<span>`s anyway — the
- *   telltale shape of an OCR'd scan, where the "image" is a raster of the
- *   very words an invisible text layer already reproduces — is dropped
- *   rather than embedded, since keeping it would just double the page's
- *   size for a picture of text sitting right underneath that same text.
+ * - Position comes straight from the same raw pdf.js text-item transforms
+ *   `reflowTextItems` already uses — reliable, not a heuristic. Size (both
+ *   the font-size used for a run's `<span>` and the box it has to fit in)
+ *   prefers pdf.js's own `item.height`/`item.width` ("device space," i.e.
+ *   already in the same units as the transform) over deriving them from the
+ *   transform matrix directly, which turned out to disagree with pdf.js's
+ *   own metrics for exactly the runs most likely to look wrong afterward —
+ *   footnotes, and other text at a size that differs from the surrounding
+ *   body text. Width is then actively enforced, not just recorded: a run's
+ *   natural rendered width (measured with a scratch canvas, at the same
+ *   font-size/family the `<span>` will actually use — see
+ *   `measureHorizontalScale`) is compared against `item.width`, and a
+ *   `transform: scaleX(...)` squeezes the run down to fit whenever the
+ *   browser would otherwise render it wider than the PDF says it should be.
+ *   This is the same technique pdf.js's own built-in text layer uses to
+ *   keep its selectable text aligned with the canvas rendering underneath
+ *   it, and matters most for exactly the case that used to look worst here:
+ *   an OCR'd PDF's own text layer, where a word's box width comes from
+ *   Tesseract's guess rather than real font metrics, so without this a
+ *   run's rendered text routinely overflowed into its neighbor's box and
+ *   the two visually ran together in the same row.
+ * - Images come from two different sources, merged into one list before
+ *   `cropImageRegion` crops any of them out of the already-rendered canvas
+ *   (never the PDF's own embedded image data — see that function's own doc
+ *   comment):
+ *   - Raster images aren't decoded from the PDF's own embedded XObject data
+ *     at all (variable color spaces and filters make that its own project)
+ *     — `computeImageRegions` instead walks the page's operator list purely
+ *     to find *where* an image was painted (tracking the same
+ *     save/restore/transform state a real PDF renderer would). Simple and
+ *     always visually correct for what it does capture, but it only finds
+ *     axis-aligned-enough regions and won't separate two images placed
+ *     right next to each other with nothing in between. A region that
+ *     `regionIsMostlyText` judges to already be mostly covered by text runs
+ *     that are about to be rendered as their own `<span>`s anyway — the
+ *     telltale shape of an OCR'd scan, where the "image" is a raster of the
+ *     very words an invisible text layer already reproduces — is dropped
+ *     rather than embedded, since keeping it would just double the page's
+ *     size for a picture of text sitting right underneath that same text.
+ *   - Not everything that looks like a picture on the page was painted with
+ *     an image operator, though — a chart or diagram is very often drawn
+ *     with the PDF's own vector path-fill/stroke operators instead, which
+ *     `computeImageRegions` never looks at (walking every fill/stroke/clip
+ *     operator, and figuring out which ones belong to the same picture, is
+ *     a much bigger job than the handful of image-paint ops it already
+ *     handles). `detectVectorArtRegions` finds these anyway, by working
+ *     backwards from the rendered pixels: connected clusters of non-
+ *     background ink that fall outside every already-known text or raster-
+ *     image region are, by elimination, vector-drawn content, and get
+ *     cropped out and re-inserted as their own `<img>` the same way a real
+ *     raster image would be.
  * - There's no paragraph structure at all — every run is its own
  *   absolutely-positioned element, with an `&nbsp;` or a `<br>` (the same
  *   gap heuristic `reflowTextItems` uses — see `separatorForGap`) sitting
@@ -189,9 +213,18 @@ async function extractLayoutPageHtml(doc: PdfDoc, pageNumber: number): Promise<s
 
   const parts: string[] = []
   const textBoxes = computeTextBoxes(content.items as any[], viewport)
+  const rasterRegions = computeImageRegions(opList, viewport)
+  const keptRasterRegions = rasterRegions.filter((region) => !regionIsMostlyText(region, textBoxes))
+  // Every raster region counts as "covered" here even when it was just
+  // dropped above for being mostly text — an OCR'd scan's own faint
+  // background texture or a stray artifact inside it shouldn't get
+  // rediscovered as "leftover vector art" and re-embedded right back after
+  // being deliberately dropped a moment ago.
+  const coverage = [...rasterRegions, ...textBoxes.map(padTextBoxForCoverage)]
+  const vectorRegions = detectVectorArtRegions(pixels, coverage, LAYOUT_RENDER_SCALE)
 
-  for (const region of computeImageRegions(opList, viewport)) {
-    if (regionIsMostlyText(region, textBoxes)) continue
+  const embeddedRegions = [...keptRasterRegions, ...vectorRegions]
+  for (const region of embeddedRegions) {
     const dataUrl = cropImageRegion(renderCanvas, region)
     if (dataUrl) {
       parts.push(`<img src="${escapeAttr(dataUrl)}" alt="" style="position:absolute;left:${region.x}px;top:${region.y}px;width:${region.width}px;height:${region.height}px;">`)
@@ -204,7 +237,7 @@ async function extractLayoutPageHtml(doc: PdfDoc, pageNumber: number): Promise<s
   for (const item of content.items as any[]) {
     if (!('str' in item) || !item.str) continue
     const tx = pdfjsLib.Util.transform(viewport.transform, item.transform)
-    const height = Math.hypot(tx[2], tx[3]) || prevHeight
+    const height = typeof item.height === 'number' && item.height > 0.5 ? item.height : Math.hypot(tx[2], tx[3]) || prevHeight
     const angle = Math.atan2(tx[1], tx[0])
     const y = item.transform[5]
 
@@ -225,12 +258,17 @@ async function extractLayoutPageHtml(doc: PdfDoc, pageNumber: number): Promise<s
       parts.push(sep === ' ' ? '&nbsp;' : sep === '\n' ? '<br>' : '<br><br>')
     }
 
-    if (item.str.trim()) {
-      const color = sampleTextColor(pixels, tx, height, item.str.length)
+    if (item.str.trim() && !isMostlyInsideAnyRegion({ x: tx[4], y: tx[5] - height, width: item.width > 0 ? item.width : height * item.str.length * 0.55, height }, embeddedRegions)) {
+      const declaredWidth = typeof item.width === 'number' && item.width > 0 ? item.width : height * item.str.length * 0.55
+      const color = sampleTextColor(pixels, tx, height, declaredWidth)
       const fontFamily = styles[item.fontName]?.fontFamily || 'sans-serif'
-      const rotate = angle ? `transform:rotate(${angle}rad);transform-origin:0% 0%;` : ''
+      const scaleX = measureHorizontalScale(renderCtx, item.str, height, fontFamily, declaredWidth)
+      const transforms: string[] = []
+      if (scaleX < 0.999) transforms.push(`scaleX(${scaleX.toFixed(3)})`)
+      if (angle) transforms.push(`rotate(${angle}rad)`)
+      const transformStyle = transforms.length ? `transform:${transforms.join(' ')};transform-origin:0% 0%;` : ''
       parts.push(
-        `<span style="position:absolute;left:${tx[4]}px;top:${tx[5] - height}px;font-size:${height}px;font-family:${escapeAttr(fontFamily)};color:${color};white-space:pre;${rotate}">${escapeHtml(item.str)}</span>`,
+        `<span style="position:absolute;left:${tx[4]}px;top:${tx[5] - height}px;font-size:${height}px;font-family:${escapeAttr(fontFamily)};color:${color};white-space:pre;${transformStyle}">${escapeHtml(item.str)}</span>`,
       )
     }
 
@@ -322,29 +360,92 @@ export function computeTextBoxes(items: any[], viewport: { transform: number[] }
  * invisible (or, after re-extraction, visible) text layer already
  * reproduces on top of it. Keeping that image would double the page's
  * size for a picture of text sitting directly underneath the same text,
- * defeating the point of extracting text in the first place. An ordinary
- * photo or figure with just a caption or a small label near or over it —
- * the common real case for an embedded image — only has a sliver of its
- * area covered by text this way, so both a fairly high coverage ratio and
- * a minimum absolute amount of text are required before a region counts as
- * "mostly text"; either alone would risk misclassifying a normal figure
- * with a longish caption, or a large mostly-blank region a single text box
- * happens to fully span. */
+ * defeating the point of extracting text in the first place.
+ *
+ * A real chart or figure's own title/axis labels/legend can add up to a
+ * meaningful *area* fraction of the region without the region actually
+ * being a text scan — a chart title alone can span most of its width — so
+ * area coverage alone is only trusted at a high bar (`AREA_RATIO_THRESHOLD`,
+ * along with a minimum absolute amount of text) as a fast path for the
+ * unambiguous full-page-scan case. Short of that, the actual shape of OCR'd
+ * paragraph text — several lines stacked one after another that *each*
+ * individually stretch across most of the region's width — is what a
+ * chart's comparatively sparse, scattered labels don't have: an axis's tick
+ * labels or a legend entry sit in their own small cluster, and even a wide
+ * chart usually has at most one or two rows (a long title, a row of x-axis
+ * ticks) that span most of its width, never several in a row the way
+ * justified or near-full paragraph lines do. Clustering the region's
+ * overlapping text into rows by vertical position and summing how much of
+ * each row's own width is actually covered by text (not the distance
+ * between its leftmost and rightmost box — two small, widely-separated
+ * labels sharing a row, like a y-axis tick and a legend entry, would
+ * otherwise fake a "wide" row despite barely any of it being ink) catches
+ * the genuine OCR-scan case — several such densely-covered rows in a row —
+ * without the area check's false positives on a heavily-labeled chart. */
 export function regionIsMostlyText(region: Rect, textBoxes: TextBox[]): boolean {
   const regionArea = region.width * region.height
   if (regionArea <= 0) return false
+
+  const overlapping: { x0: number; x1: number; y0: number; y1: number }[] = []
   let coveredArea = 0
   let totalChars = 0
   for (const box of textBoxes) {
-    const ix = Math.max(region.x, box.x)
-    const iy = Math.max(region.y, box.y)
-    const iw = Math.min(region.x + region.width, box.x + box.width) - ix
-    const ih = Math.min(region.y + region.height, box.y + box.height) - iy
-    if (iw <= 0 || ih <= 0) continue
-    coveredArea += iw * ih
+    const x0 = Math.max(region.x, box.x)
+    const y0 = Math.max(region.y, box.y)
+    const x1 = Math.min(region.x + region.width, box.x + box.width)
+    const y1 = Math.min(region.y + region.height, box.y + box.height)
+    if (x1 <= x0 || y1 <= y0) continue
+    coveredArea += (x1 - x0) * (y1 - y0)
     totalChars += box.chars
+    overlapping.push({ x0, y0, x1, y1 })
   }
-  return totalChars >= 40 && coveredArea / regionArea >= 0.12
+  if (totalChars < 40) return false
+
+  const AREA_RATIO_THRESHOLD = 0.35
+  if (coveredArea / regionArea >= AREA_RATIO_THRESHOLD) return true
+
+  overlapping.sort((a, b) => a.y0 + a.y1 - (b.y0 + b.y1))
+  const LINE_COVERAGE_RATIO_THRESHOLD = 0.5
+  const MIN_DENSE_LINES = 3
+  let denseLines = 0
+  let i = 0
+  while (i < overlapping.length) {
+    let lineCoveredWidth = overlapping[i].x1 - overlapping[i].x0
+    let lineMaxY1 = overlapping[i].y1
+    const lineHeight = overlapping[i].y1 - overlapping[i].y0
+    let j = i + 1
+    while (j < overlapping.length && overlapping[j].y0 < lineMaxY1 - lineHeight * 0.4) {
+      lineCoveredWidth += overlapping[j].x1 - overlapping[j].x0
+      lineMaxY1 = Math.max(lineMaxY1, overlapping[j].y1)
+      j++
+    }
+    if (lineCoveredWidth / region.width >= LINE_COVERAGE_RATIO_THRESHOLD) denseLines++
+    i = j
+  }
+  return denseLines >= MIN_DENSE_LINES
+}
+
+/** True when `box` sits almost entirely inside at least one of `regions` —
+ * used to skip rendering a text run's own `<span>` when it's already
+ * pictured inside an embedded image (a chart's axis labels baked into its
+ * own cropped screenshot, most commonly): drawing it a second time as a
+ * separately-positioned `<span>` right on top only doubles the ink,
+ * visibly bolding or blurring exactly the text that's already there. A
+ * high containment threshold (rather than requiring 100%) tolerates the
+ * crude length-based width estimate `computeTextBoxes`/this box may be
+ * using slightly overshooting a region's true edge. */
+function isMostlyInsideAnyRegion(box: Rect, regions: Rect[]): boolean {
+  const boxArea = box.width * box.height
+  if (boxArea <= 0) return false
+  for (const region of regions) {
+    const x0 = Math.max(region.x, box.x)
+    const y0 = Math.max(region.y, box.y)
+    const x1 = Math.min(region.x + region.width, box.x + box.width)
+    const y1 = Math.min(region.y + region.height, box.y + box.height)
+    if (x1 <= x0 || y1 <= y0) continue
+    if (((x1 - x0) * (y1 - y0)) / boxArea >= 0.8) return true
+  }
+  return false
 }
 
 /** Crops `region` (page-space, i.e. `viewport({scale: 1})` units) directly
@@ -390,14 +491,21 @@ function cropImageRegion(renderCanvas: HTMLCanvasElement, region: Rect): string 
  * colorful text (a blue link, a red heading) is untouched, since it isn't
  * grayscale at all. See `extractLayoutPageHtml`'s doc comment for the
  * cases (light text on dark, tightly rotated runs, text over a busy image)
- * this still can't fully solve. */
-export function sampleTextColor(pixels: ImageData, tx: number[], height: number, strLength: number): string {
+ * this still can't fully solve. `width` is the run's actual declared width
+ * (pdf.js's own `item.width` when available — see `extractLayoutPageHtml`
+ * — falling back to the same crude length-based estimate `computeTextBoxes`
+ * uses otherwise), not a character count: sampling positions spread across
+ * the real width the run occupies, rather than guessing one from its
+ * string length here too, catches short-but-wide and long-but-narrow runs
+ * (a single wide character, dense CJK text) that a length-only estimate
+ * would space samples badly for. */
+export function sampleTextColor(pixels: ImageData, tx: number[], height: number, width: number): string {
   const scale = LAYOUT_RENDER_SCALE
   const dirLen = Math.hypot(tx[0], tx[1]) || 1
   const ux = tx[0] / dirLen
   const uy = tx[1] / dirLen
-  const estimatedWidth = height * strLength * 0.55
-  const xSteps = Math.max(3, Math.min(10, strLength * 2))
+  const estimatedWidth = width || height
+  const xSteps = Math.max(3, Math.min(10, Math.round(estimatedWidth / (height * 0.4))))
   const yFractions = [0.12, 0.3, 0.48, 0.66, 0.82]
   let best: [number, number, number] | null = null
   let bestScore = -1
@@ -424,4 +532,170 @@ export function sampleTextColor(pixels: ImageData, tx: number[], height: number,
   const [r, g, b] = best
   if (Math.max(r, g, b) - Math.min(r, g, b) < 18) return '#000'
   return `rgb(${r}, ${g}, ${b})`
+}
+
+/** The subset of `CanvasRenderingContext2D` `measureHorizontalScale` needs
+ * — narrowed to a plain interface so a test can pass a fake measurer
+ * without a real canvas (jsdom has none), and so the real caller can pass
+ * `null` (in the unlikely event `renderCanvas.getContext('2d')` itself
+ * failed) without a special case at the call site. */
+export interface TextMeasurer {
+  font: string
+  measureText(text: string): { width: number }
+}
+
+/** How much to horizontally squeeze a text run's `<span>` (as a CSS
+ * `scaleX(...)`) so it renders no wider than `declaredWidth` — pdf.js's own
+ * `item.width` for this run, i.e. what the PDF itself says this text
+ * should occupy. Left alone, the browser lays a run out at whatever width
+ * its own font-matching and metrics produce for `height`/`fontFamily`,
+ * which routinely disagrees with the PDF's own advance width: everyday
+ * font-substitution differences for ordinary text, and often far worse for
+ * an OCR'd PDF's own text layer, where a word's box comes from Tesseract's
+ * guess rather than real font metrics at all. Without correcting for it, a
+ * run that renders wider than its box spills into whatever's positioned
+ * next to it — exactly the "text runs into each other" symptom this
+ * exists to fix, worst for Tesseract output because its many independently
+ * placed word/line boxes give it the most neighbors to run into.
+ *
+ * `measurer` renders the same string at the same `font-size`/`font-family`
+ * the `<span>` will actually use (matching pdf.js's own text-layer
+ * technique for the identical problem) purely to ask "how wide would the
+ * browser actually render this," without needing to know which real font
+ * ends up resolving — whatever it is, `measurer` and the `<span>` agree on
+ * it, so the ratio between the two widths is meaningful regardless. Only
+ * ever shrinks (never stretches: a run rendering *narrower* than its box is
+ * not the problem being solved here, and stretching it to fill the box on
+ * a possibly-imprecise `declaredWidth` risks distorting it for no reason),
+ * and is floored well short of 0 so a wildly-off measurement doesn't
+ * squash a run down to an unreadable sliver. */
+export function measureHorizontalScale(measurer: TextMeasurer | null, text: string, height: number, fontFamily: string, declaredWidth: number): number {
+  if (!measurer || !(declaredWidth > 0) || !(height > 0)) return 1
+  measurer.font = `${height}px ${fontFamily}`
+  const naturalWidth = measurer.measureText(text).width
+  if (!(naturalWidth > 0)) return 1
+  return Math.min(1, Math.max(0.35, declaredWidth / naturalWidth))
+}
+
+/** Widens a text box before it's used as "covered" ground for
+ * `detectVectorArtRegions` (never for `regionIsMostlyText`'s own coverage
+ * math, which wants the precise box) — `computeTextBoxes`' width is a
+ * crude length-based estimate, and a glyph's own anti-aliased edges extend
+ * a little past even an exact box, so without this margin a text run's own
+ * ink could peek out as a spurious "leftover ink" cluster right next to
+ * itself. */
+function padTextBoxForCoverage(box: TextBox): Rect {
+  const padX = box.height * 0.5
+  const padY = box.height * 0.35
+  return { x: box.x - padX, y: box.y - padY, width: box.width + padX * 2, height: box.height + padY * 2 }
+}
+
+// Grid cell size (in `LAYOUT_RENDER_SCALE`-scaled pixels) for
+// `detectVectorArtRegions`'s connected-component search — coarse enough to
+// keep a full-page scan cheap, fine enough not to merge genuinely separate
+// pictures that sit reasonably close together.
+const VECTOR_ART_CELL = 8
+const VECTOR_ART_MIN_CELLS = 12
+const VECTOR_ART_MIN_SPAN_CELLS = 4
+
+/** Finds regions of visual content that are neither a detected raster
+ * image nor (padded) text — see `extractLayoutPageHtml`'s doc comment for
+ * why this is how a vector-drawn chart or diagram gets found at all, since
+ * nothing else here ever looks at the PDF's own path-fill/stroke
+ * operators. Works backwards from the fully-rendered page's own pixels
+ * instead: `coveredPageRects` (page-space, i.e. the same units `Rect`
+ * always uses here) marks off everywhere already accounted for — every
+ * raster image region (kept or not; see the caller) and every padded text
+ * box — and whatever non-background ink is left outside all of that is,
+ * by elimination, vector-drawn content. Grouping is done on a coarse grid
+ * (`VECTOR_ART_CELL`-pixel cells) rather than per-pixel purely for speed;
+ * a page-sized image at `LAYOUT_RENDER_SCALE` has a few million pixels but
+ * only a few thousand grid cells, and a chart's bars/lines/axes are large
+ * enough that a grid this coarse doesn't lose them. Cells are merged into
+ * clusters by 8-directional flood fill (diagonal adjacency, so a dashed
+ * line or a scatter of data points still merges into one region rather
+ * than fragmenting), and a cluster is discarded unless it clears both a
+ * minimum cell count and a minimum span in each direction — small enough
+ * thresholds to keep a real chart, large enough to throw out the odd
+ * stray anti-aliasing artifact that padding didn't quite catch. */
+export function detectVectorArtRegions(pixels: ImageData, coveredPageRects: Rect[], scale: number): Rect[] {
+  const cell = VECTOR_ART_CELL
+  const cols = Math.max(1, Math.ceil(pixels.width / cell))
+  const rows = Math.max(1, Math.ceil(pixels.height / cell))
+  const blocked = new Uint8Array(cols * rows)
+  for (const r of coveredPageRects) {
+    const x0 = Math.max(0, Math.floor((r.x * scale) / cell))
+    const y0 = Math.max(0, Math.floor((r.y * scale) / cell))
+    const x1 = Math.min(cols - 1, Math.ceil(((r.x + r.width) * scale) / cell))
+    const y1 = Math.min(rows - 1, Math.ceil(((r.y + r.height) * scale) / cell))
+    for (let cy = y0; cy <= y1; cy++) {
+      const base = cy * cols
+      for (let cx = x0; cx <= x1; cx++) blocked[base + cx] = 1
+    }
+  }
+
+  const BACKGROUND_THRESHOLD = 245
+  const ink = new Uint8Array(cols * rows)
+  const data = pixels.data
+  for (let y = 0; y < pixels.height; y++) {
+    const cy = (y / cell) | 0
+    const rowBase = cy * cols
+    for (let x = 0; x < pixels.width; x++) {
+      const idx = (y * pixels.width + x) * 4
+      if (data[idx + 3] === 0) continue
+      if (data[idx] < BACKGROUND_THRESHOLD || data[idx + 1] < BACKGROUND_THRESHOLD || data[idx + 2] < BACKGROUND_THRESHOLD) {
+        ink[rowBase + ((x / cell) | 0)] = 1
+      }
+    }
+  }
+
+  const candidate = new Uint8Array(cols * rows)
+  for (let i = 0; i < candidate.length; i++) candidate[i] = ink[i] && !blocked[i] ? 1 : 0
+
+  const visited = new Uint8Array(cols * rows)
+  const regions: Rect[] = []
+  const stack: number[] = []
+  for (let start = 0; start < candidate.length; start++) {
+    if (!candidate[start] || visited[start]) continue
+    stack.length = 0
+    stack.push(start)
+    visited[start] = 1
+    let minCx = start % cols
+    let maxCx = minCx
+    let minCy = (start / cols) | 0
+    let maxCy = minCy
+    let cellCount = 0
+    while (stack.length) {
+      const idx = stack.pop()!
+      cellCount++
+      const cx = idx % cols
+      const cy = (idx / cols) | 0
+      if (cx < minCx) minCx = cx
+      if (cx > maxCx) maxCx = cx
+      if (cy < minCy) minCy = cy
+      if (cy > maxCy) maxCy = cy
+      for (let dy = -1; dy <= 1; dy++) {
+        for (let dx = -1; dx <= 1; dx++) {
+          if (dx === 0 && dy === 0) continue
+          const nx = cx + dx
+          const ny = cy + dy
+          if (nx < 0 || nx >= cols || ny < 0 || ny >= rows) continue
+          const n = ny * cols + nx
+          if (!candidate[n] || visited[n]) continue
+          visited[n] = 1
+          stack.push(n)
+        }
+      }
+    }
+    const spanCx = maxCx - minCx + 1
+    const spanCy = maxCy - minCy + 1
+    if (cellCount < VECTOR_ART_MIN_CELLS || spanCx < VECTOR_ART_MIN_SPAN_CELLS || spanCy < VECTOR_ART_MIN_SPAN_CELLS) continue
+    regions.push({
+      x: (minCx * cell) / scale,
+      y: (minCy * cell) / scale,
+      width: (spanCx * cell) / scale,
+      height: (spanCy * cell) / scale,
+    })
+  }
+  return regions
 }

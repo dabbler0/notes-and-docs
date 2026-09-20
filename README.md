@@ -379,8 +379,27 @@ source"'s file picker, the moment a PDF is chosen) or a link
 source that already has a PDF) — labeled experimental deliberately, since
 none of what it recovers beyond position/size is exact:
 
-- **Position and size** come straight from the same raw pdf.js text-item
-  transforms `reflowTextItems` already uses — reliable, not a heuristic.
+- **Position** comes straight from the same raw pdf.js text-item transforms
+  `reflowTextItems` already uses — reliable, not a heuristic. **Size**
+  prefers pdf.js's own `item.height`/`item.width` ("device space," already
+  in the same units as the transform) over deriving them from the
+  transform matrix directly, which disagreed with pdf.js's own metrics most
+  often for exactly the runs likeliest to look wrong afterward — footnotes,
+  and other text at a size that differs from the surrounding body text.
+  Width is then actively *enforced*, not just recorded: a run's natural
+  rendered width (measured with a scratch canvas, at the same
+  font-size/family the `<span>` will actually use) is compared against
+  `item.width`, and a CSS `transform: scaleX(...)` squeezes the run down to
+  fit whenever the browser would otherwise render it wider than the PDF
+  says it should be — the same technique pdf.js's own built-in text layer
+  uses to keep its selectable text aligned with the canvas rendering
+  underneath it. This matters most for an OCR'd PDF's own text layer, where
+  a word's box width comes from Tesseract's guess rather than real font
+  metrics: without it, a run routinely rendered wider than its box and
+  spilled into whatever was positioned next to it, which is what "text
+  gets mis-sized too large and runs into each other" looked like in
+  practice, worst for Tesseract output because its many independently
+  placed word/line boxes give it the most neighbors to run into.
 - **Color** has no equivalent in pdf.js's `getTextContent()` at all (it
   reports position, size, and font, never fill color) — actually
   interpreting the PDF's own content stream operators would be its own
@@ -405,28 +424,50 @@ none of what it recovers beyond position/size is exact:
   red heading) is untouched, since it isn't colorless to begin with. Can
   still sample the wrong pixel for light text on a dark background, a
   rotated run, or text sitting on a busy image.
-- **Images** aren't decoded from the PDF's own embedded XObject data at all
-  (variable color spaces and filters make that its own project too) —
-  `computeImageRegions` instead walks the page's operator list purely to
-  find *where* an image was painted, tracking the same save/restore/
-  transform state a real PDF renderer would to place it correctly, and
-  `cropImageRegion` then crops that exact rectangle back out of the
-  already-rendered canvas rather than touching the image's own data.
-  Simple and always visually correct for what it does capture, but it only
-  finds axis-aligned-enough regions and won't separate two images placed
-  right next to each other with nothing in between. A region is skipped
-  entirely, though, when `regionIsMostlyText` finds it's already mostly
-  covered by text runs that are about to be rendered as their own `<span>`s
-  anyway — the shape of a page that's been run through OCR, where the
-  "image" is a raster of the very words an invisible text layer already
-  reproduces on top of it. Keeping that image would double the page's size
-  for a picture of text sitting directly under the same text, defeating the
-  point of extracting text at all. The check is deliberately conservative —
-  both a fairly high fraction of the region's area covered by text
-  bounding boxes *and* a minimum absolute amount of text are required — so
-  an ordinary photo or figure with just a caption or a small label near or
-  over it (the common real case for an embedded image) still keeps its
-  image; only a region that's overwhelmingly text loses it.
+- **Images** come from two different sources, since not everything that
+  looks like a picture on a page was painted with an image operator:
+  - Raster images aren't decoded from the PDF's own embedded XObject data
+    at all (variable color spaces and filters make that its own project
+    too) — `computeImageRegions` instead walks the page's operator list
+    purely to find *where* an image was painted, tracking the same
+    save/restore/transform state a real PDF renderer would to place it
+    correctly, and `cropImageRegion` then crops that exact rectangle back
+    out of the already-rendered canvas rather than touching the image's own
+    data. Simple and always visually correct for what it does capture, but
+    it only finds axis-aligned-enough regions and won't separate two images
+    placed right next to each other with nothing in between. A region is
+    skipped entirely, though, when `regionIsMostlyText` finds it's already
+    mostly covered by text runs that are about to be rendered as their own
+    `<span>`s anyway — the shape of a page that's been run through OCR,
+    where the "image" is a raster of the very words an invisible text layer
+    already reproduces on top of it. Keeping that image would double the
+    page's size for a picture of text sitting directly under the same
+    text, defeating the point of extracting text at all. Distinguishing a
+    real full-page scan from an ordinary chart or figure with a lot of its
+    own labels turned out to need more than a single area-coverage number —
+    a chart's title and axis ticks can themselves cover a real fraction of
+    its own area — so `regionIsMostlyText` only trusts a high area ratio
+    outright for the unambiguous case, and otherwise clusters the region's
+    overlapping text into rows and requires *several* of those rows to each
+    be densely covered end to end, the shape genuine OCR'd paragraph text
+    has that a chart's comparatively sparse, scattered labels don't.
+  - A chart or diagram, though, is very often drawn with the PDF's own
+    vector path-fill/stroke operators instead of an image operator at all —
+    invisible to `computeImageRegions`, and walking every fill/stroke/clip
+    operator to figure out which ones belong to the same picture would be a
+    much bigger job than the handful of image-paint ops it already handles.
+    `detectVectorArtRegions` finds these anyway by working backwards from
+    the rendered pixels: once every raster image and every (padded) text
+    run is accounted for, whatever non-background ink is left over,
+    clustered into connected regions on a coarse grid, is — by elimination —
+    vector-drawn content, and gets cropped out and re-inserted as its own
+    `<img>` the same way a real raster image would be. A text run that
+    turns out to sit almost entirely inside one of these captured
+    images — an axis label or a chart title that's both baked into the
+    cropped picture *and* present as its own real text item in the PDF — is
+    left out of the `<span>` layer rather than drawn a second time directly
+    on top of itself, which otherwise showed up as faintly doubled or
+    bolded text exactly where a chart's own labels were.
 - There's no paragraph structure at all in the result — every run is its
   own absolutely-positioned element, with an `&nbsp;` or a `<br>` (the same
   gap heuristic as `reflowTextItems`, via `separatorForGap`) sitting

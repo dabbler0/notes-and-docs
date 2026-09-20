@@ -1,5 +1,16 @@
 import { describe, expect, it } from 'vitest'
-import { computeTextBoxes, htmlToPlainText, plainTextToHtml, regionIsMostlyText, sampleTextColor, type Rect, type TextBox } from '../textExtraction'
+import {
+  computeTextBoxes,
+  detectVectorArtRegions,
+  htmlToPlainText,
+  measureHorizontalScale,
+  plainTextToHtml,
+  regionIsMostlyText,
+  sampleTextColor,
+  type Rect,
+  type TextBox,
+  type TextMeasurer,
+} from '../textExtraction'
 
 /** Builds a minimal stand-in for the `ImageData` `sampleTextColor` reads
  * from — jsdom doesn't implement a full canvas/ImageData, so tests build
@@ -90,6 +101,13 @@ describe('sampleTextColor', () => {
   const height = 20
   const tx = [height, 0, 0, height, 10, 50]
 
+  // A run's own declared width in page-space px (what `item.width`, or the
+  // length-based fallback estimate, would give for a 5-character run at
+  // this height) — `sampleTextColor` takes an actual width now, not a
+  // character count, so tests pass the same number that used to be derived
+  // from `strLength * 0.55`.
+  const width = 55
+
   it('finds ink sitting well outside the old fixed sampling height', () => {
     // Ink painted as a thin band near the top of the run's box (y fraction
     // ~0.66 above the baseline) — the single fixed height this function
@@ -100,24 +118,101 @@ describe('sampleTextColor', () => {
     // "found the ink" apart from "matched the grayscale fallback".
     const pixels = makePixels(300, 200)
     pixels.paint(15, 65, 120, 12, [0, 150, 0, 255])
-    expect(sampleTextColor(pixels, tx, height, 5)).toBe('rgb(0, 150, 0)')
+    expect(sampleTextColor(pixels, tx, height, width)).toBe('rgb(0, 150, 0)')
   })
 
   it('snaps a near-grayscale sample to black', () => {
     const pixels = makePixels(300, 200)
     pixels.paint(0, 0, 300, 200, [200, 200, 200, 255])
-    expect(sampleTextColor(pixels, tx, height, 5)).toBe('#000')
+    expect(sampleTextColor(pixels, tx, height, width)).toBe('#000')
   })
 
   it('keeps a genuinely colorful sample as-is', () => {
     const pixels = makePixels(300, 200)
     pixels.paint(0, 0, 300, 200, [200, 40, 40, 255])
-    expect(sampleTextColor(pixels, tx, height, 5)).toBe('rgb(200, 40, 40)')
+    expect(sampleTextColor(pixels, tx, height, width)).toBe('rgb(200, 40, 40)')
   })
 
   it('falls back to black when every sampled pixel is fully transparent', () => {
     const pixels = makePixels(300, 200, [255, 255, 255, 0])
-    expect(sampleTextColor(pixels, tx, height, 5)).toBe('#000')
+    expect(sampleTextColor(pixels, tx, height, width)).toBe('#000')
+  })
+})
+
+describe('measureHorizontalScale', () => {
+  function fakeMeasurer(widthForText: (text: string) => number): TextMeasurer {
+    return {
+      font: '',
+      measureText: (text: string) => ({ width: widthForText(text) }),
+    }
+  }
+
+  it('returns 1 (no squeeze) when the natural width already fits the declared width', () => {
+    const measurer = fakeMeasurer(() => 40)
+    expect(measureHorizontalScale(measurer, 'ok', 12, 'sans-serif', 50)).toBe(1)
+  })
+
+  it('squeezes proportionally when the natural width overflows the declared width', () => {
+    const measurer = fakeMeasurer(() => 100)
+    expect(measureHorizontalScale(measurer, 'wide', 12, 'sans-serif', 50)).toBeCloseTo(0.5)
+  })
+
+  it('floors the squeeze so a wildly-off measurement never collapses the text', () => {
+    const measurer = fakeMeasurer(() => 1000)
+    expect(measureHorizontalScale(measurer, 'x', 12, 'sans-serif', 10)).toBe(0.35)
+  })
+
+  it('sets font on the measurer from height and fontFamily before measuring', () => {
+    let seenFont = ''
+    const measurer: TextMeasurer = {
+      font: '',
+      measureText(text) {
+        seenFont = this.font
+        return { width: text.length * 5 }
+      },
+    }
+    measureHorizontalScale(measurer, 'abc', 14, 'Georgia', 100)
+    expect(seenFont).toBe('14px Georgia')
+  })
+
+  it('returns 1 for a null measurer, a zero declared width, or a zero height', () => {
+    const measurer = fakeMeasurer(() => 40)
+    expect(measureHorizontalScale(null, 'x', 12, 'sans-serif', 50)).toBe(1)
+    expect(measureHorizontalScale(measurer, 'x', 12, 'sans-serif', 0)).toBe(1)
+    expect(measureHorizontalScale(measurer, 'x', 0, 'sans-serif', 50)).toBe(1)
+  })
+})
+
+describe('detectVectorArtRegions', () => {
+  it('finds a block of non-background ink outside every covered rect (a vector-drawn chart)', () => {
+    const pixels = makePixels(200, 200)
+    // A "chart": a solid block of ink well away from anything covered.
+    pixels.paint(20, 20, 80, 60, [30, 30, 200, 255])
+    const regions = detectVectorArtRegions(pixels, [], 1)
+    expect(regions).toHaveLength(1)
+    expect(regions[0].x).toBeCloseTo(16, 0)
+    expect(regions[0].y).toBeCloseTo(16, 0)
+    expect(regions[0].width).toBeGreaterThanOrEqual(80)
+    expect(regions[0].height).toBeGreaterThanOrEqual(56)
+  })
+
+  it('ignores ink that falls entirely within an already-covered rect', () => {
+    const pixels = makePixels(200, 200)
+    pixels.paint(20, 20, 80, 60, [30, 30, 200, 255])
+    const regions = detectVectorArtRegions(pixels, [{ x: 0, y: 0, width: 200, height: 200 }], 1)
+    expect(regions).toHaveLength(0)
+  })
+
+  it('discards a cluster smaller than the minimum size (noise, not a real picture)', () => {
+    const pixels = makePixels(200, 200)
+    pixels.paint(20, 20, 3, 3, [30, 30, 200, 255])
+    const regions = detectVectorArtRegions(pixels, [], 1)
+    expect(regions).toHaveLength(0)
+  })
+
+  it('finds nothing on a blank page', () => {
+    const pixels = makePixels(200, 200)
+    expect(detectVectorArtRegions(pixels, [], 1)).toHaveLength(0)
   })
 })
 
@@ -160,5 +255,26 @@ describe('computeTextBoxes / regionIsMostlyText', () => {
   it('returns false for a degenerate zero-area region', () => {
     const region: Rect = { x: 0, y: 0, width: 0, height: 0 }
     expect(regionIsMostlyText(region, [])).toBe(false)
+  })
+
+  it('keeps a heavily-labeled chart (title + axis ticks + legend) as not mostly text', () => {
+    // A chart's own title (one wide line) and a row of x-axis tick labels
+    // (another wide line, once clustered) can each span most of the
+    // region's width on their own, and together with a legend and y-axis
+    // ticks add up to a real area fraction — but that's still only two
+    // "dense" rows, well short of the several-lines-in-a-row shape that
+    // marks actual OCR'd paragraph text, so this must stay an image.
+    const region: Rect = { x: 0, y: 0, width: 400, height: 300 }
+    const boxes: TextBox[] = [
+      { x: 60, y: 10, width: 280, height: 16, chars: 34 }, // title, spans most of the width
+      { x: 10, y: 40, width: 20, height: 10, chars: 3 }, // y-axis tick
+      { x: 10, y: 100, width: 20, height: 10, chars: 3 },
+      { x: 10, y: 160, width: 20, height: 10, chars: 3 },
+      { x: 10, y: 220, width: 20, height: 10, chars: 3 },
+      { x: 300, y: 40, width: 60, height: 10, chars: 8 }, // legend entry
+      { x: 300, y: 60, width: 60, height: 10, chars: 9 },
+      { x: 40, y: 270, width: 340, height: 10, chars: 30 }, // x-axis tick labels row
+    ]
+    expect(regionIsMostlyText(region, boxes)).toBe(false)
   })
 })
