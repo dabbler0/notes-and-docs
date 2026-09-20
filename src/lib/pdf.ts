@@ -68,30 +68,53 @@ export async function extractPageTexts(doc: PdfDoc): Promise<string[]> {
  * query typed with an ordinary space still finds text that happens to wrap
  * across one of these line breaks.
  */
+/** A text item's own font height, from the same raw `transform` matrix pdf.js
+ * hands back — `Math.hypot` of its two Y-scale components gives the glyph
+ * height for unrotated text, which is all the gap heuristic below needs.
+ * Falls back to the previous item's height for a degenerate (zero-scale)
+ * transform, same as `reflowTextItems` always has. */
+export function textItemHeight(item: { transform: number[] }, fallbackHeight: number): number {
+  return Math.hypot(item.transform[2], item.transform[3]) || fallbackHeight
+}
+
+/** Turns a vertical baseline-to-baseline gap (in the same units as
+ * `transform`, i.e. `prevY - y`) into the separator that belongs between the
+ * two items — the actual heuristic described above `reflowTextItems`,
+ * factored out so `pdfSelection.ts` can apply the identical rule to a live
+ * text selection instead of only to bulk-extracted page text. */
+export function separatorForGap(gap: number, height: number): string {
+  if (gap > height * 1.6) return '\n\n'
+  if (gap > height * 0.3) return '\n'
+  return ' '
+}
+
+/** Collapses the raw joined text down to clean whitespace: runs of spaces/tabs
+ * to one space, no spaces hugging a newline, no more than one blank line. */
+export function normalizeReflowedText(text: string): string {
+  return text
+    .replace(/[ \t]+/g, ' ')
+    .replace(/[ \t]*\n[ \t]*/g, '\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim()
+}
+
 export function reflowTextItems(items: { str?: string; transform: number[] }[]): string {
   let text = ''
   let prevY: number | null = null
   let prevHeight = 10
   for (const item of items) {
     if (!('str' in item) || !item.str) continue
-    const height = Math.hypot(item.transform[2], item.transform[3]) || prevHeight
+    const height = textItemHeight(item, prevHeight)
     const y = item.transform[5]
     if (prevY === null) {
       text += item.str
     } else {
-      const gap = prevY - y
-      if (gap > height * 1.6) text += '\n\n' + item.str
-      else if (gap > height * 0.3) text += '\n' + item.str
-      else text += ' ' + item.str
+      text += separatorForGap(prevY - y, height) + item.str
     }
     prevY = y
     prevHeight = height
   }
-  return text
-    .replace(/[ \t]+/g, ' ')
-    .replace(/[ \t]*\n[ \t]*/g, '\n')
-    .replace(/\n{3,}/g, '\n\n')
-    .trim()
+  return normalizeReflowedText(text)
 }
 
 export interface PageTextItem {

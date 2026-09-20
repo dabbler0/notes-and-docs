@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'preact/hooks'
 import * as pdfjsLib from 'pdfjs-dist'
 import { getSourcePdfBlob } from '../../models/sourcesRepo'
 import { loadPdf, renderPageToCanvas, type PdfDoc } from '../../lib/pdf'
+import { reconstructSelectedText, type SelectableTextItem } from '../../lib/pdfSelection'
 import { usePageSearch } from '../../lib/usePageSearch'
 import { PageControls } from './PageControls'
 import { PageSearchBar } from './PageSearchBar'
@@ -27,6 +28,12 @@ export function PdfViewer({
   const [error, setError] = useState<string | null>(null)
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const textLayerRef = useRef<HTMLDivElement>(null)
+  // Raw {str, transform} items for the currently-rendered page, in the same
+  // order the text layer's spans below are tagged with `data-item-index` —
+  // reconstructSelectedText needs each item's own untransformed geometry
+  // (not the screen-space `tx` used for CSS positioning) to reapply the same
+  // gap heuristic reflowTextItems uses on bulk-extracted text.
+  const pageItemsRef = useRef<SelectableTextItem[]>([])
 
   const search = usePageSearch(source.pageTexts ?? [], page, onPageChange)
   const { searchQuery, activeMatch } = search
@@ -77,12 +84,15 @@ export function PdfViewer({
       // highlighted here, even though extractPageTexts' per-page join still
       // finds and counts it for the overall N-of-M total.
       let matchesSoFarOnPage = 0
+      const pageItems: SelectableTextItem[] = []
       for (const item of content.items as any[]) {
         if (!('str' in item) || !item.str) continue
         const tx = pdfjsLib.Util.transform(viewport.transform, item.transform)
         const fontHeight = Math.hypot(tx[2], tx[3])
         const angle = Math.atan2(tx[1], tx[0])
         const span = document.createElement('span')
+        span.dataset.itemIndex = String(pageItems.length)
+        pageItems.push({ str: item.str, transform: item.transform })
         if (query) {
           const lower = item.str.toLowerCase()
           let cursor = 0
@@ -108,6 +118,7 @@ export function PdfViewer({
         span.style.transformOrigin = '0% 0%'
         layer.appendChild(span)
       }
+      pageItemsRef.current = pageItems
       layer.querySelector('.pdf-search-hit-active')?.scrollIntoView({ block: 'center', behavior: 'smooth' })
     })()
     return () => {
@@ -119,7 +130,8 @@ export function PdfViewer({
     if (!onSelectionChange) return
     const handler = () => {
       const sel = document.getSelection()
-      const text = sel ? sel.toString() : ''
+      if (!sel || sel.isCollapsed || sel.rangeCount === 0) return
+      const text = reconstructSelectedText(sel.getRangeAt(0), pageItemsRef.current)
       if (text.trim()) onSelectionChange(text)
     }
     document.addEventListener('mouseup', handler)

@@ -287,6 +287,29 @@ wrapped block of prose. It's not real layout analysis — an unusual layout
 (multi-column text, dense tables) can reflow oddly — but it's enough to
 make most PDFs read naturally.
 
+`reflowTextItems`'s heuristic only ever benefited *extracted* text —
+drag-selecting a quote straight out of `PdfViewer` still went through the
+browser's own `Selection.toString()`, which quietly drops whitespace
+wherever the text layer's absolutely-positioned `<span>`s (one per pdf.js
+text item) don't happen to have an actual space character between them in
+the DOM. Normally that only cost line breaks, since same-line words are
+often bundled into one item's own string; but for a PDF whose text layer
+came from tesseract OCR (`ocrPdf` in `lib/ocr.ts`) every *word* is typically
+its own item, so a drag-selected quote from one of those lost every space
+between words too. The fix reuses the exact same gap heuristic instead of
+sidestepping it: `textItemHeight` and `separatorForGap` in `lib/pdf.ts` are
+`reflowTextItems`'s own decision logic pulled out into standalone functions,
+and `reconstructSelectedText` (`lib/pdfSelection.ts`) applies them to a live
+selection — `PdfViewer` tags each span with the index of the raw
+`{str, transform}` item it was built from, and on mouseup walks the
+selection's `Range.cloneContents()` output text node by text node, inserting
+the same space/`\n`/`\n\n` a matching pair of items would get during bulk
+extraction, based on each text node's nearest tagged ancestor. A search hit
+can split one item's text into multiple DOM text nodes (the highlighted
+`<mark>` and the plain text around it); those share one tag, so they're
+recognized as the same item and never get a spurious separator inserted
+between them.
+
 Preserving those line breaks meant search needed a small adjustment to
 match: a query typed with an ordinary space needs to still find a phrase
 that happens to wrap across one of these breaks, where a plain substring
