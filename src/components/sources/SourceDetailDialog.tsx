@@ -5,6 +5,7 @@ import { TextViewer } from './TextViewer'
 import { formatBibtex, parseBibtex } from '../../lib/bibtex'
 import { extractPageTexts, loadPdf } from '../../lib/pdf'
 import { formatBytes } from '../../lib/format'
+import { looksLikeScannedPdf, ocrPdf } from '../../lib/ocr'
 import { useSourceStorageBytes } from '../../lib/useSourceStorageBytes'
 import { convertSourceToTextOnly, deleteSource, getSourcePdfBlob, removeSourcePdf, setSourcePdf, updateSource } from '../../models/sourcesRepo'
 import { addQuoteToBank } from '../../models/quoteBankRepo'
@@ -39,6 +40,7 @@ export function SourceDetailDialog({
   // whatever this says.
   const [viewMode, setViewMode] = useState<'pdf' | 'text'>('pdf')
   const storageBytes = useSourceStorageBytes(source)
+  const isScanned = !!source.pdfBlobId && looksLikeScannedPdf(source.pageTexts)
 
   async function saveComment() {
     source.comment = comment
@@ -114,6 +116,39 @@ export function SourceDetailDialog({
       const doc = await loadPdf(buf)
       source.pageTexts = await extractPageTexts(doc)
       await updateSource(source)
+      onChanged()
+    } finally {
+      setPdfBusy(false)
+      setPdfStatus('')
+    }
+  }
+
+  /**
+   * A scanned PDF (a photographed or printer-scanned page, with no
+   * underlying text at all — just a raster image of the page) can't be
+   * searched, quoted, or read in the Text view, since there's no text to
+   * extract in the first place. OCR gives it one: recognizes the text in
+   * each page's image and burns it into the PDF as an invisible,
+   * selectable layer on top of the page's existing content, so it
+   * afterward behaves exactly like a PDF that had real text all along.
+   * Runs entirely client-side (see `ocrPdf`'s own doc comment) — the PDF
+   * itself is never uploaded anywhere for this.
+   */
+  async function handleOcrPdf() {
+    if (!source.pdfBlobId) return
+    if (!confirm("Run OCR on this PDF to add selectable text? This runs entirely in your browser and can take a while for a longer document — you'll see progress as it goes.")) return
+    setPdfBusy(true)
+    try {
+      const blob = await getSourcePdfBlob(source)
+      if (!blob) return
+      const buf = await blob.arrayBuffer()
+      const doc = await loadPdf(buf)
+      const ocrBytes = await ocrPdf(buf, doc, (p) => setPdfStatus(`${p.status} (page ${p.page} of ${p.totalPages})`))
+      const ocrFile = new File([ocrBytes as BlobPart], source.pdfFileName || 'ocr.pdf', { type: 'application/pdf' })
+      const ocrDoc = await loadPdf(await ocrFile.arrayBuffer())
+      const pageTexts = await extractPageTexts(ocrDoc)
+      await setSourcePdf(source, ocrFile, pageTexts)
+      setViewMode('pdf')
       onChanged()
     } finally {
       setPdfBusy(false)
@@ -268,6 +303,15 @@ export function SourceDetailDialog({
               </>
             )}
           </p>
+          {isScanned && (
+            <p className="muted" style={{ marginTop: 0 }}>
+              This PDF doesn't seem to have any selectable text — it looks scanned.{' '}
+              <button type="button" className="btn-link-muted" disabled={pdfBusy} onClick={handleOcrPdf}>
+                OCR this PDF
+              </button>{' '}
+              to make it searchable and quotable.
+            </p>
+          )}
           {pdfStatus && <p className="muted">{pdfStatus}</p>}
           {source.pdfBlobId || (source.textOnly && source.pageTexts.length > 0) ? (
             <>

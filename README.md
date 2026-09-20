@@ -185,6 +185,51 @@ about the source. Only available while there's still a real PDF to
 re-extract from, naturally — a text-only source has no PDF bytes left to
 re-run extraction against.
 
+**OCR for scanned PDFs.** A photographed or scanner-produced PDF has no
+text layer at all — just a raster image of each page — so extraction on
+its own finds nothing to extract. `looksLikeScannedPdf` in `lib/ocr.ts`
+flags a source this way whenever its `pageTexts` come back essentially
+empty across the board (a stray character or two per page, like a scanned
+page number, doesn't disqualify it — the bar is "next to nothing," not
+"literally zero"), and the PDF tab shows an "OCR this PDF" prompt in place
+of the usual "Discard PDF, keep text only" line whenever that's true.
+
+`ocrPdf` (`lib/ocr.ts`) runs entirely in the browser, using
+[tesseract.js](https://github.com/naptha/tesseract.js) — a WebAssembly
+port of the Tesseract OCR engine — rather than sending the document
+anywhere: for each page, it renders a higher-resolution canvas than the
+one used for on-screen viewing (OCR accuracy is sensitive to image
+resolution), asks tesseract.js to recognize it, and asks specifically for
+its `pdfTextOnly` output — a single-page PDF containing *only* an
+invisible text layer positioned to match the recognized words, no
+re-rendered image. `overlayTextLayer` then uses
+[pdf-lib](https://pdf-lib.js.org/) to embed that text-only page as an
+object on top of the corresponding page of the *original* PDF, stretched
+to exactly match its own dimensions (tesseract sizes its output to the
+canvas's pixel dimensions, not the original page's point dimensions, so
+this stretch is what re-aligns everything correctly) — `drawPage` adds to
+a page's existing content rather than replacing it, so the page's own
+original image is left completely alone underneath the new, invisible
+text. The result is a PDF that behaves exactly like one that had real text
+all along: `extractPageTexts` (see below) finds real words in it,
+`PdfViewer`'s drag-to-select and `Search PDFs` both work against it, and
+"Discard PDF, keep text only" becomes available on it too. Since the whole
+point of OCR is adding text, the resulting PDF is re-extracted and saved
+back through the ordinary `setSourcePdf` path — the same one an "Add PDF"
+or "Replace" upload goes through — rather than through the text-only path.
+
+Tesseract.js does fetch its OCR engine and English-language model from a
+CDN the first time OCR actually runs — the same jsDelivr-hosted pattern
+this app already relies on for pdf.js's own cmap/font data (see
+`PDFJS_VERSION` in `lib/pdf.ts`) — since bundling that (tens of megabytes,
+even for one language) locally would work against the whole point of also
+shipping as a single, reasonably-sized portable HTML file. That's the OCR
+*software*, never anything derived from the document itself, which never
+leaves the browser; but it does mean OCR specifically (unlike the rest of
+the app) needs a working internet connection the first time it's used in
+a given browser, and won't work in a fully offline or heavily
+network-restricted setting.
+
 Getting readable text out of a PDF in the first place took a bit of care:
 pdf.js hands back text items in reading order but with no structural markup
 at all, not even line breaks, so the original `extractPageTexts` flattened
