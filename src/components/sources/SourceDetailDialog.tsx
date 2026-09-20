@@ -3,7 +3,8 @@ import { Modal } from '../Modal'
 import { PdfViewer } from './PdfViewer'
 import { TextViewer } from './TextViewer'
 import { formatBibtex, parseBibtex } from '../../lib/bibtex'
-import { extractPageTexts, loadPdf } from '../../lib/pdf'
+import { loadPdf } from '../../lib/pdf'
+import { extractPageHtml, htmlToPlainText, type ExtractionMode } from '../../lib/textExtraction'
 import { formatBytes } from '../../lib/format'
 import { describeOcrError, looksLikeScannedPdf, ocrImage, ocrPdf, reOcrPdf } from '../../lib/ocr'
 import { useSourceStorageBytes } from '../../lib/useSourceStorageBytes'
@@ -52,11 +53,11 @@ export function SourceDetailDialog({
   // closes the dialog without deciding. While set, the viewer below shows
   // this instead of the source's own saved PDF, via a throwaway
   // Source-shaped object pointing at the staged blob (see previewSource).
-  const [ocrPreview, setOcrPreview] = useState<{ blobId: string; fileName: string; pageTexts: string[] } | null>(null)
+  const [ocrPreview, setOcrPreview] = useState<{ blobId: string; fileName: string; pageHtml: string[] } | null>(null)
   const storageBytes = useSourceStorageBytes(source)
-  const isScanned = !!source.pdfBlobId && looksLikeScannedPdf(source.pageTexts)
-  const hasViewer = !!source.pdfBlobId || (source.textOnly && source.pageTexts.length > 0)
-  const previewSource: Source | null = ocrPreview ? { ...source, pdfBlobId: ocrPreview.blobId, pageTexts: ocrPreview.pageTexts } : null
+  const isScanned = !!source.pdfBlobId && looksLikeScannedPdf(source.pageHtml.map(htmlToPlainText))
+  const hasViewer = !!source.pdfBlobId || (source.textOnly && source.pageHtml.length > 0)
+  const previewSource: Source | null = ocrPreview ? { ...source, pdfBlobId: ocrPreview.blobId, pageHtml: ocrPreview.pageHtml } : null
   const displaySource = previewSource ?? source
 
   /** Discards any staged-but-undecided re-OCR preview — called before
@@ -108,12 +109,11 @@ export function SourceDetailDialog({
   async function handlePdfFileChosen(file: File | null) {
     if (!file) return
     setPdfBusy(true)
-    setPdfStatus('Extracting text from PDF…')
     try {
       const buf = await file.arrayBuffer()
       const doc = await loadPdf(buf)
-      const pageTexts = await extractPageTexts(doc)
-      await setSourcePdf(source, file, pageTexts)
+      const pageHtml = await extractPageHtml(doc, 'plain', (page, total) => setPdfStatus(`Extracting text from PDF… (page ${page} of ${total})`))
+      await setSourcePdf(source, file, pageHtml)
       setPage(1)
       setViewMode('pdf')
       onChanged()
@@ -136,24 +136,27 @@ export function SourceDetailDialog({
 
   /**
    * Re-runs text extraction against the PDF this source already has,
-   * overwriting `pageTexts` with the result. Extraction only ever happens
+   * overwriting `pageHtml` with the result. Extraction only ever happens
    * when a PDF is first attached (`handlePdfFileChosen`) or swapped for a
    * new one (`setSourcePdf`) — a source added before some improvement to
-   * `extractPageTexts` (e.g. the line-break-preserving reflow) keeps
-   * whatever its `pageTexts` looked like at the time forever, since
-   * nothing re-derives it from the still-stored PDF automatically. This
-   * is the escape hatch: same PDF bytes, re-extracted under today's rules.
+   * the extractor (e.g. the line-break-preserving reflow, or the
+   * experimental layout-preserving mode this now also offers) keeps
+   * whatever its `pageHtml` looked like at the time forever, since nothing
+   * re-derives it from the still-stored PDF automatically. This is the
+   * escape hatch: same PDF bytes, re-extracted under today's rules — or a
+   * different extractor entirely, via `mode`.
    */
-  async function handleReExtractText() {
+  async function handleReExtractText(mode: ExtractionMode) {
     if (!source.pdfBlobId) return
     setPdfBusy(true)
-    setPdfStatus('Re-extracting text from PDF…')
     try {
       const blob = await getSourcePdfBlob(source)
       if (!blob) return
       const buf = await blob.arrayBuffer()
       const doc = await loadPdf(buf)
-      source.pageTexts = await extractPageTexts(doc)
+      source.pageHtml = await extractPageHtml(doc, mode, (page, total) =>
+        setPdfStatus(mode === 'layout' ? `Re-extracting (experimental layout mode)… page ${page} of ${total}` : `Re-extracting text from PDF… (page ${page} of ${total})`),
+      )
       await updateSource(source)
       onChanged()
     } finally {
@@ -191,8 +194,8 @@ export function SourceDetailDialog({
       const ocrBytes = await ocrPdf(originalBytes, doc, (p) => setPdfStatus(`${p.status} (page ${p.page} of ${p.totalPages})`))
       const ocrFile = new File([ocrBytes as BlobPart], source.pdfFileName || 'ocr.pdf', { type: 'application/pdf' })
       const ocrDoc = await loadPdf(await ocrFile.arrayBuffer())
-      const pageTexts = await extractPageTexts(ocrDoc)
-      await setSourcePdf(source, ocrFile, pageTexts)
+      const pageHtml = await extractPageHtml(ocrDoc, 'plain')
+      await setSourcePdf(source, ocrFile, pageHtml)
       setViewMode('pdf')
       onChanged()
     } catch (e) {
@@ -225,9 +228,9 @@ export function SourceDetailDialog({
       const ocrBytes = await reOcrPdf(doc, (p) => setPdfStatus(`${p.status} (page ${p.page} of ${p.totalPages})`))
       const ocrFile = new File([ocrBytes as BlobPart], source.pdfFileName || 'ocr.pdf', { type: 'application/pdf' })
       const ocrDoc = await loadPdf(await ocrFile.arrayBuffer())
-      const pageTexts = await extractPageTexts(ocrDoc)
+      const pageHtml = await extractPageHtml(ocrDoc, 'plain')
       const blobId = await stageOcrPreview(ocrFile)
-      setOcrPreview({ blobId, fileName: ocrFile.name, pageTexts })
+      setOcrPreview({ blobId, fileName: ocrFile.name, pageHtml })
       setViewMode('pdf')
       setPage(1)
     } catch (e) {
@@ -240,7 +243,7 @@ export function SourceDetailDialog({
 
   async function handleAcceptOcrPreview() {
     if (!ocrPreview) return
-    await commitOcrPreview(source, ocrPreview.blobId, ocrPreview.fileName, ocrPreview.pageTexts)
+    await commitOcrPreview(source, ocrPreview.blobId, ocrPreview.fileName, ocrPreview.pageHtml)
     setOcrPreview(null)
     onChanged()
   }
@@ -434,8 +437,22 @@ export function SourceDetailDialog({
             {source.pdfBlobId && (
               <>
                 {' · '}
-                <button type="button" className="btn-link-muted" disabled={pdfBusy || !!ocrPreview} onClick={handleReExtractText} title="Re-run text extraction against this PDF — useful if it was added before an improvement to how text gets extracted">
+                <button type="button" className="btn-link-muted" disabled={pdfBusy || !!ocrPreview} onClick={() => handleReExtractText('plain')} title="Re-run text extraction against this PDF — useful if it was added before an improvement to how text gets extracted">
                   Re-extract text
+                </button>
+              </>
+            )}
+            {source.pdfBlobId && (
+              <>
+                {' · '}
+                <button
+                  type="button"
+                  className="btn-link-muted"
+                  disabled={pdfBusy || !!ocrPreview}
+                  onClick={() => handleReExtractText('layout')}
+                  title="Experimental: re-extract text while trying to preserve the PDF's own positioning, sizing, and coloring, plus any images — slower, and can come out wrong for a complex layout"
+                >
+                  Re-extract (experimental layout)
                 </button>
               </>
             )}
@@ -447,7 +464,7 @@ export function SourceDetailDialog({
                 </button>
               </>
             )}
-            {source.pdfBlobId && source.pageTexts.length > 0 && (
+            {source.pdfBlobId && source.pageHtml.length > 0 && (
               <>
                 {' · '}
                 <button type="button" className="btn-link-muted" disabled={pdfBusy || !!ocrPreview} onClick={handleConvertToTextOnly}>

@@ -61,12 +61,12 @@ describe('every user-editable field is encrypted on a fresh push', () => {
     const { a, b } = await pairedDevices()
     const source = await a.createSource(
       { type: 'article', key: 'z2022', fields: { title: 'Z' } },
-      { pageTexts: ['Secret extracted page one text.', 'Secret extracted page two text.'] },
+      { pageHtml: ['Secret extracted page one text.', 'Secret extracted page two text.'] },
     )
     await a.sync()
 
     const sourceDoc = rawRemoteDoc(a.uid!, 'sources', source.id)
-    expect(sourceDoc.pageTexts).toBeUndefined()
+    expect(sourceDoc.pageHtml).toBeUndefined()
     expect(JSON.stringify(sourceDoc)).not.toContain('Secret extracted page')
     expect(sourceDoc._enc).toBeDefined()
 
@@ -76,7 +76,7 @@ describe('every user-editable field is encrypted on a fresh push', () => {
     // still needs to sync once the PDF itself is gone.
     await b.sync()
     const pulled = await b.getSource(source.id)
-    expect(pulled?.pageTexts).toEqual(['Secret extracted page one text.', 'Secret extracted page two text.'])
+    expect(pulled?.pageHtml).toEqual(['Secret extracted page one text.', 'Secret extracted page two text.'])
   })
 
   it('encrypts a quote bank entry\'s page number along with its text/annotation', async () => {

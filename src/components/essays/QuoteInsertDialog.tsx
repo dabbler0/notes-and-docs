@@ -43,7 +43,7 @@ export function QuoteInsertDialog({
   // only" — see SourceDetailDialog) still has real pages to browse and
   // select from via TextViewer, same as a source with a PDF attached —
   // only a source with neither falls back to typing the quote in by hand.
-  const hasExtractedText = !!pdfSource && pdfSource.pageTexts.length > 0
+  const hasExtractedText = !!pdfSource && pdfSource.pageHtml.length > 0
   const hasViewer = hasPdf || hasExtractedText
 
   function handlePickSource(s: Source) {
@@ -53,7 +53,7 @@ export function QuoteInsertDialog({
     // viewer turns pages; a source with neither has nothing to default it
     // from, so it starts unset (0 — falsy, so citationHtml() below leaves
     // the page number off entirely until/unless the user types one in).
-    setPdfPage(s.pdfBlobId || s.pageTexts.length > 0 ? 1 : 0)
+    setPdfPage(s.pdfBlobId || s.pageHtml.length > 0 ? 1 : 0)
   }
 
   /**
@@ -207,7 +207,7 @@ function InlineSourcePicker({ onSelect }: { onSelect: (s: Source) => void }) {
             <div className="card-title">{displayTitle(s.bibtex)}</div>
             <div className="card-meta">
               {displayAuthors(s.bibtex) || 'Unknown author'} {s.bibtex.fields.year ? `· ${s.bibtex.fields.year}` : ''}
-              {!s.pdfBlobId && (s.textOnly && s.pageTexts.length > 0 ? ' · text only' : ' · no PDF attached')}
+              {!s.pdfBlobId && (s.textOnly && s.pageHtml.length > 0 ? ' · text only' : ' · no PDF attached')}
             </div>
           </div>
         ))}

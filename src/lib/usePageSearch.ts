@@ -13,12 +13,13 @@ export interface PageSearchState {
 
 /**
  * Shared "search within a paginated document" behavior for `PdfViewer` and
- * `TextViewer` — both work from the same flat per-page extracted text
- * (`Source.pageTexts`), so the search logic itself (which pages have hits,
- * how to number and step through them, jumping across pages as needed) is
- * identical between the two; only how a hit gets *highlighted* differs,
- * since one renders a canvas plus a synthetic text layer and the other
- * renders plain paragraphs.
+ * `TextViewer` — both work from the same flat per-page plain text (each
+ * derived from `Source.pageHtml` via `htmlToPlainText`, since that field is
+ * real HTML rather than plain text — see `lib/textExtraction.ts`), so the
+ * search logic itself (which pages have hits, how to number and step
+ * through them, jumping across pages as needed) is identical between the
+ * two; only how a hit gets *highlighted* differs, since one renders a
+ * canvas plus a synthetic text layer and the other renders real HTML.
  */
 export function usePageSearch(pageTexts: string[], page: number, onPageChange: (page: number) => void): PageSearchState {
   const [searchQuery, setSearchQuery] = useState('')

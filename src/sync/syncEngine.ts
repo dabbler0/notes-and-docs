@@ -74,11 +74,17 @@ import type { Source } from '../models/types'
  * user typed. `updatedAt` in particular *has* to stay plaintext no matter
  * what: Firestore needs to filter/sort on it server-side for incremental
  * sync's own `where('updatedAt', '>', cursor)` queries to work at all.
+ *
+ * `sources.pageHtml` was `pageTexts` before `Source` moved from storing
+ * plain extracted text to real HTML (see `types.ts`) — same field, same
+ * sensitivity, just renamed; not an encryption-policy change, so it didn't
+ * need a `CURRENT_ENCRYPTION_VERSION` bump the way an actual change to
+ * *which* fields get encrypted would.
  */
 const SENSITIVE_FIELDS: Record<SyncedCollection, string[]> = {
   essays: ['title'],
   nodes: ['title', 'draftContent', 'versions', 'footnotes'],
-  sources: ['bibtex', 'comment', 'pdfFileName', 'pageTexts'],
+  sources: ['bibtex', 'comment', 'pdfFileName', 'pageHtml'],
   quotes: ['quoteText', 'annotation', 'page'],
   graveyard: ['html', 'nodeTitle'],
 }

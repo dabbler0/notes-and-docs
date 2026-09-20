@@ -130,13 +130,48 @@ through `useSourceStorageBytes` — an IndexedDB blob read is cheap but still
 async, so a card shows no size for an instant before its own hook resolves
 rather than blocking the whole grid on it.
 
+**Pages are HTML, not plain text.** `Source.pageHtml` — what
+`extractPageHtml` (`lib/textExtraction.ts`) produces and `TextViewer`
+renders — is real HTML per page, not a flat string, specifically so it can
+be *enriched*: styled, positioned, illustrated, whatever a given extractor
+manages to recover, rather than capped at whatever a plain string can
+represent. The default extractor (`'plain'`) still only recovers reading-
+order prose — the same line/paragraph-preserving reflow described below,
+now baked into markup via `plainTextToHtml` (a `<p>` per paragraph, a
+`<br>` per line break, nothing else) instead of returned as a bare string —
+but the experimental `'layout'` one (see its own section further down)
+uses the extra room to reproduce a page's actual visual appearance.
+Wherever this needs to be *searched*, scanned for "does this look like a
+scanned PDF," or shown as a short plain-text snippet rather than rendered,
+`htmlToPlainText` reduces it back down to plain text first (walking the
+parsed HTML, turning a `<br>` into a line break and a `<p>`/`<div>`
+boundary into a paragraph break, an `<img>` into nothing) — every one of
+`hasQuotableText`, `looksLikeScannedPdf`, `searchPdfBank`, and both
+viewers' own in-document search goes through it rather than assuming
+`pageHtml` is plain text.
+
+A source saved before `pageHtml` existed (when this field held plain text
+directly, as `pageTexts: string[]`) is upgraded the moment it's next
+loaded: `migrateSource` in `sourcesRepo.ts`, run by both `listSources` and
+`getSource` on every doc they hand back, converts a lingering `pageTexts`
+into the equivalent `pageHtml` via `plainTextToHtml` — by construction, an
+identical rendered appearance to what the old plain-text rendering used to
+produce — and persists the upgraded shape with a raw `backend.docs.put`
+rather than `updateSource`, deliberately *not* bumping `updatedAt`: this is
+a one-time, purely local storage-shape fix, not a real edit, and every
+device converges on the identical result from the same source data on its
+own, so there's nothing that actually needs to sync. Idempotent and cheap
+to call unconditionally — a source with no lingering `pageTexts` (already
+migrated, or created after `pageHtml` existed) just passes through
+untouched.
+
 **Trading the PDF for its text.** A PDF is usually the large majority of a
 source's footprint, while the reason it's there at all — being able to
 read it and pull quotes out of it — is served just as well by its already-
 extracted text for most papers. "Discard PDF, keep text only," next to the
 size readout in the PDF tab, calls `convertSourceToTextOnly` in
 `sourcesRepo.ts`: it deletes the PDF blob for good and sets a new
-`Source.textOnly` flag, keeping the `pageTexts` that were already extracted
+`Source.textOnly` flag, keeping the `pageHtml` that was already extracted
 at upload time. This is one-way (there's no PDF byte left to reconstruct
 from, only "attach a new one" via the ordinary Replace flow, which clears
 the flag again), so the button confirms first. A text-only source falls
@@ -148,20 +183,24 @@ The same choice is offered up front, too: "Add a source"'s file picker
 reveals an "Extract text only" checkbox the moment a PDF is chosen. Checked,
 `createSource` (`sourcesRepo.ts`) never writes the PDF's bytes to the blob
 store at all — not stored-then-deleted, just never `put` in the first
-place — only its extracted `pageTexts` and a `textOnly` source are created
+place — only its extracted `pageHtml` and a `textOnly` source are created
 directly. The point isn't just local disk space: a PDF large enough to be
 worth discarding is also large enough to be worth never risking a sync
 upload of, and skipping the write here means it's simply never in local
 storage for a sync pass to pick up, rather than relying on the user to
 remember to convert it away again before that happens.
 
-`TextViewer.tsx` reads a source's `pageTexts` as plain, paginated prose,
+`TextViewer.tsx` renders a source's `pageHtml` directly (via `innerHTML`,
+not built up as Preact vnodes — see its own doc comment for why: the
+experimental layout extractor's output needs that, and the plain
+extractor's simpler `<p>`/`<br>` markup renders identically either way),
 with the same page-by-page navigation, in-document search (via the
 `usePageSearch` hook and `PageSearchBar` component both viewers now share —
 factored out of what used to be `PdfViewer`'s own search box, since the
 underlying logic never actually depended on there being a PDF at all, just
-a `pageTexts` array), and drag-to-quote that `PdfViewer` offers, but backed
-by ordinary DOM text instead of a canvas rendering plus a synthetic
+a page of plain text — now `htmlToPlainText` over `pageHtml` rather than a
+`pageTexts` array directly), and drag-to-quote that `PdfViewer` offers, but
+backed by ordinary DOM text instead of a canvas rendering plus a synthetic
 selectable text layer — a real practical difference, not just an
 implementation detail, since it's what makes text-only mode strictly
 lighter than keeping the PDF around for these purposes. It's available
@@ -173,26 +212,29 @@ already did for a PDF, rather than falling back to typing the quote in by
 hand the way it still does for a source with neither.
 
 Extraction only ever runs when a PDF is first attached or swapped for a
-new one — a source added before some improvement to `extractPageTexts`
-(the line-break-preserving reflow described below, or any future one)
-keeps whatever its `pageTexts` looked like at the time forever, since
-nothing re-derives it from the still-stored PDF automatically. "Re-extract
-text," next to "Discard PDF, keep text only," is the escape hatch: it
-re-runs extraction against the same PDF bytes the source already has and
-overwrites `pageTexts` with the result, without needing to re-upload the
-file (which would also mean re-finding it on disk) or losing anything else
-about the source. Only available while there's still a real PDF to
+new one — a source added before some improvement to the extractor (the
+line-break-preserving reflow described below, the experimental layout mode,
+or any future one) keeps whatever its `pageHtml` looked like at the time
+forever, since nothing re-derives it from the still-stored PDF
+automatically. "Re-extract text," next to "Discard PDF, keep text only," is
+the escape hatch: it re-runs extraction against the same PDF bytes the
+source already has and overwrites `pageHtml` with the result, without
+needing to re-upload the file (which would also mean re-finding it on
+disk) or losing anything else about the source — "Re-extract (experimental
+layout)" right next to it does the same thing with the other extractor (see
+below). Both are only available while there's still a real PDF to
 re-extract from, naturally — a text-only source has no PDF bytes left to
 re-run extraction against.
 
 **OCR for scanned PDFs.** A photographed or scanner-produced PDF has no
 text layer at all — just a raster image of each page — so extraction on
 its own finds nothing to extract. `looksLikeScannedPdf` in `lib/ocr.ts`
-flags a source this way whenever its `pageTexts` come back essentially
-empty across the board (a stray character or two per page, like a scanned
-page number, doesn't disqualify it — the bar is "next to nothing," not
-"literally zero"), and the PDF tab shows an "OCR this PDF" prompt in place
-of the usual "Discard PDF, keep text only" line whenever that's true.
+flags a source this way whenever its extracted text (`htmlToPlainText`
+over `pageHtml`) comes back essentially empty across the board (a stray
+character or two per page, like a scanned page number, doesn't disqualify
+it — the bar is "next to nothing," not "literally zero"), and the PDF tab
+shows an "OCR this PDF" prompt in place of the usual "Discard PDF, keep
+text only" line whenever that's true.
 
 `ocrPdf` (`lib/ocr.ts`) runs entirely in the browser, using
 [tesseract.js](https://github.com/naptha/tesseract.js) — a WebAssembly
@@ -211,12 +253,13 @@ this stretch is what re-aligns everything correctly) — `drawPage` adds to
 a page's existing content rather than replacing it, so the page's own
 original image is left completely alone underneath the new, invisible
 text. The result is a PDF that behaves exactly like one that had real text
-all along: `extractPageTexts` (see below) finds real words in it,
-`PdfViewer`'s drag-to-select and `Search PDFs` both work against it, and
-"Discard PDF, keep text only" becomes available on it too. Since the whole
-point of OCR is adding text, the resulting PDF is re-extracted and saved
-back through the ordinary `setSourcePdf` path — the same one an "Add PDF"
-or "Replace" upload goes through — rather than through the text-only path.
+all along: `extractPageHtml` (in its default `'plain'` mode; see below)
+finds real words in it, `PdfViewer`'s drag-to-select and `Search PDFs` both
+work against it, and "Discard PDF, keep text only" becomes available on it
+too. Since the whole point of OCR is adding text, the resulting PDF is
+re-extracted and saved back through the ordinary `setSourcePdf` path — the
+same one an "Add PDF" or "Replace" upload goes through — rather than
+through the text-only path.
 
 Tesseract.js does fetch its OCR engine and English-language model from a
 CDN the first time OCR actually runs — the same jsDelivr-hosted pattern
@@ -267,6 +310,63 @@ the PDF; closing the dialog (or deleting the source outright) without
 deciding discards the staged preview rather than leaving it as an orphaned
 blob in storage forever.
 
+**Experimental: layout-preserving extraction.** The default `'plain'`
+extractor only ever recovers reading-order prose — real HTML now (see
+"Pages are HTML, not plain text" above), but still just paragraphs and line
+breaks, nothing about how the original page actually *looked*. The
+experimental `'layout'` extractor (`extractLayoutPageHtml` in
+`lib/textExtraction.ts`) goes further: each run of text keeps its own
+position, size, and color from the original page, and images are pulled
+back out and reinserted where they were. Offered as a checkbox ("Add a
+source"'s file picker, the moment a PDF is chosen) or a link
+("Re-extract (experimental layout)," next to "Re-extract text," for a
+source that already has a PDF) — labeled experimental deliberately, since
+none of what it recovers beyond position/size is exact:
+
+- **Position and size** come straight from the same raw pdf.js text-item
+  transforms `reflowTextItems` already uses — reliable, not a heuristic.
+- **Color** has no equivalent in pdf.js's `getTextContent()` at all (it
+  reports position, size, and font, never fill color) — actually
+  interpreting the PDF's own content stream operators would be its own
+  project. Instead, `sampleTextColor` renders the page to a canvas (like
+  OCR does, at a similarly higher-than-viewing resolution) and samples a
+  handful of pixels near where each run's glyphs should sit, picking
+  whichever looks most like ink rather than background. Works well for the
+  common case — dark text on a light page — and can sample the wrong pixel
+  for light text on a dark background, a rotated run, or text sitting on a
+  busy image.
+- **Images** aren't decoded from the PDF's own embedded XObject data at all
+  (variable color spaces and filters make that its own project too) —
+  `computeImageRegions` instead walks the page's operator list purely to
+  find *where* an image was painted, tracking the same save/restore/
+  transform state a real PDF renderer would to place it correctly, and
+  `cropImageRegion` then crops that exact rectangle back out of the
+  already-rendered canvas rather than touching the image's own data.
+  Simple and always visually correct for what it does capture, but it only
+  finds axis-aligned-enough regions and won't separate two images placed
+  right next to each other with nothing in between.
+- There's no paragraph structure at all in the result — every run is its
+  own absolutely-positioned element, with an `&nbsp;` or a `<br>` (the same
+  gap heuristic as `reflowTextItems`, via `separatorForGap`) sitting
+  between two runs to carry the whitespace that belongs there, rather than
+  a plain space or `\n` character. That's not a style choice: a native
+  selection dragged across two independently-positioned elements silently
+  drops a plain space or newline sitting between them when it serializes
+  (confirmed directly while building this — the same whitespace bug
+  `pdfSelection.ts` already had to work around for `PdfViewer`'s own
+  synthetic text layer), while `&nbsp;` (which never collapses away) and
+  `<br>` (which a browser always serializes as a real line break) both
+  survive it with no extra reconstruction logic needed. That's what lets an
+  ordinary drag-selection across a layout-mode page still pick up real
+  spaces and line breaks the way it would from flowing text.
+
+Whichever extractor made a given page, `TextViewer` renders it the exact
+same way (see "Pages are HTML" above) and `htmlToPlainText` reduces it back
+to plain text the exact same way for search — layout mode's positioned
+spans and invisible separators fold back down to ordinary reading-order
+text just like plain mode's `<p>`/`<br>` does, since `htmlToPlainText`
+only special-cases those same few tags either extractor could produce.
+
 **Quoting a source with nothing to select from.** A source with no PDF and
 no extracted text used to be a dead end for the quote bank — its detail
 view just said "BibTeX + comment only" and left it at that, even though
@@ -298,21 +398,24 @@ readable one) rather than a silent failure or a raw `undefined`.
 
 Getting readable text out of a PDF in the first place took a bit of care:
 pdf.js hands back text items in reading order but with no structural markup
-at all, not even line breaks, so the original `extractPageTexts` flattened
-every page into one giant run-on line — fine for substring search,
-unusable for actually reading. `reflowTextItems` in `lib/pdf.ts` rejoins
-those items using a heuristic on the vertical gap between each item's
-baseline and the one before it, relative to that text's own font height: a
-tiny gap is the next word on the same line, joined with a plain space; a
-moderate gap is a real line break in the source document — PDF text is
-never soft-wrapped the way HTML is, so every line's items are genuinely,
-explicitly positioned by the document itself — joined with a single `\n`;
-a gap noticeably larger than a normal line height is a new paragraph,
-joined with a blank line instead. `TextViewer`'s CSS renders those single
-line breaks as actual line breaks and — since a line the original PDF
-never wrapped shouldn't be re-wrapped just because it's now sitting in a
-narrower reading column — never soft-wraps them either (`white-space:
-pre`, not `pre-line`). The reading column itself grows to fit whichever
+at all, not even line breaks, so a naive join would flatten every page
+into one giant run-on line — fine for substring search, unusable for
+actually reading. `reflowTextItems` in `lib/pdf.ts` rejoins those items
+using a heuristic on the vertical gap between each item's baseline and the
+one before it, relative to that text's own font height: a tiny gap is the
+next word on the same line, joined with a plain space; a moderate gap is a
+real line break in the source document — PDF text is never soft-wrapped
+the way HTML is, so every line's items are genuinely, explicitly positioned
+by the document itself — joined with a single `\n`; a gap noticeably
+larger than a normal line height is a new paragraph, joined with a blank
+line instead. `plainTextToHtml` (`lib/textExtraction.ts`) then bakes that
+straight into real markup — a `<p>` per paragraph, a literal `<br>` per
+single line break — rather than leaving the `\n`s as plain characters for
+`TextViewer`'s own CSS to reinterpret; `white-space: pre` on
+`.text-viewer-page p` still matters (never soft-wrapping a line the
+original PDF never wrapped, no matter how narrow the reading column gets),
+just not for turning `\n` into a line break anymore, since a `<br>` renders
+as one regardless. The reading column itself grows to fit whichever
 line on the page is actually the widest (`width: max-content` on
 `.text-viewer-page`, capped by `max-width: 100%` of the space the dialog
 actually has), so a normal paragraph still reads at a comfortable ~640px
@@ -650,7 +753,8 @@ document that is, and the ↑/↓ buttons (or Enter/Shift+Enter in the box)
 step through every occurrence in reading order, crossing page boundaries as
 needed and reporting an overall "N of M" count. The search itself
 (`findPdfMatches` in `lib/pdf.ts`) runs against the source's already-extracted
-`pageTexts` rather than re-parsing the PDF, so it can count matches on pages
+`pageHtml` (reduced to plain text via `htmlToPlainText`) rather than re-parsing
+the PDF, so it can count matches on pages
 that aren't even the one currently rendered — which is what lets it jump
 pages at all. Only the *currently rendered* page's matches get visually
 highlighted (a `<mark>` wrapped around the hit within the invisible text

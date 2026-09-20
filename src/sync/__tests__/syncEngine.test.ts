@@ -48,14 +48,14 @@ describe('basic push/pull round trip', () => {
 
   it('round-trips a source with BibTeX metadata and page text', async () => {
     const { a, b } = await pairedDevices()
-    await a.createSource({ type: 'article', key: 'smith2020', fields: { title: 'A Paper', author: 'Smith', year: '2020' } }, { comment: 'good stuff', pageTexts: ['page one text'] })
+    await a.createSource({ type: 'article', key: 'smith2020', fields: { title: 'A Paper', author: 'Smith', year: '2020' } }, { comment: 'good stuff', pageHtml: ['page one text'] })
     await a.sync()
     await b.sync()
 
     const [source] = await b.listSources()
     expect(source.bibtex.fields.title).toBe('A Paper')
     expect(source.comment).toBe('good stuff')
-    expect(source.pageTexts).toEqual(['page one text'])
+    expect(source.pageHtml).toEqual(['page one text'])
   })
 
   it('round-trips a PDF blob byte-for-byte through the chunking scheme', { timeout: 20_000 }, async () => {

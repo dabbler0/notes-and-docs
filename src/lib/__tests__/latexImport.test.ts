@@ -3,7 +3,7 @@ import { matchFootnoteToSource, parseLatexDocument, pickMainTexFile } from '../l
 import type { Source } from '../../models/types'
 
 function makeSource(id: string, key: string, fields: Record<string, string>): Source {
-  return { id, bibtex: { type: 'article', key, fields }, comment: '', pageTexts: [], createdAt: 0, updatedAt: 0 }
+  return { id, bibtex: { type: 'article', key, fields }, comment: '', pageHtml: [], createdAt: 0, updatedAt: 0 }
 }
 
 describe('pickMainTexFile', () => {

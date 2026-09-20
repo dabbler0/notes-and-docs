@@ -1,7 +1,8 @@
 import { useState } from 'preact/hooks'
 import { Modal } from '../Modal'
 import { parseBibtex, emptyEntry } from '../../lib/bibtex'
-import { extractPageTexts, loadPdf } from '../../lib/pdf'
+import { loadPdf } from '../../lib/pdf'
+import { extractPageHtml, type ExtractionMode } from '../../lib/textExtraction'
 import { createSource } from '../../models/sourcesRepo'
 import type { BibtexEntry } from '../../models/types'
 
@@ -17,6 +18,7 @@ export function AddSourceDialog({ onClose, onCreated }: { onClose: () => void; o
   const [comment, setComment] = useState('')
   const [file, setFile] = useState<File | null>(null)
   const [textOnly, setTextOnly] = useState(false)
+  const [extractionMode, setExtractionMode] = useState<ExtractionMode>('plain')
   const [busy, setBusy] = useState(false)
   const [status, setStatus] = useState('')
 
@@ -40,15 +42,16 @@ export function AddSourceDialog({ onClose, onCreated }: { onClose: () => void; o
         if (manualNote) entry.fields.note = manualNote
       }
 
-      let pageTexts: string[] = []
+      let pageHtml: string[] = []
       if (file) {
-        setStatus('Extracting text from PDF…')
         const buf = await file.arrayBuffer()
         const doc = await loadPdf(buf)
-        pageTexts = await extractPageTexts(doc)
+        pageHtml = await extractPageHtml(doc, extractionMode, (page, total) =>
+          setStatus(extractionMode === 'layout' ? `Extracting page ${page} of ${total} (experimental layout mode)…` : 'Extracting text from PDF…'),
+        )
       }
 
-      await createSource(entry, { comment, pdfFile: file ?? undefined, pageTexts, textOnly })
+      await createSource(entry, { comment, pdfFile: file ?? undefined, pageHtml, textOnly })
       onCreated()
     } finally {
       setBusy(false)
@@ -73,10 +76,16 @@ export function AddSourceDialog({ onClose, onCreated }: { onClose: () => void; o
           />
         </div>
         {file && (
-          <label className="muted" style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: -8, marginBottom: 14 }}>
-            <input type="checkbox" checked={textOnly} onChange={(e) => setTextOnly((e.target as HTMLInputElement).checked)} />
-            Extract text only — don't keep the PDF file itself (good for a very large PDF you don't want stored or synced at all)
-          </label>
+          <>
+            <label className="muted" style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: -8, marginBottom: 6 }}>
+              <input type="checkbox" checked={textOnly} onChange={(e) => setTextOnly((e.target as HTMLInputElement).checked)} />
+              Extract text only — don't keep the PDF file itself (good for a very large PDF you don't want stored or synced at all)
+            </label>
+            <label className="muted" style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 14 }}>
+              <input type="checkbox" checked={extractionMode === 'layout'} onChange={(e) => setExtractionMode((e.target as HTMLInputElement).checked ? 'layout' : 'plain')} />
+              Experimental: try to preserve the PDF's own text positioning, sizing, and coloring, plus any images — slower, and can come out wrong for a complex layout
+            </label>
+          </>
         )}
         <div className="field">
           <label>Paste a BibTeX entry (optional — leave blank to fill fields manually below)</label>

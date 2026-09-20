@@ -65,7 +65,7 @@ export interface Device {
   deleteEssay(id: string): Promise<void>
   listEssays(): Promise<Essay[]>
 
-  createSource(bibtex: BibtexEntry, opts?: { comment?: string; pdfFile?: File; pageTexts?: string[] }): Promise<Source>
+  createSource(bibtex: BibtexEntry, opts?: { comment?: string; pdfFile?: File; pageHtml?: string[] }): Promise<Source>
   getSource(id: string): Promise<Source | undefined>
   listSources(): Promise<Source[]>
   getSourcePdfBlob(source: Source): Promise<Blob | undefined>

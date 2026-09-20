@@ -18,7 +18,7 @@ export function useSourceStorageBytes(source: Source): number | null {
     return () => {
       cancelled = true
     }
-  }, [source.id, source.pdfBlobId, source.textOnly, source.pageTexts])
+  }, [source.id, source.pdfBlobId, source.textOnly, source.pageHtml])
 
   return bytes
 }

@@ -14,11 +14,26 @@ export interface Source {
   /** Blob id in the BlobStore, if a PDF is attached. */
   pdfBlobId?: string
   pdfFileName?: string
-  /** Per-page extracted text, for search and quoting. Empty if no PDF. */
-  pageTexts: string[]
+  /**
+   * Per-page extracted content, for reading (`TextViewer`), search, and
+   * quoting. Empty if no PDF. Real HTML, not plain text — enrichable rather
+   * than just a flat string — produced by one of the two extractors in
+   * `lib/textExtraction.ts`: `'plain'` (the default; a `<p>` per paragraph,
+   * a `<br>` per line break, nothing else) or the experimental `'layout'`
+   * one (each run of text positioned, sized, and colored to match the
+   * original page, with images reinserted where they were). Wherever this
+   * needs to be searched, scanned for "does this look like a scanned PDF,"
+   * or shown as a short plain-text snippet rather than actually rendered,
+   * `htmlToPlainText` (`lib/textExtraction.ts`) reduces it back down first
+   * — nothing else should assume this is plain text. A source saved before
+   * `pageHtml` existed (when this field was `pageTexts: string[]`, genuine
+   * plain text) gets migrated the moment it's loaded, via
+   * `migratePlainTextSources` in `sourcesRepo.ts` — see its own doc comment.
+   */
+  pageHtml: string[]
   /**
    * True once the original PDF has been discarded and only its extracted
-   * `pageTexts` are kept (see `convertSourceToTextOnly` in
+   * `pageHtml` is kept (see `convertSourceToTextOnly` in
    * `sourcesRepo.ts`) — a way to reclaim a large PDF's storage while still
    * keeping the ability to browse and quote it via `TextViewer`. Absent
    * (falsy) for both "has a real PDF" and "BibTeX + comment only" sources;

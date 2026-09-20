@@ -25,7 +25,9 @@ export function describeOcrError(e: unknown): string {
 }
 
 /**
- * Whether a PDF's already-extracted `pageTexts` look like they came from a
+ * Whether a PDF's already-extracted text (the plain-text form of its
+ * `pageHtml` — see `htmlToPlainText` in `lib/textExtraction.ts`; callers
+ * are expected to pass that, not raw HTML) looks like it came from a
  * scanned document with no real text layer at all, rather than one that
  * simply has short pages. A scan can still yield a handful of stray
  * characters per page (a page number some scanners embed as plain text,
@@ -82,7 +84,7 @@ export async function ocrImage(image: File | Blob): Promise<string> {
  * Runs OCR against every page of a PDF and returns a new PDF — same pages,
  * same visual appearance — with an invisible, selectable text layer burned
  * into each one, ready to be treated exactly like a PDF that had real text
- * all along (re-extracted via `extractPageTexts`, searched, quoted from).
+ * all along (re-extracted via `extractPageHtml`, searched, quoted from).
  *
  * The approach: render each page to a canvas at OCR resolution, ask
  * tesseract.js to recognize it and hand back a *text-only* single-page PDF

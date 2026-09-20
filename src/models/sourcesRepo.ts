@@ -2,29 +2,59 @@ import { backend } from '../storage'
 import { id } from '../lib/id'
 import { displayAuthors, displayTitle } from '../lib/bibtex'
 import { buildSearchRegex } from '../lib/pdf'
+import { htmlToPlainText, plainTextToHtml } from '../lib/textExtraction'
 import type { BibtexEntry, Source } from './types'
 
 const COLLECTION = 'sources'
 
+/**
+ * Upgrades a source loaded straight from storage that still has the old
+ * `pageTexts: string[]` shape (from before `pageHtml` existed) into the
+ * current one — `pageHtml`, real (if plain) HTML rather than a flat plain
+ * string, via `plainTextToHtml` (which, by construction, renders identically
+ * to how the old plain text used to). Every read path (`listSources`,
+ * `getSource`) runs every source through this before handing it out, so the
+ * rest of the app never has to know the old shape existed.
+ *
+ * Deliberately mutates and persists in place with a raw `backend.docs.put`
+ * rather than `updateSource` — this is a one-time, purely local storage-
+ * shape upgrade, not a real edit, so it shouldn't bump `updatedAt` and
+ * trigger a sync push: the transformation is a pure function of data every
+ * device already has, so every device that opens this source converges on
+ * the identical result on its own, with nothing that needs propagating.
+ * Idempotent and cheap to call unconditionally — a source that's already
+ * been migrated (or was created after `pageHtml` existed) has no
+ * `pageTexts` left to find, so this is a no-op for it.
+ */
+async function migrateSource(source: Source & { pageTexts?: string[] }): Promise<Source> {
+  if (!source.pageTexts) return source
+  const { pageTexts, ...rest } = source
+  const migrated: Source = { ...rest, pageHtml: pageTexts.map(plainTextToHtml) }
+  await backend.docs.put(COLLECTION, migrated)
+  return migrated
+}
+
 export async function listSources(): Promise<Source[]> {
   const sources = await backend.docs.list<Source>(COLLECTION)
-  return sources.filter((s) => !s.deleted).sort((a, b) => b.updatedAt - a.updatedAt)
+  const migrated = await Promise.all(sources.map(migrateSource))
+  return migrated.filter((s) => !s.deleted).sort((a, b) => b.updatedAt - a.updatedAt)
 }
 
 export async function getSource(sourceId: string): Promise<Source | undefined> {
-  return backend.docs.get<Source>(COLLECTION, sourceId)
+  const source = await backend.docs.get<Source>(COLLECTION, sourceId)
+  return source ? migrateSource(source) : undefined
 }
 
 export async function createSource(
   bibtex: BibtexEntry,
-  opts: { comment?: string; pdfFile?: File; pageTexts?: string[]; textOnly?: boolean } = {},
+  opts: { comment?: string; pdfFile?: File; pageHtml?: string[]; textOnly?: boolean } = {},
 ): Promise<Source> {
   const now = Date.now()
   const source: Source = {
     id: id(),
     bibtex,
     comment: opts.comment ?? '',
-    pageTexts: opts.pageTexts ?? [],
+    pageHtml: opts.pageHtml ?? [],
     createdAt: now,
     updatedAt: now,
   }
@@ -34,7 +64,7 @@ export async function createSource(
       // The whole point of this option is that the PDF's bytes never touch
       // storage (local or, eventually, synced) at all — not even briefly —
       // for a PDF large enough that the user doesn't want to risk it. Only
-      // the filename (for reference) and the already-extracted pageTexts
+      // the filename (for reference) and the already-extracted pageHtml
       // are kept.
       source.textOnly = true
     } else {
@@ -89,15 +119,15 @@ export async function getSourceStorageBytes(source: Source): Promise<number> {
     const blob = await backend.blobs.get(source.pdfBlobId)
     return blob?.size ?? 0
   }
-  if (source.pageTexts.length > 0) {
-    return new Blob(source.pageTexts).size
+  if (source.pageHtml.length > 0) {
+    return new Blob(source.pageHtml).size
   }
   return 0
 }
 
 /**
  * Attaches a PDF to a source that doesn't have one yet, or swaps out an
- * existing one, given its already-extracted `pageTexts`. Always mints a
+ * existing one, given its already-extracted `pageHtml`. Always mints a
  * *fresh* blob id for the new file rather than overwriting the old one in
  * place — same reasoning as everywhere else blobs are replaced: sync tracks
  * "have I pushed this blob id" by id, so reusing one for different bytes
@@ -105,13 +135,13 @@ export async function getSourceStorageBytes(source: Source): Promise<number> {
  * left to do. The old blob (if any) is deleted locally only after the new
  * one is safely stored.
  */
-export async function setSourcePdf(source: Source, file: File, pageTexts: string[]): Promise<void> {
+export async function setSourcePdf(source: Source, file: File, pageHtml: string[]): Promise<void> {
   const oldBlobId = source.pdfBlobId
   const newBlobId = id()
   await backend.blobs.put(newBlobId, file)
   source.pdfBlobId = newBlobId
   source.pdfFileName = file.name
-  source.pageTexts = pageTexts
+  source.pageHtml = pageHtml
   source.textOnly = false
   await updateSource(source)
   if (oldBlobId) await backend.blobs.delete(oldBlobId)
@@ -142,11 +172,11 @@ export async function discardOcrPreview(blobId: string): Promise<void> {
  * same effect as `setSourcePdf`, but reusing the blob `stageOcrPreview`
  * already uploaded instead of writing the file a second time.
  */
-export async function commitOcrPreview(source: Source, blobId: string, fileName: string, pageTexts: string[]): Promise<void> {
+export async function commitOcrPreview(source: Source, blobId: string, fileName: string, pageHtml: string[]): Promise<void> {
   const oldBlobId = source.pdfBlobId
   source.pdfBlobId = blobId
   source.pdfFileName = fileName
-  source.pageTexts = pageTexts
+  source.pageHtml = pageHtml
   source.textOnly = false
   await updateSource(source)
   if (oldBlobId) await backend.blobs.delete(oldBlobId)
@@ -158,7 +188,7 @@ export async function removeSourcePdf(source: Source): Promise<void> {
   if (!oldBlobId) return
   source.pdfBlobId = undefined
   source.pdfFileName = undefined
-  source.pageTexts = []
+  source.pageHtml = []
   source.textOnly = false
   await updateSource(source)
   await backend.blobs.delete(oldBlobId)
@@ -166,7 +196,7 @@ export async function removeSourcePdf(source: Source): Promise<void> {
 
 /**
  * Discards a source's PDF file for good, keeping only its already-extracted
- * `pageTexts` — the point being to reclaim whatever space the original PDF
+ * `pageHtml` — the point being to reclaim whatever space the original PDF
  * (often the large majority of a source's footprint) was taking up, for a
  * source where the text alone is enough to keep browsing and quoting from
  * via `TextViewer`. One-way: there's no PDF byte to restore afterward, only
@@ -186,7 +216,7 @@ export async function convertSourceToTextOnly(source: Source): Promise<void> {
  * own via `convertSourceToTextOnly`) to drag-select a quote from — as
  * opposed to typing one in by hand. */
 export function hasQuotableText(source: Source): boolean {
-  return !!source.pdfBlobId || source.pageTexts.length > 0
+  return !!source.pdfBlobId || source.pageHtml.length > 0
 }
 
 export function matchesSourceQuery(source: Source, query: string): boolean {
@@ -215,7 +245,7 @@ export async function searchPdfBank(query: string): Promise<PdfSearchHit[]> {
   const sources = await listSources()
   const hits: PdfSearchHit[] = []
   for (const source of sources) {
-    source.pageTexts.forEach((text, idx) => {
+    source.pageHtml.map(htmlToPlainText).forEach((text, idx) => {
       regex.lastIndex = 0
       const m = regex.exec(text)
       if (m) {

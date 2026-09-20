@@ -35,18 +35,6 @@ export async function loadPdf(data: ArrayBuffer): Promise<PdfDoc> {
   return task.promise
 }
 
-/** Extracts plain text per page, for search indexing, quoting, and the
- * text-only reading view (`TextViewer`). */
-export async function extractPageTexts(doc: PdfDoc): Promise<string[]> {
-  const pages: string[] = []
-  for (let p = 1; p <= doc.numPages; p++) {
-    const page = await doc.getPage(p)
-    const content = await page.getTextContent()
-    pages.push(reflowTextItems(content.items as any[]))
-  }
-  return pages
-}
-
 /**
  * Rejoins a PDF page's raw text items into readable text, preserving the
  * original document's own line and paragraph breaks. pdf.js hands back
@@ -173,7 +161,8 @@ export function buildSearchRegex(query: string): RegExp | null {
 }
 
 /** Finds every case-insensitive occurrence of `query` across a PDF's
- * per-page extracted text (as produced by `extractPageTexts`), in reading
+ * per-page plain text (as produced by `htmlToPlainText` over `Source.pageHtml`
+ * — see `lib/textExtraction.ts`), in reading
  * order — tolerant of the query's whitespace matching a line/paragraph
  * break in the text (see `buildSearchRegex`). Used to drive in-PDF search:
  * which pages to jump to, and an overall "N of M" count, without

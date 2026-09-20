@@ -1,8 +1,9 @@
-import { useEffect, useRef, useState } from 'preact/hooks'
+import { useEffect, useMemo, useRef, useState } from 'preact/hooks'
 import * as pdfjsLib from 'pdfjs-dist'
 import { getSourcePdfBlob } from '../../models/sourcesRepo'
 import { loadPdf, renderPageToCanvas, type PdfDoc } from '../../lib/pdf'
 import { reconstructSelectedText, type SelectableTextItem } from '../../lib/pdfSelection'
+import { htmlToPlainText } from '../../lib/textExtraction'
 import { usePageSearch } from '../../lib/usePageSearch'
 import { PageControls } from './PageControls'
 import { PageSearchBar } from './PageSearchBar'
@@ -35,7 +36,12 @@ export function PdfViewer({
   // gap heuristic reflowTextItems uses on bulk-extracted text.
   const pageItemsRef = useRef<SelectableTextItem[]>([])
 
-  const search = usePageSearch(source.pageTexts ?? [], page, onPageChange)
+  // This search bar's own corpus — the PDF's own already-extracted text —
+  // is always plain, regardless of which extractor produced pageHtml
+  // (searching layout-mode's positioned/colored HTML directly would mean
+  // matching against literal style attributes, not the words themselves).
+  const plainPageTexts = useMemo(() => (source.pageHtml ?? []).map(htmlToPlainText), [source.pageHtml])
+  const search = usePageSearch(plainPageTexts, page, onPageChange)
   const { searchQuery, activeMatch } = search
 
   useEffect(() => {
@@ -81,8 +87,10 @@ export function PdfViewer({
       const isActivePage = !!activeMatch && activeMatch.page === clamped
       // Occurrences are matched against each text item on its own — a query
       // split across two items (e.g. by a line break mid-word) won't get
-      // highlighted here, even though extractPageTexts' per-page join still
-      // finds and counts it for the overall N-of-M total.
+      // highlighted here, even though the page's own plain-text join
+      // (htmlToPlainText over the 'plain'-mode pageHtml this search bar
+      // actually searches, built the same way reflowTextItems builds it)
+      // still finds and counts it for the overall N-of-M total.
       let matchesSoFarOnPage = 0
       const pageItems: SelectableTextItem[] = []
       for (const item of content.items as any[]) {
