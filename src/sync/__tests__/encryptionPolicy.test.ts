@@ -57,6 +57,28 @@ describe('every user-editable field is encrypted on a fresh push', () => {
     expect(sourceDoc.id).toBe(source.id)
   })
 
+  it("encrypts a source's extracted PDF/text-only page text, not just its bibtex/comment", async () => {
+    const { a, b } = await pairedDevices()
+    const source = await a.createSource(
+      { type: 'article', key: 'z2022', fields: { title: 'Z' } },
+      { pageTexts: ['Secret extracted page one text.', 'Secret extracted page two text.'] },
+    )
+    await a.sync()
+
+    const sourceDoc = rawRemoteDoc(a.uid!, 'sources', source.id)
+    expect(sourceDoc.pageTexts).toBeUndefined()
+    expect(JSON.stringify(sourceDoc)).not.toContain('Secret extracted page')
+    expect(sourceDoc._enc).toBeDefined()
+
+    // And it comes back intact on another device, same as any other
+    // encrypted field — this is text-only mode's whole point (see
+    // convertSourceToTextOnly): the extracted text is the thing that
+    // still needs to sync once the PDF itself is gone.
+    await b.sync()
+    const pulled = await b.getSource(source.id)
+    expect(pulled?.pageTexts).toEqual(['Secret extracted page one text.', 'Secret extracted page two text.'])
+  })
+
   it('encrypts a quote bank entry\'s page number along with its text/annotation', async () => {
     const { a } = await pairedDevices()
     const source = await a.createSource({ type: 'article', key: 'y2021', fields: { title: 'Y' } })
