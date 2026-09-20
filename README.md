@@ -517,13 +517,20 @@ explaining why it's worth keeping. Saved quotes are browsable and
 searchable on their own in the "Quotes" tab (title/author, page, and
 annotation all match a search), each with a "View in source" link that
 reopens that source's detail view straight to the page it was quoted from
-(`SourceDetailDialog`'s new `initialPage` prop) — and, from any essay, in
+(`SourceDetailDialog`'s `initialPage` prop) — and, from any essay, in
 the quote-insertion dialog's own "From the quote bank" tab, so a quote saved
 once can be reused across as many drafts as it's actually relevant to,
-rather than living wherever it first got quoted. A quote whose source has
-since been deleted stays listed (nothing here is ever cascade-deleted along
-with its source — same tombstone convention as everything else) but loses
-its "View in source" link and drops out of the insertion dialog's bank tab,
+rather than living wherever it first got quoted. "View in source" only
+shows up when there's actually something left to view — gated on
+`hasQuotableText` (`sourcesRepo.ts`), the same PDF-or-extracted-text check
+`QuoteInsertDialog` uses to decide whether a source can be drag-selected
+from at all — so it shows for a source with a PDF *or* one that's
+text-only (reopening straight into `TextViewer` at the right page, same as
+a PDF reopens into `PdfViewer`), but not for a plain BibTeX-only source
+with nothing to jump back to. A quote whose source has since been deleted
+stays listed (nothing here is ever cascade-deleted along with its source —
+same tombstone convention as everything else) but loses its "View in
+source" link and drops out of the insertion dialog's bank tab either way,
 since there's no citation left to attach it to.
 
 **The graveyard.** "Send to graveyard" (the cross-and-ground-line icon, at

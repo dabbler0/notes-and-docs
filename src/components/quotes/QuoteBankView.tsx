@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'preact/hooks'
 import { deleteQuoteFromBank, listQuoteBank, matchesQuoteQuery } from '../../models/quoteBankRepo'
-import { listSources } from '../../models/sourcesRepo'
+import { hasQuotableText, listSources } from '../../models/sourcesRepo'
 import { citationLabel, displayAuthors, displayTitle } from '../../lib/bibtex'
 import { onSyncApplied } from '../../sync/syncEvents'
 import type { QuoteBankEntry, Source } from '../../models/types'
@@ -10,10 +10,13 @@ import { SourceDetailDialog } from '../sources/SourceDetailDialog'
  * Everything saved to the quote bank from a source's detail view, browsable
  * and searchable on its own — independent of any essay, since a quote
  * worth keeping is worth keeping before you know which draft (if any) it
- * ends up in. "View in source" jumps back to the original PDF at the page
- * it was quoted from; a quote whose source has since been deleted stays
- * listed (nothing here is ever cascade-deleted along with its source) but
- * loses that link, since there's nowhere left to jump to.
+ * ends up in. "View in source" jumps back to the page it was quoted from —
+ * the original PDF, or its extracted text if that's all the source has
+ * (see `hasQuotableText` in `sourcesRepo.ts`) — but only when there's
+ * still something there to jump back to: a plain BibTeX-only source has
+ * neither, and a quote whose source has since been deleted (nothing here
+ * is ever cascade-deleted along with its source) has lost the link
+ * entirely, so neither gets the button at all.
  */
 export function QuoteBankView() {
   const [entries, setEntries] = useState<QuoteBankEntry[]>([])
@@ -70,7 +73,7 @@ export function QuoteBankView() {
                 {e.annotation && <p className="quote-bank-annotation">{e.annotation}</p>}
                 <div className="card-meta">{source ? `${citationLabel(source.bibtex)}${e.page ? `, p. ${e.page}` : ''}` : '(source no longer available)'}</div>
                 <div className="quote-bank-actions">
-                  {source?.pdfBlobId && (
+                  {source && hasQuotableText(source) && (
                     <button
                       type="button"
                       className="btn btn-ghost btn-sm"
