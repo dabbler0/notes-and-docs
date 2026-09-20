@@ -748,6 +748,19 @@ merged elsewhere): the title snapshot is what keeps a fragment reading
 sensibly once that's happened, since the live node title obviously isn't
 there to ask anymore.
 
+A long enough graveyard scrolls on its own, inside `.graveyard-panel`,
+rather than growing the whole workspace taller than the screen — the same
+`flex: 1; min-height: 0` fix `.comments-panel` already needed and explains
+in its own doc comment. A flex item's default `min-height` is its own
+intrinsic content size, not zero, so without `min-height: 0` here too, a
+tall enough list of fragments would just keep growing `.comments-panel-shell`
+past the height `.workspace` actually has to give it — nothing in that
+chain has an `overflow: hidden` of its own to stop it, so the overflow
+bled out into `.main-area`, scrolling the *entire* workspace (topbar, tree,
+editor, all of it) together, rather than staying put while just the
+graveyard column scrolled internally the way `overflow-y: auto` was always
+meant to make it.
+
 **Autoformatting lists.** Typing `- ` or `* ` at the very start of an
 otherwise-empty line turns it into a bulleted list; `1. ` (any number, not
 just 1) turns it into a numbered one — the same shorthand most word

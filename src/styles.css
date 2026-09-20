@@ -1393,7 +1393,16 @@ select {
 .graveyard-panel {
   position: relative;
   width: 300px;
-  flex-shrink: 0;
+  /* `flex: 1` makes this fill whatever height .comments-panel-shell's
+     column has to give (same reasoning as .comments-panel's own — see its
+     doc comment), rather than sizing to its own content and pushing past
+     it; `min-height: 0` is what actually lets it shrink that far, since a
+     flex item's default min-height is its own intrinsic content size,
+     which is exactly the "grows the whole page instead of scrolling
+     internally" bug this fixes — overflow-y: auto only ever gets a chance
+     to kick in once this box is actually height-constrained. */
+  flex: 1;
+  min-height: 0;
   border-left: 1px solid var(--border);
   background: var(--surface);
   overflow-y: auto;
