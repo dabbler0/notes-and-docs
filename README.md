@@ -1801,6 +1801,50 @@ missing-site error, Hosting itself may not be fully provisioned yet for
 will sort that out; the checked-in `firebase.json`/`.firebaserc` don't
 need to change for it.
 
+## Installable / offline on Android
+
+The deployed (Firebase Hosting) build is a real installable PWA:
+`vite-plugin-pwa` (configured in `vite.config.ts`, only for the normal
+multi-file build — see that config's own comment for why `build:onefile`
+deliberately skips it: a service worker needs a real HTTPS origin, which a
+single file opened off disk or embedded elsewhere never has) generates a
+web app manifest and a Workbox service worker that precaches the entire
+app shell — JS, CSS, icons, and pdf.js's own worker script (`pdf.worker-
+*.mjs`, a couple MB on its own, which the plugin's *default* precache glob
+misses entirely — a real gap, since without it "works offline" would stop
+being true the moment someone actually opened a PDF). On Android, Chrome's
+own "Add to Home screen" / install prompt picks up the manifest
+(`name`/`icons`/`display: standalone`) and installs it as a standalone app
+with its own icon, no browser chrome — and once installed, the service
+worker serving everything from its own cache is what makes it keep working
+with no network at all, which is the whole point of "installed" here: this
+app's actual data already lives entirely in IndexedDB (see "How it's
+organized" above), so the only thing standing between "installed" and
+"works offline" was ever the app's own code being fetchable without a
+network round trip.
+
+The three PNG icons in `public/icons/` (a plain one at two sizes, plus a
+maskable variant with generous padding — Android can crop a maskable icon
+to a circle/squircle/rounded square, so its important content has to sit
+safely inside roughly the inner 80%, unlike the plain icons which can use
+the full canvas) were generated once from the existing `favicon.svg` logo
+rather than drawn separately, so the installed app's icon is the same mark
+already used for the browser tab. `registerType: 'autoUpdate'` means an
+already-installed copy silently picks up a new deploy's service worker in
+the background rather than needing an explicit "update available" prompt
+— appropriate for a single-maintainer prototype without a real release
+process, though a wider audience might want the update to at least
+announce itself before swapping the cache out from under an open tab.
+
+OCR (`lib/ocr.ts`) is the one real exception to "works offline once
+installed": it fetches tesseract.js's own worker/wasm from a CDN on first
+use, same as when running online in a browser tab — nothing about
+installing the app changes that, and precaching a third party's CDN
+resources into this app's own service worker isn't attempted here.
+Reading, writing, and quoting from anything already local (essays,
+already-extracted source text, an already-downloaded PDF) all work with no
+network at all, installed or not.
+
 ## What's stubbed / simplified in this prototype
 
 - `src/lib/pdf.ts` points pdf.js's `cMapUrl`/`standardFontDataUrl` at a
