@@ -364,21 +364,22 @@ export function SourceDetailDialog({
             </label>
             {!noPageNumbers && (
               <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 8 }}>
-                <span className="muted">Pages before the document's own page 1 (cover, title page, etc.)</span>
+                <span className="muted">Page offset (PDF page number − offset = printed page number)</span>
                 <input
                   type="number"
-                  min="0"
                   placeholder="0"
-                  value={pageOffset > 0 ? String(pageOffset) : ''}
+                  value={pageOffset !== 0 ? String(pageOffset) : ''}
                   onInput={(e) => setPageOffset(Number((e.target as HTMLInputElement).value) || 0)}
                   onBlur={savePageOffset}
                   style={{ width: 70, flexShrink: 0 }}
                 />
               </div>
             )}
-            {!noPageNumbers && pageOffset > 0 && (
+            {!noPageNumbers && pageOffset !== 0 && (
               <p className="muted" style={{ marginTop: 4, marginBottom: 0 }}>
-                A quote taken from page {pageOffset + 1} of the PDF will cite as page 1, and so on.
+                {pageOffset > 0
+                  ? `A positive offset is for pages before the document's own page 1 (a cover, a title page): a quote taken from page ${pageOffset + 1} of the PDF will cite as page 1, and so on.`
+                  : `A negative offset is for a work (like a journal article) whose PDF starts already numbered higher than 1: a quote taken from page 1 of the PDF will cite as page ${1 - pageOffset}, and so on.`}
               </p>
             )}
           </div>

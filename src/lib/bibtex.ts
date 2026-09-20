@@ -142,10 +142,14 @@ export function emptyEntry(key: string): BibtexEntry {
  * citation should actually display, honoring a source's own page-numbering
  * preferences (set in `SourceDetailDialog`): `null` (no page shown at all)
  * for a source marked as having no page numbers of its own, or the raw page
- * shifted by `pageOffset` for one whose stored PDF has some number of
- * unnumbered pages (a cover, a title page) before the document's own page 1.
- * Also `null` for a falsy raw page or an offset big enough to push the
- * result to zero or below, since neither is a real page to cite.
+ * shifted by `pageOffset` otherwise. `pageOffset` can run either direction:
+ * positive for a PDF with some number of unnumbered pages (a cover, a title
+ * page) before the document's own page 1, negative for a work — a journal
+ * article, typically — whose PDF starts already numbered higher than 1 (a
+ * PDF starting on the work's own printed page 153 wants an offset of -152,
+ * so its page 1 still shifts up to 153). Also `null` for a falsy raw page
+ * or an offset big enough to push the result to zero or below, since
+ * neither is a real page to cite.
  */
 export function citationPage(source: Source, page: number | undefined): number | null {
   if (!page || source.noPageNumbers) return null

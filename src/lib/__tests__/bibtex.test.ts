@@ -34,6 +34,11 @@ describe('citationPage', () => {
     expect(citationPage(source({ pageOffset: 3 }), 1)).toBeNull()
   })
 
+  it('adds instead of subtracting for a negative offset — a journal article whose PDF starts already numbered higher than 1', () => {
+    expect(citationPage(source({ pageOffset: -152 }), 1)).toBe(153)
+    expect(citationPage(source({ pageOffset: -152 }), 2)).toBe(154)
+  })
+
   it('always returns null when the source has no page numbers, offset or not', () => {
     expect(citationPage(source({ noPageNumbers: true }), 5)).toBeNull()
     expect(citationPage(source({ noPageNumbers: true, pageOffset: 2 }), 5)).toBeNull()

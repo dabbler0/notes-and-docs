@@ -683,7 +683,12 @@ citation drawn from it, whatever `page` happens to be on file for any given
 quote; a PDF with some number of unnumbered pages before the document's own
 page 1 (a cover, a title page) can instead be given a page offset, so a
 quote from raw PDF page 12 with an offset of 3 cites as page 9 — matching
-the document's own printed numbering instead of the PDF viewer's. Both are
+the document's own printed numbering instead of the PDF viewer's. The
+offset can run negative too, for the opposite shape of mismatch: a journal
+article whose PDF starts on page 1 of the *file* but page 153 of the
+*volume* it was excerpted from gets an offset of -152, so raw PDF page 1
+cites as page 153 and PDF page 2 as page 154 — same subtraction either way,
+just adding back what a negative offset takes away. Both are
 applied in exactly one place, `citationPage` in `lib/bibtex.ts` — it takes a
 raw page and returns either the shifted number or `null` (also `null` for an
 offset large enough to push the result to zero or below, since that's not a

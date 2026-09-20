@@ -38,10 +38,13 @@ export interface Source {
   /**
    * How many pages into the stored PDF the document's own printed page 1
    * actually starts — e.g. 3 for a PDF with a cover, title page, and blank
-   * page before the numbered content begins. `citationPage` (`lib/bibtex.ts`)
-   * subtracts this from whatever raw page a quote was taken from, so a
-   * citation reads with the document's own page numbers rather than the
-   * PDF viewer's. Irrelevant (and ignored) when `noPageNumbers` is set.
+   * page before the numbered content begins. Can be negative instead, for
+   * a work (a journal article, typically) whose PDF starts already
+   * numbered higher than 1 — e.g. -152 for one starting on the work's own
+   * printed page 153. `citationPage` (`lib/bibtex.ts`) subtracts this from
+   * whatever raw page a quote was taken from, so a citation reads with the
+   * document's own page numbers rather than the PDF viewer's. Irrelevant
+   * (and ignored) when `noPageNumbers` is set.
    */
   pageOffset?: number
   createdAt: number
