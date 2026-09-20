@@ -230,6 +230,43 @@ the app) needs a working internet connection the first time it's used in
 a given browser, and won't work in a fully offline or heavily
 network-restricted setting.
 
+**Re-running OCR.** OCR isn't always right the first time — a "Re-run OCR"
+link sits next to "Re-extract text" whenever a source has a PDF that isn't
+currently flagged as scanned (`!isScanned`; a genuinely scanned PDF still
+gets its own first-OCR prompt instead, since there's nothing yet to lose by
+overwriting it right away). Re-OCRing isn't just `ocrPdf` a second time,
+though: that function draws its new invisible text layer *on top of*
+whatever a page already has, which is exactly right the first time (nothing
+there yet to collide with) but would leave two overlapping, simultaneously-
+selectable text layers behind on a page that already has one — every
+re-recognized page would extract as its own text doubled up and
+interleaved with itself. `reOcrPdf` (`lib/ocr.ts`) avoids that by rebuilding
+each page from a blank slate instead of layering onto the existing one:
+render it to an image (discarding whatever content — real text, a prior
+OCR pass's invisible layer, doesn't matter — the page already had), embed
+that image as the new page's entire content, then lay a single fresh
+invisible text layer over it with the same `overlayTextLayer` `ocrPdf`
+uses. Same visual result, same "runs entirely in the browser" and
+CDN-on-first-use caveats as `ocrPdf`, just always starting clean.
+
+The bigger difference from first-time OCR is that `reOcrPdf`'s result never
+gets saved automatically — a re-OCR is a gamble that might not pay off, so
+`SourceDetailDialog` stages it as a standalone blob instead
+(`stageOcrPreview` in `sourcesRepo.ts`, which uploads the file without
+touching the source's own saved data at all) and swaps the PDF/text viewer
+over to it via a throwaway, not-persisted `Source`-shaped object pointing
+at that staged blob (`previewSource`/`displaySource`) — so it can be
+browsed, searched, and quoted from exactly like the real thing while a
+banner offers "Use this OCR" (`commitOcrPreview`, which reassigns the
+source's `pdfBlobId` to the already-uploaded staged blob and deletes the
+old one — no second upload needed) or "Keep the original"
+(`discardOcrPreview`, which just deletes the staged blob and leaves the
+source untouched). Every other PDF-management action is disabled while a
+preview is pending, forcing that decision before anything else happens to
+the PDF; closing the dialog (or deleting the source outright) without
+deciding discards the staged preview rather than leaving it as an orphaned
+blob in storage forever.
+
 **Quoting a source with nothing to select from.** A source with no PDF and
 no extracted text used to be a dead end for the quote bank — its detail
 view just said "BibTeX + comment only" and left it at that, even though

@@ -5,9 +5,9 @@ import { TextViewer } from './TextViewer'
 import { formatBibtex, parseBibtex } from '../../lib/bibtex'
 import { extractPageTexts, loadPdf } from '../../lib/pdf'
 import { formatBytes } from '../../lib/format'
-import { describeOcrError, looksLikeScannedPdf, ocrImage, ocrPdf } from '../../lib/ocr'
+import { describeOcrError, looksLikeScannedPdf, ocrImage, ocrPdf, reOcrPdf } from '../../lib/ocr'
 import { useSourceStorageBytes } from '../../lib/useSourceStorageBytes'
-import { convertSourceToTextOnly, deleteSource, getSourcePdfBlob, removeSourcePdf, setSourcePdf, updateSource } from '../../models/sourcesRepo'
+import { commitOcrPreview, convertSourceToTextOnly, deleteSource, discardOcrPreview, getSourcePdfBlob, removeSourcePdf, setSourcePdf, stageOcrPreview, updateSource } from '../../models/sourcesRepo'
 import { addQuoteToBank } from '../../models/quoteBankRepo'
 import type { Source } from '../../models/types'
 
@@ -47,9 +47,25 @@ export function SourceDetailDialog({
   // modes for — a text-only source (no pdfBlobId) always reads as text,
   // whatever this says.
   const [viewMode, setViewMode] = useState<'pdf' | 'text'>('pdf')
+  // A staged, not-yet-committed re-OCR result — set once reOcrPdf finishes,
+  // cleared (and its blob deleted) the moment the user accepts, rejects, or
+  // closes the dialog without deciding. While set, the viewer below shows
+  // this instead of the source's own saved PDF, via a throwaway
+  // Source-shaped object pointing at the staged blob (see previewSource).
+  const [ocrPreview, setOcrPreview] = useState<{ blobId: string; fileName: string; pageTexts: string[] } | null>(null)
   const storageBytes = useSourceStorageBytes(source)
   const isScanned = !!source.pdfBlobId && looksLikeScannedPdf(source.pageTexts)
   const hasViewer = !!source.pdfBlobId || (source.textOnly && source.pageTexts.length > 0)
+  const previewSource: Source | null = ocrPreview ? { ...source, pdfBlobId: ocrPreview.blobId, pageTexts: ocrPreview.pageTexts } : null
+  const displaySource = previewSource ?? source
+
+  /** Discards any staged-but-undecided re-OCR preview — called before
+   * closing the dialog so a preview the user never explicitly accepted or
+   * rejected doesn't linger as an orphaned blob in storage forever. */
+  async function handleClose() {
+    if (ocrPreview) await discardOcrPreview(ocrPreview.blobId)
+    onClose()
+  }
 
   async function saveComment() {
     source.comment = comment
@@ -187,6 +203,54 @@ export function SourceDetailDialog({
     }
   }
 
+  /**
+   * Unlike `handleOcrPdf` above (for a PDF with no usable text at all,
+   * where there's nothing to lose by overwriting it immediately), re-OCRing
+   * a PDF that already has text — a previous OCR pass someone's unhappy
+   * with, or even genuine embedded text — produces a result that's only
+   * sometimes actually better. Rather than commit to it right away, this
+   * stages the new PDF as a standalone blob (`stageOcrPreview`) and shows
+   * it in place of the source's own saved PDF (see `previewSource`) so it
+   * can be browsed and compared before `handleAcceptOcrPreview` or
+   * `handleRejectOcrPreview` decides what actually happens to it.
+   */
+  async function handleReOcr() {
+    if (!source.pdfBlobId) return
+    if (!confirm("Re-run OCR on this PDF? This runs entirely in your browser and can take a while — you'll be able to preview and compare the new result against what you already have before deciding whether to keep it.")) return
+    setPdfBusy(true)
+    try {
+      const blob = await getSourcePdfBlob(source)
+      if (!blob) return
+      const doc = await loadPdf(await blob.arrayBuffer())
+      const ocrBytes = await reOcrPdf(doc, (p) => setPdfStatus(`${p.status} (page ${p.page} of ${p.totalPages})`))
+      const ocrFile = new File([ocrBytes as BlobPart], source.pdfFileName || 'ocr.pdf', { type: 'application/pdf' })
+      const ocrDoc = await loadPdf(await ocrFile.arrayBuffer())
+      const pageTexts = await extractPageTexts(ocrDoc)
+      const blobId = await stageOcrPreview(ocrFile)
+      setOcrPreview({ blobId, fileName: ocrFile.name, pageTexts })
+      setViewMode('pdf')
+      setPage(1)
+    } catch (e) {
+      alert('Could not re-run OCR on this PDF: ' + describeOcrError(e))
+    } finally {
+      setPdfBusy(false)
+      setPdfStatus('')
+    }
+  }
+
+  async function handleAcceptOcrPreview() {
+    if (!ocrPreview) return
+    await commitOcrPreview(source, ocrPreview.blobId, ocrPreview.fileName, ocrPreview.pageTexts)
+    setOcrPreview(null)
+    onChanged()
+  }
+
+  async function handleRejectOcrPreview() {
+    if (!ocrPreview) return
+    await discardOcrPreview(ocrPreview.blobId)
+    setOcrPreview(null)
+  }
+
   async function handleConvertToTextOnly() {
     if (!confirm("Discard the PDF file and keep only its extracted text? This can't be undone — you'd need to re-upload the PDF to get the file itself back.")) return
     setPdfBusy(true)
@@ -237,13 +301,14 @@ export function SourceDetailDialog({
 
   async function handleDelete() {
     if (!confirm('Delete this source? This removes its PDF and BibTeX entry permanently.')) return
+    if (ocrPreview) await discardOcrPreview(ocrPreview.blobId)
     await deleteSource(source.id)
     onChanged()
     onClose()
   }
 
   return (
-    <Modal onClose={onClose} wide>
+    <Modal onClose={handleClose} wide>
       <h2>{source.bibtex.fields.title || source.bibtex.key}</h2>
       <div className="tab-row">
         <button className={`btn btn-sm${tab === 'bibtex' ? ' btn-primary' : ' btn-ghost'}`} onClick={() => setTab('bibtex')}>
@@ -336,12 +401,12 @@ export function SourceDetailDialog({
                   </button>
                 </div>
               )}
-              <label className="btn btn-ghost btn-sm" style={{ cursor: pdfBusy ? 'default' : 'pointer' }}>
+              <label className="btn btn-ghost btn-sm" style={{ cursor: pdfBusy || ocrPreview ? 'default' : 'pointer' }}>
                 {source.pdfBlobId ? 'Replace' : 'Add PDF'}
                 <input
                   type="file"
                   accept="application/pdf"
-                  disabled={pdfBusy}
+                  disabled={pdfBusy || !!ocrPreview}
                   style={{ display: 'none' }}
                   onChange={(e) => {
                     const f = (e.target as HTMLInputElement).files?.[0] ?? null
@@ -351,7 +416,7 @@ export function SourceDetailDialog({
                 />
               </label>
               {source.pdfBlobId && (
-                <button type="button" className="btn btn-ghost btn-sm" disabled={pdfBusy} onClick={handleRemovePdf}>
+                <button type="button" className="btn btn-ghost btn-sm" disabled={pdfBusy || !!ocrPreview} onClick={handleRemovePdf}>
                   Remove
                 </button>
               )}
@@ -368,15 +433,23 @@ export function SourceDetailDialog({
             {source.pdfBlobId && (
               <>
                 {' · '}
-                <button type="button" className="btn-link-muted" disabled={pdfBusy} onClick={handleReExtractText} title="Re-run text extraction against this PDF — useful if it was added before an improvement to how text gets extracted">
+                <button type="button" className="btn-link-muted" disabled={pdfBusy || !!ocrPreview} onClick={handleReExtractText} title="Re-run text extraction against this PDF — useful if it was added before an improvement to how text gets extracted">
                   Re-extract text
+                </button>
+              </>
+            )}
+            {source.pdfBlobId && !isScanned && (
+              <>
+                {' · '}
+                <button type="button" className="btn-link-muted" disabled={pdfBusy || !!ocrPreview} onClick={handleReOcr} title="Run OCR again — e.g. if the existing text (from a previous OCR pass, or the PDF's own) has a lot of mistakes. You'll get to compare the new result before deciding whether to keep it.">
+                  Re-run OCR
                 </button>
               </>
             )}
             {source.pdfBlobId && source.pageTexts.length > 0 && (
               <>
                 {' · '}
-                <button type="button" className="btn-link-muted" disabled={pdfBusy} onClick={handleConvertToTextOnly}>
+                <button type="button" className="btn-link-muted" disabled={pdfBusy || !!ocrPreview} onClick={handleConvertToTextOnly}>
                   Discard PDF, keep text only
                 </button>
               </>
@@ -385,18 +458,33 @@ export function SourceDetailDialog({
           {isScanned && (
             <p className="muted" style={{ marginTop: 0 }}>
               This PDF doesn't seem to have any selectable text — it looks scanned.{' '}
-              <button type="button" className="btn-link-muted" disabled={pdfBusy} onClick={handleOcrPdf}>
+              <button type="button" className="btn-link-muted" disabled={pdfBusy || !!ocrPreview} onClick={handleOcrPdf}>
                 OCR this PDF
               </button>{' '}
               to make it searchable and quotable.
             </p>
           )}
           {pdfStatus && <p className="muted">{pdfStatus}</p>}
+          {ocrPreview && (
+            <div className="field" style={{ marginTop: 0, marginBottom: 12, padding: 10, border: '1px solid var(--accent)', borderRadius: 8 }}>
+              <p style={{ margin: '0 0 8px' }}>
+                Previewing a fresh OCR pass below, in place of the original — browse it, then decide.
+              </p>
+              <div style={{ display: 'flex', gap: 8 }}>
+                <button type="button" className="btn btn-primary btn-sm" onClick={handleAcceptOcrPreview}>
+                  Use this OCR
+                </button>
+                <button type="button" className="btn btn-ghost btn-sm" onClick={handleRejectOcrPreview}>
+                  Keep the original
+                </button>
+              </div>
+            </div>
+          )}
           {hasViewer ? (
-            source.pdfBlobId && viewMode === 'pdf' ? (
-              <PdfViewer source={source} page={page} onPageChange={setPage} onSelectionChange={setPendingQuote} />
+            displaySource.pdfBlobId && viewMode === 'pdf' ? (
+              <PdfViewer key={ocrPreview?.blobId ?? 'saved'} source={displaySource} page={page} onPageChange={setPage} onSelectionChange={setPendingQuote} />
             ) : (
-              <TextViewer source={source} page={page} onPageChange={setPage} onSelectionChange={setPendingQuote} />
+              <TextViewer source={displaySource} page={page} onPageChange={setPage} onSelectionChange={setPendingQuote} />
             )
           ) : (
             <p className="muted">No PDF attached — this source is BibTeX + comment only. You can still add a quote by typing it in, or attach an image below to OCR it.</p>
@@ -448,7 +536,7 @@ export function SourceDetailDialog({
         </div>
       )}
       <div className="modal-actions">
-        <button className="btn" onClick={onClose}>
+        <button className="btn" onClick={handleClose}>
           Close
         </button>
       </div>

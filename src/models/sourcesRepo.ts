@@ -117,6 +117,41 @@ export async function setSourcePdf(source: Source, file: File, pageTexts: string
   if (oldBlobId) await backend.blobs.delete(oldBlobId)
 }
 
+/**
+ * Uploads a candidate re-OCR'd PDF as a standalone blob, without touching
+ * the source's own saved data at all — used to let `SourceDetailDialog`
+ * preview a fresh OCR pass (via a throwaway `Source`-shaped object pointing
+ * at this blob id) before the user decides whether to keep it. Paired with
+ * `commitOcrPreview` (keep it) or `discardOcrPreview` (throw it away); the
+ * caller is expected to always call exactly one of those once the user
+ * decides, so a staged preview never lingers as an orphaned blob.
+ */
+export async function stageOcrPreview(file: File): Promise<string> {
+  const blobId = id()
+  await backend.blobs.put(blobId, file)
+  return blobId
+}
+
+/** Discards a blob staged by `stageOcrPreview` that the user chose not to keep. */
+export async function discardOcrPreview(blobId: string): Promise<void> {
+  await backend.blobs.delete(blobId)
+}
+
+/**
+ * Commits a blob staged by `stageOcrPreview` as the source's real PDF —
+ * same effect as `setSourcePdf`, but reusing the blob `stageOcrPreview`
+ * already uploaded instead of writing the file a second time.
+ */
+export async function commitOcrPreview(source: Source, blobId: string, fileName: string, pageTexts: string[]): Promise<void> {
+  const oldBlobId = source.pdfBlobId
+  source.pdfBlobId = blobId
+  source.pdfFileName = fileName
+  source.pageTexts = pageTexts
+  source.textOnly = false
+  await updateSource(source)
+  if (oldBlobId) await backend.blobs.delete(oldBlobId)
+}
+
 /** Detaches a source's PDF entirely, reverting it to BibTeX + comment only. */
 export async function removeSourcePdf(source: Source): Promise<void> {
   const oldBlobId = source.pdfBlobId

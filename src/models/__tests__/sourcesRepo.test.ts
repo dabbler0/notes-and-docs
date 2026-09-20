@@ -4,7 +4,7 @@
  * — the two pieces behind the storage-size UI and the text-only viewer.
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { convertSourceToTextOnly, createSource, getSourcePdfBlob, getSourceStorageBytes, hasQuotableText, removeSourcePdf, searchPdfBank, setSourcePdf } from '../sourcesRepo'
+import { commitOcrPreview, convertSourceToTextOnly, createSource, discardOcrPreview, getSourcePdfBlob, getSourceStorageBytes, hasQuotableText, removeSourcePdf, searchPdfBank, setSourcePdf, stageOcrPreview } from '../sourcesRepo'
 import { emptyEntry } from '../../lib/bibtex'
 
 interface FakeStorageModule {
@@ -124,6 +124,48 @@ describe('searchPdfBank whitespace tolerance', () => {
     const hits = await searchPdfBank('split by')
     expect(hits).toHaveLength(1)
     expect(hits[0].snippet).not.toContain('\n')
+  })
+})
+
+describe('OCR preview staging (stageOcrPreview / commitOcrPreview / discardOcrPreview)', () => {
+  it('stages a blob without touching the source at all', async () => {
+    const source = await createSource(emptyEntry('x2020'), { pdfFile: pdfFile(1000), pageTexts: ['old text'] })
+    const originalBlobId = source.pdfBlobId
+
+    const previewBlobId = await stageOcrPreview(pdfFile(2000, 'reocr.pdf'))
+
+    expect(previewBlobId).not.toBe(originalBlobId)
+    expect(source.pdfBlobId).toBe(originalBlobId)
+    expect(source.pageTexts).toEqual(['old text'])
+    expect(await getSourcePdfBlob({ ...source, pdfBlobId: previewBlobId })).toBeDefined()
+  })
+
+  it('discardOcrPreview deletes the staged blob and leaves the source untouched', async () => {
+    const source = await createSource(emptyEntry('x2020'), { pdfFile: pdfFile(1000), pageTexts: ['old text'] })
+    const previewBlobId = await stageOcrPreview(pdfFile(2000, 'reocr.pdf'))
+
+    await discardOcrPreview(previewBlobId)
+
+    expect(await getSourcePdfBlob({ ...source, pdfBlobId: previewBlobId })).toBeUndefined()
+    expect(source.pdfBlobId).toBeDefined()
+    expect(await getSourcePdfBlob(source)).toBeDefined()
+  })
+
+  it('commitOcrPreview swaps in the staged blob as the real PDF and deletes the old one', async () => {
+    const source = await createSource(emptyEntry('x2020'), { pdfFile: pdfFile(1000), pageTexts: ['old text'] })
+    const oldBlobId = source.pdfBlobId!
+    const previewBlobId = await stageOcrPreview(pdfFile(2000, 'reocr.pdf'))
+
+    await commitOcrPreview(source, previewBlobId, 'reocr.pdf', ['new text'])
+
+    expect(source.pdfBlobId).toBe(previewBlobId)
+    expect(source.pdfFileName).toBe('reocr.pdf')
+    expect(source.pageTexts).toEqual(['new text'])
+    expect(source.textOnly).toBe(false)
+
+    const { backend } = (await import('../../storage')) as unknown as { backend: { blobs: { get(id: string): Promise<Blob | undefined> } } }
+    expect(await backend.blobs.get(oldBlobId)).toBeUndefined()
+    expect(await backend.blobs.get(previewBlobId)).toBeDefined()
   })
 })
 

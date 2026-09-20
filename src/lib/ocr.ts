@@ -122,3 +122,68 @@ export async function ocrPdf(originalBytes: ArrayBuffer, doc: PdfDoc, onProgress
     await worker.terminate()
   }
 }
+
+function canvasToBlob(canvas: HTMLCanvasElement, type: string, quality?: number): Promise<Blob> {
+  return new Promise((resolve, reject) => {
+    canvas.toBlob((blob) => (blob ? resolve(blob) : reject(new Error('Could not encode a rendered page as an image'))), type, quality)
+  })
+}
+
+/**
+ * Re-runs OCR on a PDF that may already have a text layer of its own —
+ * either from a previous run of `ocrPdf`, or genuine embedded text the
+ * document had all along. `ocrPdf` draws its new invisible text layer on
+ * top of whatever a page already had, which is correct and lossless the
+ * *first* time (there's nothing there yet to collide with) but would leave
+ * two overlapping, simultaneously-selectable text layers behind here —
+ * every re-recognized page would extract as its own text doubled up and
+ * interleaved with itself, which defeats the entire point of letting
+ * someone compare a fresh OCR pass against what they already had.
+ *
+ * Instead, each page is rebuilt from a blank slate: rendered to an image
+ * (discarding whatever content — real text, vector art, a prior OCR pass's
+ * invisible layer — the page already had) at the same OCR resolution
+ * `ocrPdf` recognizes against, reusing that exact rendering as both the new
+ * page's own visible content and tesseract's input, then given a single,
+ * fresh invisible text layer over that image via the same `overlayTextLayer`
+ * `ocrPdf` uses — exactly the shape a brand new scan-and-OCR would produce,
+ * regardless of what this PDF looked like internally beforehand. Visually
+ * the same (each page is reproduced at high resolution, sized back down to
+ * the original page's own dimensions), still entirely client-side, and
+ * still needs tesseract's CDN-hosted engine on first use (see `ocrPdf`'s
+ * own doc comment for that caveat).
+ *
+ * Deliberately returns just the new bytes rather than saving them as this
+ * source's PDF — the caller (`SourceDetailDialog`) is expected to let the
+ * user preview the result before deciding whether to keep it or discard it
+ * in favor of what they already had.
+ */
+export async function reOcrPdf(doc: PdfDoc, onProgress?: (p: OcrProgress) => void): Promise<Uint8Array> {
+  const worker = await createWorker('eng')
+  try {
+    const outDoc = await PDFDocument.create()
+    for (let i = 1; i <= doc.numPages; i++) {
+      onProgress?.({ page: i, totalPages: doc.numPages, status: 'Rendering page…' })
+      const canvas = document.createElement('canvas')
+      await renderPageToCanvas(doc, i, canvas, OCR_SCALE)
+
+      const pdfPage = await doc.getPage(i)
+      const { width, height } = pdfPage.getViewport({ scale: 1 })
+      const outPage = outDoc.addPage([width, height])
+      const imageBytes = await (await canvasToBlob(canvas, 'image/jpeg', 0.92)).arrayBuffer()
+      const image = await outDoc.embedJpg(imageBytes)
+      outPage.drawImage(image, { x: 0, y: 0, width, height })
+
+      onProgress?.({ page: i, totalPages: doc.numPages, status: 'Recognizing text…' })
+      const { data } = await worker.recognize(canvas, { pdfTextOnly: true }, { pdf: true })
+
+      if (data.pdf && data.pdf.length > 0) {
+        await overlayTextLayer(outDoc, i - 1, new Uint8Array(data.pdf))
+      }
+    }
+    onProgress?.({ page: doc.numPages, totalPages: doc.numPages, status: 'Saving…' })
+    return await outDoc.save()
+  } finally {
+    await worker.terminate()
+  }
+}
