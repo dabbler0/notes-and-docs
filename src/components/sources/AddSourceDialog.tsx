@@ -1,6 +1,7 @@
 import { useState } from 'preact/hooks'
 import { Modal } from '../Modal'
 import { parseBibtex, emptyEntry } from '../../lib/bibtex'
+import { parseCitationFields } from '../../lib/citationParse'
 import { loadPdf } from '../../lib/pdf'
 import { extractPageHtml, type ExtractionMode } from '../../lib/textExtraction'
 import { createSource } from '../../models/sourcesRepo'
@@ -8,6 +9,7 @@ import type { BibtexEntry } from '../../models/types'
 
 export function AddSourceDialog({ onClose, onCreated }: { onClose: () => void; onCreated: () => void }) {
   const [bibtexText, setBibtexText] = useState('')
+  const [citationText, setCitationText] = useState('')
   const [manualTitle, setManualTitle] = useState('')
   const [manualAuthor, setManualAuthor] = useState('')
   const [manualYear, setManualYear] = useState('')
@@ -21,6 +23,31 @@ export function AddSourceDialog({ onClose, onCreated }: { onClose: () => void; o
   const [extractionMode, setExtractionMode] = useState<ExtractionMode>('plain')
   const [busy, setBusy] = useState(false)
   const [status, setStatus] = useState('')
+
+  /**
+   * Best-effort fill from a pasted, already-formatted citation (APA, MLA,
+   * Chicago, IEEE, Harvard, ...) — what most sites' own "Cite this" button
+   * gives you, as opposed to actual BibTeX (the box above this one). Only
+   * ever *sets* a manual field the parse actually found something for,
+   * rather than blanking every field first — a field the parse didn't
+   * recognize (or recognized less confidently than something already
+   * typed by hand) is left exactly as it was, so running this after
+   * already fixing up a previous guess doesn't undo that fix. See
+   * `lib/citationParse.ts`'s own doc comment for what this can and can't
+   * reliably untangle; the fields it fills in are ordinary editable inputs
+   * either way, precisely because a wrong guess here is expected often
+   * enough to need a quick manual correction, not a rare failure.
+   */
+  function handleParseCitation() {
+    const fields = parseCitationFields(citationText)
+    if (fields.title) setManualTitle(fields.title)
+    if (fields.author) setManualAuthor(fields.author)
+    if (fields.year) setManualYear(fields.year)
+    if (fields.url) setManualUrl(fields.url)
+    if (fields.doi) setManualDoi(fields.doi)
+    if (fields.journal) setManualJournal(fields.journal)
+    if (fields.note) setManualNote(fields.note)
+  }
 
   async function handleSubmit(e: Event) {
     e.preventDefault()
@@ -93,6 +120,18 @@ export function AddSourceDialog({ onClose, onCreated }: { onClose: () => void; o
         </div>
         {parseBibtex(bibtexText).length === 0 && (
           <>
+            <div className="field">
+              <label>Or paste a formatted citation (APA, MLA, Chicago, IEEE, Harvard, …) to fill the fields below</label>
+              <textarea
+                rows={3}
+                placeholder='Smith, J. A. (2020). Title of the article. Journal of Examples, 12(3), 45-67.'
+                value={citationText}
+                onInput={(e) => setCitationText((e.target as HTMLTextAreaElement).value)}
+              />
+              <button type="button" className="btn btn-ghost" style={{ marginTop: 6 }} onClick={handleParseCitation} disabled={!citationText.trim()}>
+                Parse citation
+              </button>
+            </div>
             <div className="field-row">
               <div className="field">
                 <label>Title</label>

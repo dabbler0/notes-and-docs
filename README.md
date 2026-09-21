@@ -107,6 +107,39 @@ believe there's nothing left to push. The old blob is only deleted locally
 once the new one is safely stored. Either way, `updateSource` bumps
 `updatedAt`, so the edit propagates through sync like any other change.
 
+**Pasting a formatted citation.** Not every source you want to add gives you
+BibTeX — many sites' own "Cite this" button hands you a pre-formatted
+citation string instead (APA, MLA, Chicago, IEEE, Harvard, ...), with no
+structured export at all. "Add a source" has a second textarea, right above
+the manual fields, for exactly this: paste the citation, click "Parse
+citation," and `parseCitationFields` (`lib/citationParse.ts`) does a
+best-effort extraction into the same Title/Author/Year/URL/DOI/Journal
+fields the manual-entry path already has, using a battery of regex
+heuristics rather than a single fixed template, since the actual formatting
+varies a lot between styles and between sites' own house variants of a
+style. It pulls a DOI or bare URL out from anywhere in the string, prefers a
+parenthesized year (APA/Harvard/Chicago-author-date) but falls back to a
+bare one (IEEE often puts it last, unparenthesized), and looks for a quoted
+title (double quotes preferred, a bare single-quoted one as a Harvard
+fallback) to anchor where the author list ends and the venue/pages begin.
+Author-list splitting handles the "Last, First and Last, First" and "Last,
+First, First Last, and First Last" (MLA's 3+-author comma convention)
+shapes, collapses a trailing "et al." into a literal `others` (matching
+BibTeX's own convention for it), and deliberately declines to guess when
+the text before the anchor doesn't look enough like a name list at all
+(more than four space-separated words with no comma or "and" in it) rather
+than mislabeling a long author-less title as a person's name.
+
+This is explicitly a best-effort parse, not a guarantee: every field it
+fills in is the same plain editable input as the manual-entry path, and
+`handleParseCitation` only ever *sets* a field the parse found something
+for — it never blanks one, so a field you've already corrected by hand
+survives a second "Parse citation" click on revised text. Known gaps
+(documented in `citationParse.ts` itself rather than solved for): Vancouver
+style's abbreviated author lists without periods, non-Western name
+ordering, and a citation whose title comes before an unparenthesized year
+with no other delimiter to anchor on.
+
 The detail dialog itself (`SourceDetailDialog.tsx`) splits BibTeX/comment
 editing and PDF viewing/quoting into two tabs ("BibTeX & notes" and "PDF &
 quotes") rather than showing them side by side. They used to share a
