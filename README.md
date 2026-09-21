@@ -1031,6 +1031,41 @@ to be split across two adjacent text items (rare, but possible mid-line) is
 still found and counted by `findPdfMatches`, just not highlighted, since
 highlighting works item-by-item.
 
+The matching itself (`findPdfMatches`/`buildSearchRegex`, now in their own
+`lib/pageSearchCore.ts` — `lib/pdf.ts` just re-exports them, for every
+caller that still imports from there) doesn't run on the main thread at
+all: it's a plain regex scan over a whole document's extracted text, real
+work for a long one (confirmed directly: enough to visibly freeze
+typing/painting if run straight from a render), so `usePageSearch`
+dispatches it to `searchWorker.ts` — a tiny dedicated Web Worker with no
+dependency on anything else in `lib/pdf.ts` (deliberately not just
+importing that module into the worker, which would drag pdf.js's own
+worker setup and CDN URLs along for no reason) — and applies whatever
+result comes back once it does. Built via Vite's `?worker&inline` import
+suffix rather than the plainer `?worker` — the plain form emits the
+worker as its own separate physical chunk file, which `vite-plugin-
+singlefile` doesn't know how to fold into the single HTML file
+`build:onefile` promises (confirmed directly: it left a stray
+`searchWorker-*.js` sitting next to `index.html`, unreachable once that
+file is opened on its own elsewhere); `&inline` embeds the worker's own
+bundled code as a blob URL string right inside the importing chunk
+instead, so there's never a separate file to lose track of in either
+build mode.
+
+Two things keep this from turning into a burst of overlapping searches,
+one per keystroke, each racing the last: the query is debounced (200ms —
+long enough that typing a whole word collapses into one dispatched
+search, short enough that pausing to read still feels immediate) before
+it's ever sent to the worker, and every dispatch carries a `requestId`
+the worker echoes back untouched — a reply whose id isn't the *latest*
+one dispatched gets dropped rather than momentarily flashing stale
+results, in case a slow reply for an older query ever arrives after a
+newer one was already sent. Between the two, at most one search's result
+is ever live at a time. Verified directly: three keystrokes typed within
+the debounce window produced exactly one dispatched search, and an
+800,000-match scan across 200 synthetic pages left the main thread
+ticking at roughly its normal rate the entire time it ran.
+
 The "Page N of M" control between the Prev/Next buttons — `PageControls`,
 shared by `PdfViewer` and `TextViewer` the same way `PageSearchBar` is —
 is a real input, not just a label: typing a number and pressing Enter (or
