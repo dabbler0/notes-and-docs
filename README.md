@@ -939,6 +939,36 @@ that *is* visible, all the way to the root if every ancestor between it and
 the comment is collapsed, so the card lands at the outermost collapsed
 section's header instead of vanishing.
 
+Third: a comment's own record — body, resolved flag, everything but the
+`<mark>` itself — lives on whichever version was head at the moment it was
+added (`addComment`'s own `versionId` argument), but `commitNewVersion`
+always starts a fresh version's `comments` array empty (`makeVersion`), even
+though that version's `content` snapshot carries the mark right along with
+it (marks are just markup already in `draftContent`, not something
+versioning knows to treat specially). `CommentsPanel`'s row list and
+`SectionBlock`'s per-section open-comment badge both used to read only
+`headVersion(node).comments` — so the instant *any* later edit anywhere in
+that section triggered a new version (entering Comment mode with unsaved
+changes elsewhere, "make a new version," reverting and re-editing), every
+comment recorded against the version that had just stopped being head
+vanished from both, with no way back short of digging through version
+history — while its `<mark class="comment-anchor" data-comment-id>` kept
+sitting right there in the visible text the whole time, looking exactly
+like an unaddressed comment with nothing to click on. `commentIdsInContent`
+(`essaysRepo.ts`) reads the marks actually present in a node's *current*
+`draftContent`, independent of any one version, and `findComment` looks up
+each mark's underlying `Comment` across every version of the node rather
+than just head; `CommentsPanel` and `SectionBlock`'s badge both build their
+comment lists this way now; resolving/unresolving a comment
+(`setCommentResolved`) is likewise pointed at the version `findComment`
+actually found it on, not whatever's head at the time, since a stale
+comment's id was never in the current head's own `comments` array. A
+comment whose version has fallen behind head this way gets a small "From a
+previous version" note above it in the margin/list card, so it's clear the
+comment is talking about text that may have moved on since — it's still
+resolvable and still anchored exactly where its mark sits, just against
+older content.
+
 **Quoting a source.** One toolbar button ("Insert a quote from a source")
 opens `QuoteInsertDialog` — one quote-*selection* interface with two tabs
 ("From a source": pick any source, drag-select text in its embedded

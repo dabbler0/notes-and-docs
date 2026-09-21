@@ -1,10 +1,14 @@
 import { useEffect, useRef, useState } from 'preact/hooks'
-import { headVersion, setCommentResolved } from '../../models/essaysRepo'
+import { commentIdsInContent, findComment, setCommentResolved } from '../../models/essaysRepo'
 import type { Comment, EssayNode } from '../../models/types'
 
 interface Row {
   node: EssayNode
   comment: Comment
+  /** The id of the version that actually recorded this comment — not necessarily `node.headVersionId`; see `stale`. */
+  versionId: string
+  /** True when this comment's own version has fallen behind the node's current head (a later edit committed a new version without it) — its anchor mark is still sitting in the current content, which is the only reason it's showing up here at all, but a viewer should know it's talking about a version that's no longer current. */
+  stale: boolean
 }
 
 /**
@@ -43,8 +47,14 @@ export function CommentsPanel({
 
   const rows: Row[] = []
   for (const node of nodeMap.values()) {
-    for (const comment of headVersion(node).comments) {
-      rows.push({ node, comment })
+    // The document's current content (what's actually rendered/edited),
+    // not any one version's — a comment shows here exactly as long as its
+    // anchor mark is still somewhere in that content, regardless of which
+    // version last recorded the comment itself. See `commentIdsInContent`.
+    for (const commentId of new Set(commentIdsInContent(node.draftContent))) {
+      const found = findComment(node, commentId)
+      if (!found) continue
+      rows.push({ node, comment: found.comment, versionId: found.version.id, stale: found.version.id !== node.headVersionId })
     }
   }
   rows.sort((a, b) => b.comment.createdAt - a.comment.createdAt)
@@ -132,7 +142,7 @@ export function CommentsPanel({
   }, [nodeMap, mode])
 
   async function toggle(row: Row, resolved: boolean) {
-    await setCommentResolved(row.node, headVersion(row.node).id, row.comment.id, resolved)
+    await setCommentResolved(row.node, row.versionId, row.comment.id, resolved)
     onChanged()
   }
 
@@ -146,6 +156,7 @@ export function CommentsPanel({
             <div className="comment-section-label" onClick={() => onJumpTo?.(row.node.id)}>
               {row.node.title || 'Untitled section'}
             </div>
+            {row.stale && <div className="comment-stale-note">From a previous version of this section</div>}
             <div className="anchor">“{row.comment.anchorText}”</div>
             <div>{row.comment.body}</div>
             <label className="comment-checkbox-row">
@@ -170,6 +181,7 @@ export function CommentsPanel({
             data-comment-id={row.comment.id}
             style={{ top: positions.get(row.comment.id) ?? 0 }}
           >
+            {row.stale && <div className="comment-stale-note">From a previous version</div>}
             <div className="anchor">“{row.comment.anchorText}”</div>
             <div>{row.comment.body}</div>
             <label className="comment-checkbox-row">

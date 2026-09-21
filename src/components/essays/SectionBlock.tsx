@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks'
-import { commitNewVersion, deleteFootnote, deleteNodeOnly, headVersion, nodeFootnotes, revertToVersion, saveNode, updateFootnoteContent } from '../../models/essaysRepo'
+import { commentIdsInContent, commitNewVersion, deleteFootnote, deleteNodeOnly, findComment, headVersion, nodeFootnotes, revertToVersion, saveNode, updateFootnoteContent } from '../../models/essaysRepo'
 import { parseSegments, reconstructContent } from '../../lib/childMarkers'
 import { FrozenPreview } from './FrozenPreview'
 import type { EssayNode, Footnote, NodeVersion } from '../../models/types'
@@ -253,7 +253,15 @@ export function SectionBlock({
     setShowHistory(false)
   }
 
-  const openComments = head.comments.filter((c) => !c.resolved).length
+  // Counted the same way CommentsPanel finds its rows: by which comment
+  // marks are actually still in the current content, not by `head.comments`
+  // — a comment recorded against an older version stays open (and its mark
+  // stays right there in the text) across a later commitNewVersion, which
+  // resets the *new* version's own comments list to empty. See
+  // `commentIdsInContent`'s doc comment.
+  const openComments = Array.from(new Set(commentIdsInContent(node.draftContent)))
+    .map((commentId) => findComment(node, commentId)?.comment)
+    .filter((c): c is NonNullable<typeof c> => !!c && !c.resolved).length
   const comparingVersion: NodeVersion | undefined = comparingVersionId ? node.versions.find((v) => v.id === comparingVersionId) : undefined
   const sortedVersions = [...node.versions].sort((a, b) => b.createdAt - a.createdAt)
 

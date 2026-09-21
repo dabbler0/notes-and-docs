@@ -132,6 +132,43 @@ export async function setCommentResolved(node: EssayNode, versionId: string, com
   await saveNode(node)
 }
 
+/**
+ * All comment ids whose `<mark class="comment-anchor" data-comment-id>`
+ * still exists somewhere in `html` — i.e. comments whose anchor text is
+ * still actually present in the document. `commitNewVersion` snapshots
+ * whatever markup the draft currently contains (mark included) into a new
+ * version, but always starts that version's own `comments` array empty
+ * (see `makeVersion`) — a comment's data lives on whichever version was
+ * head at the moment it was added, which can fall behind the node's
+ * *current* head the very next time an edit gets committed, even though
+ * the mark it's attached to rides along in the content unchanged. This is
+ * "what marks are actually in the document right now," independent of
+ * which version(s) happen to still be tracking them.
+ */
+export function commentIdsInContent(html: string): string[] {
+  if (!html) return []
+  const doc = new DOMParser().parseFromString(html, 'text/html')
+  return Array.from(doc.querySelectorAll('[data-comment-id]')).map((el) => el.getAttribute('data-comment-id')!)
+}
+
+/**
+ * Finds a comment by id across every version of `node`, not just the head
+ * — see `commentIdsInContent`'s doc comment for why a comment's own
+ * version can be older than the node's current head while its mark is
+ * still sitting right there in the current content. Returns the version
+ * that actually recorded it, so a caller can both resolve/unresolve it
+ * (which needs that version's real id, not just whatever's head right now)
+ * and tell whether it belongs to the current head version or an earlier
+ * one.
+ */
+export function findComment(node: EssayNode, commentId: string): { version: NodeVersion; comment: Comment } | undefined {
+  for (const version of node.versions) {
+    const comment = version.comments.find((c) => c.id === commentId)
+    if (comment) return { version, comment }
+  }
+  return undefined
+}
+
 /** `node.footnotes` is optional (absent on any node saved before footnotes existed) — this is the one place that reads it, so "absent" and "empty" are treated identically everywhere else. */
 export function nodeFootnotes(node: EssayNode): Footnote[] {
   return node.footnotes ?? []
