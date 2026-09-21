@@ -1,4 +1,4 @@
-import { useState } from 'preact/hooks'
+import { useMemo, useState } from 'preact/hooks'
 import { Modal } from '../Modal'
 import { PdfViewer } from './PdfViewer'
 import { TextViewer } from './TextViewer'
@@ -55,7 +55,17 @@ export function SourceDetailDialog({
   // Source-shaped object pointing at the staged blob (see previewSource).
   const [ocrPreview, setOcrPreview] = useState<{ blobId: string; fileName: string; pageHtml: string[] } | null>(null)
   const storageBytes = useSourceStorageBytes(source)
-  const isScanned = !!source.pdfBlobId && looksLikeScannedPdf(source.pageHtml.map(htmlToPlainText))
+  // `looksLikeScannedPdf` parses every page's HTML (a DOMParser pass each,
+  // via `htmlToPlainText`) to decide if this PDF has no real text layer —
+  // real work whose cost scales with the *document's* page count, not with
+  // whatever page is currently showing. Left unmemoized, it reran on every
+  // render of this dialog, including every Prev/Next click (`setPage` lives
+  // here), which turned "flip to the next page" into "re-parse the entire
+  // document" for a long PDF while staying instant for a short one — the
+  // actual page being viewed never mattered. Memoized on `pageHtml` itself,
+  // it's now only redone when the extracted text actually changes (a fresh
+  // extraction, an OCR pass), not on every page turn.
+  const isScanned = useMemo(() => !!source.pdfBlobId && looksLikeScannedPdf(source.pageHtml.map(htmlToPlainText)), [source.pdfBlobId, source.pageHtml])
   const hasViewer = !!source.pdfBlobId || (source.textOnly && source.pageHtml.length > 0)
   const previewSource: Source | null = ocrPreview ? { ...source, pdfBlobId: ocrPreview.blobId, pageHtml: ocrPreview.pageHtml } : null
   const displaySource = previewSource ?? source

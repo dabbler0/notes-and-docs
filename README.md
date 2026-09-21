@@ -107,6 +107,29 @@ believe there's nothing left to push. The old blob is only deleted locally
 once the new one is safely stored. Either way, `updateSource` bumps
 `updatedAt`, so the edit propagates through sync like any other change.
 
+**Pagination cost scaling with document length, not page complexity.**
+Clicking Prev/Next in `SourceDetailDialog.tsx` calls `setPage`, which
+re-renders the whole dialog — including a line, `isScanned`, that decides
+whether to offer OCR by calling `looksLikeScannedPdf` on
+`source.pageHtml.map(htmlToPlainText)`. `htmlToPlainText` does a real
+`DOMParser` parse and tree-walk per page; left unmemoized, that `.map()`
+ran over *every page in the document* on *every render* of the dialog, so
+turning to the next page re-parsed the entire document from page 1, not
+just whatever page was becoming visible. A short document's total page
+count is cheap regardless, so this was invisible there; a long one paid
+for its full page count on every single click, while the actual page being
+viewed — simple or complex — never mattered, which is exactly the
+"pagination is slow for long documents even though no single page is more
+complex" symptom this caused. `isScanned` is now `useMemo`'d on
+`source.pageHtml` (and `pdfBlobId`), so it's recomputed only when the
+extracted text actually changes (a fresh extraction, an OCR pass) rather
+than on every page turn. Measured directly against a synthetic 600-page
+PDF (each page a full page of extracted text, not a trivial one-liner —
+this had to be dense enough for `htmlToPlainText`'s per-page parse to cost
+something real, or the effect doesn't show up): unfixed, each Next click
+took roughly 90–160ms with growing jitter; fixed, every click is a flat
+~65ms regardless of which page you're on.
+
 **Pasting a formatted citation.** Not every source you want to add gives you
 BibTeX — many sites' own "Cite this" button hands you a pre-formatted
 citation string instead (APA, MLA, Chicago, IEEE, Harvard, ...), with no
