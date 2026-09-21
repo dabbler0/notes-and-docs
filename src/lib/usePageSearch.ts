@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'preact/hooks'
+import { useEffect, useMemo, useRef, useState } from 'preact/hooks'
 import { buildSearchRegex, type PdfMatch } from './pdf'
 // `&inline` (not just `?worker`) — the plain `?worker` suffix emits the
 // worker as its own separate physical chunk file, which `vite-plugin-
@@ -104,6 +104,22 @@ export function usePageSearch(pageTexts: string[], page: number, onPageChange: (
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [searchQuery])
 
+  // A content fingerprint, not `pageTexts` itself, is what actually gates
+  // the effect below — cheap to compute (just reading each string's own
+  // `.length`, never scanning characters) but, unlike the array, a plain
+  // number that's genuinely equal across renders when the content hasn't
+  // changed. This is deliberate hardening, not just style: a caller that
+  // recomputes its `pageTexts` array fresh every render (a `.map()` with
+  // no memoization, say) would otherwise hand this hook a new array
+  // *identity* on every single render even when the content is identical
+  // — which, depended on directly, reruns the effect below every render,
+  // which dispatches a search, whose reply updates state, which triggers
+  // another render, forever. Exactly this happened once already (fixed at
+  // its own source in `TextViewer.tsx`, which wasn't memoizing its own
+  // derived page-text array) — this fingerprint means the same mistake in
+  // some future caller can't reproduce it here too.
+  const pageTextsFingerprint = useMemo(() => pageTexts.reduce((sum, t) => sum + t.length + 1, 0), [pageTexts])
+
   // Not debounced: `pageTexts` changing (a different source opened, a page
   // re-extracted) isn't something the user just typed and might still be
   // mid-keystroke on, so there's no reason to wait before re-running
@@ -111,7 +127,7 @@ export function usePageSearch(pageTexts: string[], page: number, onPageChange: (
   useEffect(() => {
     if (searchQuery.trim()) dispatchSearch(searchQuery)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pageTexts])
+  }, [pageTextsFingerprint])
 
   const activeMatch = matches[matchIndex] ?? null
 

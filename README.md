@@ -1066,6 +1066,27 @@ the debounce window produced exactly one dispatched search, and an
 800,000-match scan across 200 synthetic pages left the main thread
 ticking at roughly its normal rate the entire time it ran.
 
+That worker/debounce rewrite shipped with a real bug of its own, worth
+recording since it's an easy one to reintroduce: the effect that
+re-dispatches a search when `pageTexts` changes depended on `pageTexts`
+by *reference*, and `TextViewer.tsx` was computing its own `pageTexts`
+(`pageHtml.map(htmlToPlainText)`) fresh, unmemoized, on every render —
+`PdfViewer.tsx` already wrapped the equivalent line in a `useMemo` keyed
+on `source.pageHtml`, but this one didn't. A fresh array has a new
+identity every render even when its contents are identical, so the
+effect fired on *every* render, dispatching a new search each time — and
+since a search's reply updates state (jumping back to the first match),
+that triggered another render, which dispatched another search, forever.
+From the outside this looked exactly like "the document never finishes
+rendering, endlessly snapping back to the first match" — because that's
+what was actually happening. Fixed at the source (`TextViewer.tsx` now
+memoizes the same way `PdfViewer.tsx` already did), and hardened in
+`usePageSearch` itself so the same mistake in some future caller can't
+reproduce it: the effect depends on a cheap content *fingerprint* (each
+page's own `.length`, summed — never scanning characters) computed from
+`pageTexts`, not the array reference itself, so a fresh array with
+unchanged content no longer looks like a change at all.
+
 The "Page N of M" control between the Prev/Next buttons — `PageControls`,
 shared by `PdfViewer` and `TextViewer` the same way `PageSearchBar` is —
 is a real input, not just a label: typing a number and pressing Enter (or

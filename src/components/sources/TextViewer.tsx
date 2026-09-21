@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'preact/hooks'
+import { useEffect, useMemo, useRef } from 'preact/hooks'
 import { buildSearchRegex } from '../../lib/pdf'
 import { sanitizePageHtml } from '../../lib/sanitizeHtml'
 import { htmlToPlainText } from '../../lib/textExtraction'
@@ -108,8 +108,18 @@ export function TextViewer({
   // The search bar's own corpus is always plain text, regardless of which
   // extractor produced this page's HTML — searching layout-mode's raw
   // markup directly would mean matching against literal style attributes,
-  // not the words on the page.
-  const plainPageTexts = pageHtml.map(htmlToPlainText)
+  // not the words on the page. Memoized on `pageHtml` itself, not
+  // recomputed fresh every render — `usePageSearch` re-dispatches a search
+  // whenever this array's *identity* changes (so switching sources or
+  // re-extracting text re-runs the current query against the new text),
+  // and a fresh `.map()` result every render would have a new identity
+  // every time regardless of whether `pageHtml` actually changed. That
+  // was a real, shipped bug, not a hypothetical: it re-dispatched a search
+  // on every render, which — once a reply came back and updated state —
+  // caused another render, which dispatched another search, forever;
+  // confirmed directly as the cause of a page that never finished
+  // rendering, endlessly snapping back to the first match instead.
+  const plainPageTexts = useMemo(() => pageHtml.map(htmlToPlainText), [pageHtml])
   const search = usePageSearch(plainPageTexts, clamped, onPageChange)
   const { searchQuery, activeMatch } = search
   const iframeRef = useRef<HTMLIFrameElement>(null)
