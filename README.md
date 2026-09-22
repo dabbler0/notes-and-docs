@@ -517,6 +517,74 @@ re-extracted and saved back through the ordinary `setSourcePdf` path — the
 same one an "Add PDF" or "Replace" upload goes through — rather than
 through the text-only path.
 
+**Downloading a source's PDF.** "Download," next to a PDF-backed source's
+"Remove" button, hands back the exact bytes originally uploaded
+(`getSourcePdfBlob` + `downloadBlob`) under the original filename
+(`pdfFileName`, recorded at upload time) — nothing re-derived or
+re-encoded, the same file you'd get back out of any other document store.
+
+**Experimental: downloading extracted text as a sectioned EPUB.**
+"Download as EPUB (experimental)," available on any source with extracted
+`pageHtml` (PDF-backed or text-only, either extraction mode), best-effort
+reconstructs the document's own structure — section headings, running
+headers/footers/page numbers, footnotes, scene breaks — well enough to
+build a real EPUB an e-reader can show a proper table of contents for and
+jump around in, rather than one long undifferentiated wall of text. All of
+the actual work lives in `lib/epub/`:
+
+- `layoutParser.ts` reduces one page of `'layout'`-mode `pageHtml` (see
+  above) back down to an ordered list of lines, each carrying the position
+  and font-size metadata a plain reading-order string doesn't have —
+  deliberately reusing the extractor's own `<br>`/`<br><br>` markup to tell
+  a line-wrap from a paragraph break, rather than re-deriving that from raw
+  coordinates and risking a second opinion that disagrees with the
+  extractor's own gap heuristic (`separatorForGap`).
+- `classify.ts` turns those lines (or, for a `'plain'`-mode source with no
+  position/size data at all, its bare `<p>`/`<br>` structure) into an
+  ordered list of typed blocks — heading, paragraph, footnote, section
+  break. A *running* header/footer/page-number is recognized by
+  repetition: the same normalized text (digits folded to a placeholder, so
+  a page number "repeats" against itself) recurring near the top or bottom
+  of a large enough fraction of pages, which only kicks in past a 3-page
+  minimum since there's no meaningful "repeats across pages" signal below
+  that. A heading is a single, isolated line meaningfully larger than the
+  document's own weighted-mode body font size (or, lacking that, an
+  all-caps short line at body size) — font size buckets, largest first, map
+  to heading levels 1-3. A footnote is a contiguous run of undersized lines
+  trailing off the bottom of a page, split into individual notes at
+  `\d+\.`/`*`/`†`-style markers. A section break is a paragraph-to-paragraph
+  gap unusually large *relative to this document's own typical paragraph
+  spacing* — comparing it against same-paragraph line-wrap spacing instead
+  (an earlier version's actual bug, caught by downloading a real generated
+  PDF's EPUB and finding a spurious break between two perfectly ordinary
+  paragraphs) meant almost every paragraph boundary looked "unusually
+  large" by comparison and got misflagged. A lightweight cross-page
+  merge (previous page's last paragraph doesn't end in sentence-ending
+  punctuation, next page's first paragraph starts with a lowercase letter)
+  stitches a sentence PDF pagination broke across a page boundary back into
+  one paragraph rather than leaving it split in two. None of this is exact
+  — same spirit as `lib/citationParse.ts`'s best-effort citation
+  parsing — and it works meaningfully better on `'layout'`-mode text (real
+  position/size to work from) than `'plain'`-mode (repetition and a few
+  textual conventions only, no way to confirm a footnote by its font size
+  at all).
+- `buildEpub.ts` assembles an actual EPUB 3 file (a zip with the format's
+  required internal structure — `mimetype` first and stored uncompressed,
+  `META-INF/container.xml`, `content.opf`, an EPUB3 `nav.xhtml` plus a
+  `toc.ncx` for older readers, one XHTML file per detected top-level
+  section) via `jszip`, one chapter per heading so a reader's own table of
+  contents can jump straight to any of them. A footnote becomes an
+  `<aside epub:type="footnote">`, semantically set apart from body text, in
+  the same reading-order position it was found — not cross-linked to an
+  inline marker in its paragraph, since reliably locating *which* word in
+  the body a given footnote marker belonged to turned out to be far less
+  certain than finding the footnote's own text in the first place, so
+  that's left undone rather than risk a wrong link.
+
+Direct download only for now — not wired into sync, backup, or anywhere
+else a generated file would need to be kept around, per its "experimental"
+label.
+
 Tesseract.js does fetch its OCR engine and English-language model from a
 CDN the first time OCR actually runs — the same jsDelivr-hosted pattern
 this app already relies on for pdf.js's own cmap/font data (see
