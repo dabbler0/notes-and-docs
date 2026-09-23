@@ -14,6 +14,21 @@
  * of a saved string, and reconstructContent() below writes fresh ones back
  * by walking the live DOM (where a mounted child shows up as a nested
  * `.section-block[data-node-id]`, not as a marker).
+ *
+ * An inline comment's own marker (see `Comment.displayMode` in
+ * models/types.ts) is a *different* kind of marker, deliberately not part
+ * of this system at all: it's never a segment boundary — it's plain,
+ * ordinary inline content sitting *inside* one text segment, the same way
+ * a footnote's `<sup class="footnote-ref">` or a citation chip already is.
+ * An earlier version of this feature tried making it a segment boundary
+ * (so its own rich body could mount as a real component in place) and hit
+ * a real layout bug doing it: splitting a `<p>` mid-paragraph via
+ * `parseSegments` re-wraps *each half* in its own `<p>`, so the two text
+ * runs on either side of the marker always rendered as separate
+ * paragraphs, never on the same line — exactly wrong for something meant
+ * to read inline, mid-sentence. See `SectionBlock`'s own inline-comment
+ * rendering for how the marker (kept empty, `data-preview` refreshed live
+ * from the comment's own body) and its editing popover work instead.
  */
 
 const MARKER_CLASS = 'child-embed'
@@ -22,14 +37,14 @@ export function markerHtml(childId: string): string {
   return `<div class="${MARKER_CLASS}" data-child-id="${childId}" contenteditable="false"></div>`
 }
 
+export type Segment = { kind: 'text'; html: string } | { kind: 'child'; childId: string }
+
 /** All child ids referenced by `html`, in document order. */
 export function getChildIds(html: string): string[] {
   if (!html) return []
   const doc = new DOMParser().parseFromString(html, 'text/html')
   return Array.from(doc.querySelectorAll(`[data-child-id]`)).map((el) => el.getAttribute('data-child-id')!)
 }
-
-export type Segment = { kind: 'text'; html: string } | { kind: 'child'; childId: string }
 
 /**
  * Splits `html` into the alternating (text, child, text, child, …, text)

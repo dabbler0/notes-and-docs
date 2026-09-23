@@ -1,9 +1,11 @@
 import { useEffect, useRef, useState } from 'preact/hooks'
-import { addFootnote, createChildNode, addComment, getEssay, getNode, loadNodeMap, moveNode, saveEssay, saveNode } from '../../models/essaysRepo'
+import { addFootnote, createChildNode, addComment, findCommentById, getEssay, getNode, loadNodeMap, moveNode, saveEssay, saveNode } from '../../models/essaysRepo'
+import { deleteComment, promoteComment, toggleCommentDisplayMode } from './commentActions'
 import { addToGraveyard } from '../../models/graveyardRepo'
 import { citationHtml, displayTitle } from '../../lib/bibtex'
 import { extractAroundRange, insertHtmlAtRange } from '../../lib/selection'
 import { escapeAttr, escapeHtml } from '../../lib/html'
+import { htmlToPlainText } from '../../lib/textExtraction'
 import { id } from '../../lib/id'
 import { buildParentMap, isPlaceholderTitle, placeholderTitle } from '../../lib/treeNumbering'
 import { getChildIds, reconstructContent, markerHtml, type MarkerPlacement } from '../../lib/childMarkers'
@@ -11,7 +13,7 @@ import type { Essay, EssayNode, Source } from '../../models/types'
 import { Icon } from '../Icon'
 import { SectionBlock } from './SectionBlock'
 import { NodeTree } from './NodeTree'
-import { CommentsPanel } from './CommentsPanel'
+import { CommentsPanel, CommentCard } from './CommentsPanel'
 import { GraveyardPanel } from './GraveyardPanel'
 import { CitationPickerDialog } from './CitationPickerDialog'
 import { QuoteInsertDialog } from './QuoteInsertDialog'
@@ -50,13 +52,16 @@ export function EssayWorkspace({ essayId, onBack }: { essayId: string; onBack: (
   const [showExport, setShowExport] = useState(false)
   const [pendingComment, setPendingComment] = useState<{
     nodeId: string
-    /** null for a section-level ('node') comment — there's no selection to wrap. */
-    range: Range | null
-    anchorKind: 'text' | 'node'
+    range: Range
+    anchorKind: 'text'
+    displayMode: 'margin' | 'inline'
     text: string
     anchorRect: { top: number; bottom: number; left: number; right: number }
   } | null>(null)
   const commentWidgetRef = useRef<HTMLDivElement>(null)
+  /** The editing popover opened by clicking an inline comment's own marker in the document (see `handleDocClick`) — null when none is open. */
+  const [openInlineComment, setOpenInlineComment] = useState<{ nodeId: string; commentId: string; anchorRect: { top: number; bottom: number; left: number; right: number } } | null>(null)
+  const inlineCommentWidgetRef = useRef<HTMLDivElement>(null)
   const [focusTitleId, setFocusTitleId] = useState<string | null>(null)
   const [focusFootnoteId, setFocusFootnoteId] = useState<string | null>(null)
 
@@ -92,6 +97,23 @@ export function EssayWorkspace({ essayId, onBack }: { essayId: string; onBack: (
     return () => document.removeEventListener('mousedown', onDown, true)
   }, [pendingComment])
 
+  // Same idea for the inline comment editing popover — dismissing it also
+  // reloads, so the marker's own preview text (only ever refreshed when a
+  // section resyncs from a fresh draftContent — see SectionBlock's
+  // `refreshInlineCommentPreviews`) picks up whatever was just edited.
+  useEffect(() => {
+    if (!openInlineComment) return
+    function onDown(e: MouseEvent) {
+      if (inlineCommentWidgetRef.current && !inlineCommentWidgetRef.current.contains(e.target as Node)) {
+        setOpenInlineComment(null)
+        reload()
+      }
+    }
+    document.addEventListener('mousedown', onDown, true)
+    return () => document.removeEventListener('mousedown', onDown, true)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [openInlineComment])
+
   async function saveEssayTitle() {
     if (!essay) return
     essay.title = essayTitle || 'Untitled essay'
@@ -120,10 +142,25 @@ export function EssayWorkspace({ essayId, onBack }: { essayId: string; onBack: (
    * shard is vertically closest and place the cursor at its end, rather
    * than leaving the click a no-op.
    */
+  /** A click anywhere in the document — checked for an inline comment marker first (opens its editing popover; see `openInlineComment`), then handed to `handleDocMissClick` below for its own, unrelated fallback. */
+  function handleDocClick(e: MouseEvent) {
+    const marker = (e.target as HTMLElement).closest<HTMLElement>('.inline-comment-marker[data-comment-id]')
+    if (marker) {
+      const nodeId = marker.closest('[data-node-id]')?.getAttribute('data-node-id')
+      const commentId = marker.getAttribute('data-comment-id')
+      if (nodeId && commentId) {
+        const rect = marker.getBoundingClientRect()
+        setOpenInlineComment({ nodeId, commentId, anchorRect: { top: rect.top, bottom: rect.bottom, left: rect.left, right: rect.right } })
+      }
+      return
+    }
+    handleDocMissClick(e)
+  }
+
   function handleDocMissClick(e: MouseEvent) {
     if (commentMode) return // nothing is editable in comment mode — this fallback would have nowhere useful to send focus
     const target = e.target as HTMLElement
-    if (target.closest('.node-content, button, input, textarea, a, .comment-widget, .history-dropdown')) return
+    if (target.closest('.node-content, button, input, textarea, a, .comment-widget, .inline-comment-marker, .history-dropdown')) return
     const container = docScrollRef.current
     if (!container) return
     const shards = Array.from(container.querySelectorAll<HTMLDivElement>('.node-content'))
@@ -357,50 +394,54 @@ export function EssayWorkspace({ essayId, onBack }: { essayId: string; onBack: (
       nodeId: node.id,
       range: range.cloneRange(),
       anchorKind: 'text',
+      displayMode: 'margin',
       text,
       anchorRect: { top: rect.top, bottom: rect.bottom, left: rect.left, right: rect.right },
     })
   }
 
+  /** A range collapsed at the very end of `el`'s own content — used by `beginComment` as its fallback insertion point when there's no real selection to anchor to. */
+  function collapseToEnd(el: HTMLElement): Range {
+    const r = document.createRange()
+    r.selectNodeContents(el)
+    r.collapse(false)
+    return r
+  }
+
+  /** A `DOMRect` is only useful for positioning the comment popover once it actually has some extent — a collapsed range/caret right at the very start of an empty, unrendered shard can report all zeroes, same failure mode `commentWidgetStyle`'s own caller has to guard against elsewhere. */
+  function usefulRect(r: DOMRect): boolean {
+    return r.width > 0 || r.height > 0 || r.top > 0 || r.left > 0
+  }
+
   /**
    * The toolbar's "Comment" button — the primary way to add a comment now,
    * usable whether or not comment mode is on (requirement: comment mode
-   * shouldn't be the *only* way to add one). Selected text opens the
-   * ordinary text-anchored composer, same as selecting text in comment mode
-   * does; nothing selected (or no section focused at all) falls back to a
-   * whole-section comment instead, positioned near that section's own
-   * heading, satisfying "comments attached to sections" without needing any
-   * text highlighted at all.
+   * shouldn't be the *only* way to add one). Highlighted text opens the
+   * ordinary margin composer, same as selecting text in comment mode does
+   * — the mark wraps whatever's selected. Nothing highlighted creates an
+   * *inline* comment instead, anchored to the empty mark left right at the
+   * cursor (or at the end of the section's text, if there's no cursor
+   * position to speak of) — see `Comment.displayMode`'s own doc comment.
    */
   function beginComment() {
     const range = savedRange.current
     const el = activeEditorEl.current
     const node = activeNode()
-    if (!node) {
+    if (!node || !el) {
       alert('Click into a section first.')
       return
     }
-    const usableRange = range && el?.contains(range.commonAncestorContainer) ? range : null
-    const text = usableRange ? usableRange.toString().trim() : ''
-    if (usableRange && text) {
-      const rect = usableRange.getBoundingClientRect()
-      setPendingComment({
-        nodeId: node.id,
-        range: usableRange.cloneRange(),
-        anchorKind: 'text',
-        text,
-        anchorRect: { top: rect.top, bottom: rect.bottom, left: rect.left, right: rect.right },
-      })
-      return
-    }
-    const headerEl = document.querySelector(`[data-node-id="${node.id}"] > .section-header`) as HTMLElement | null
-    const rect = headerEl?.getBoundingClientRect()
+    const usableRange = range && el.contains(range.commonAncestorContainer) ? range : collapseToEnd(el)
+    const text = usableRange.collapsed ? '' : usableRange.toString().trim()
+    const rect = usableRange.getBoundingClientRect()
+    const anchorRect = usefulRect(rect) ? rect : el.getBoundingClientRect()
     setPendingComment({
       nodeId: node.id,
-      range: null,
-      anchorKind: 'node',
-      text: '',
-      anchorRect: rect ? { top: rect.top, bottom: rect.bottom, left: rect.left, right: rect.right } : { top: 100, bottom: 130, left: 100, right: 300 },
+      range: usableRange.cloneRange(),
+      anchorKind: 'text',
+      displayMode: usableRange.collapsed || !text ? 'inline' : 'margin',
+      text,
+      anchorRect: { top: anchorRect.top, bottom: anchorRect.bottom, left: anchorRect.left, right: anchorRect.right },
     })
   }
 
@@ -412,7 +453,7 @@ export function EssayWorkspace({ essayId, onBack }: { essayId: string; onBack: (
     // margin view finds *this* comment's own anchor in the DOM afterward,
     // rather than just the nearest one.
     const commentId = id()
-    if (pendingComment.anchorKind === 'text' && pendingComment.range) {
+    if (pendingComment.range) {
       try {
         const mark = document.createElement('mark')
         mark.className = 'comment-anchor'
@@ -420,12 +461,20 @@ export function EssayWorkspace({ essayId, onBack }: { essayId: string; onBack: (
         const contents = pendingComment.range.extractContents()
         mark.appendChild(contents)
         pendingComment.range.insertNode(mark)
+        if (pendingComment.displayMode === 'inline') {
+          const marker = document.createElement('span')
+          marker.className = 'inline-comment-marker'
+          marker.setAttribute('data-comment-id', commentId)
+          marker.setAttribute('data-preview', htmlToPlainText(body))
+          marker.setAttribute('contenteditable', 'false')
+          mark.after(marker)
+        }
         await persistActiveNode(node)
       } catch {
         /* fall back to just recording the comment without an inline mark */
       }
     }
-    await addComment(node, { anchorKind: pendingComment.anchorKind, anchorText: pendingComment.text, body, commentId })
+    await addComment(node, { anchorKind: pendingComment.anchorKind, anchorText: pendingComment.text, body, commentId, displayMode: pendingComment.displayMode })
     setPendingComment(null)
     reload()
   }
@@ -647,7 +696,7 @@ export function EssayWorkspace({ essayId, onBack }: { essayId: string; onBack: (
             <div className="spacer" />
           </div>
 
-          <div className={`editor-scroll doc-scroll${commentMode ? ' comment-mode' : ''}`} ref={docScrollRef} onMouseUp={handleMouseUpForComments} onClick={handleDocMissClick}>
+          <div className={`editor-scroll doc-scroll${commentMode ? ' comment-mode' : ''}`} ref={docScrollRef} onMouseUp={handleMouseUpForComments} onClick={handleDocClick}>
             <SectionBlock
               node={rootNode}
               nodeMap={nodeMap}
@@ -745,10 +794,43 @@ export function EssayWorkspace({ essayId, onBack }: { essayId: string; onBack: (
           className="comment-widget"
           style={commentWidgetStyle(pendingComment.anchorRect)}
         >
-          <p className="comment-widget-quote">{pendingComment.anchorKind === 'text' ? `“${pendingComment.text}”` : 'Comment on this whole section'}</p>
+          <p className="comment-widget-quote">{pendingComment.text ? `“${pendingComment.text}”` : 'New inline comment, right here'}</p>
           <CommentComposer onCancel={() => setPendingComment(null)} onSubmit={submitComment} />
         </div>
       )}
+
+      {openInlineComment &&
+        (() => {
+          const node = nodeMap.get(openInlineComment.nodeId)
+          const comment = node && findCommentById(node, openInlineComment.commentId)
+          if (!node || !comment) return null
+          return (
+            <div ref={inlineCommentWidgetRef} className="comment-widget inline-comment-widget" style={commentWidgetStyle(openInlineComment.anchorRect)}>
+              <CommentCard
+                node={node}
+                comment={comment}
+                depth={0}
+                onChanged={reload}
+                onDelete={async (n, commentId) => {
+                  if (!confirm('Delete this comment, and everything replied or commented on it?')) return
+                  await deleteComment(n, commentId)
+                  setOpenInlineComment(null)
+                  reload()
+                }}
+                onToggleDisplayMode={async (n, commentId, target) => {
+                  await toggleCommentDisplayMode(n, commentId, target)
+                  setOpenInlineComment(null)
+                  reload()
+                }}
+                onPromote={async (n, commentId) => {
+                  await promoteComment(n, commentId)
+                  setOpenInlineComment(null)
+                  reload()
+                }}
+              />
+            </div>
+          )
+        })()}
 
       {showCitation && <CitationPickerDialog onClose={() => setShowCitation(false)} onSelect={insertCitation} />}
       {showQuoteDialog && <QuoteInsertDialog onClose={() => setShowQuoteDialog(false)} onInsertBlock={insertQuote} onInsertInline={insertInlineQuote} />}

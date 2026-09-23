@@ -47,7 +47,7 @@ export function FrozenPreview({
         {segments.map((seg, i) =>
           seg.kind === 'text' ? (
             <div key={`t-${i}`} className={`node-content frozen-content${isRoot ? '' : ' leaf-outline'}`} dangerouslySetInnerHTML={{ __html: seg.html }} />
-          ) : nodeMap.has(seg.childId) ? (
+          ) : seg.kind === 'child' && nodeMap.has(seg.childId) ? (
             <FrozenPreview key={seg.childId} content={nodeMap.get(seg.childId)!.draftContent} title={nodeMap.get(seg.childId)!.title} nodeMap={nodeMap} depth={depth + 1} isRoot={false} />
           ) : null,
         )}

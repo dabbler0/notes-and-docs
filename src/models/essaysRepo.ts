@@ -21,6 +21,18 @@ export async function getNode(nodeId: string): Promise<EssayNode | undefined> {
   return node
 }
 
+/** A comment as it could look in already-stored data predating either migration below — a wider, looser shape than the current `Comment` type allows (in particular, `anchorKind` could be `'reply'`, a kind that no longer exists at all — see the loop below). */
+interface LegacyComment {
+  id: string
+  parentId?: string | null
+  anchorKind?: string
+  anchorText: string
+  body: string
+  resolved: boolean
+  createdAt: number
+  updatedAt?: number
+}
+
 /**
  * A node saved before comments moved to this flat, node-level model still
  * has them scattered across `version.comments` (an old field no longer
@@ -29,19 +41,37 @@ export async function getNode(nodeId: string): Promise<EssayNode | undefined> {
  * when each comment was added. Flattens all of that into `node.comments`
  * the first time the node is loaded, deduplicating by id (the same comment
  * could in principle appear on more than one version if it predates a
- * commitNewVersion). Only ever runs once per node: a node that already has
- * `comments` (even an empty array) is left alone.
+ * commitNewVersion).
+ *
+ * Also migrates a comment saved under the even older `anchorKind: 'reply'`
+ * (a kind that's since been folded into `'inline'` — see `Comment`'s own
+ * doc comment): a plain reply used to carry no mark anywhere at all, so one
+ * needs an actual empty `<mark class="comment-anchor" data-comment-id>`
+ * appended to the end of its own parent's `body` the first time it's seen,
+ * or it would carry `anchorKind: 'inline'` with nothing for the
+ * inline-positioning logic to actually find.
+ *
+ * Only ever runs once per node: a node that already has `comments` (even an
+ * empty array) is left alone.
  */
 function migrateComments(node: EssayNode): void {
   if (node.comments) return
   const flat: Comment[] = []
+  const replyIds = new Set<string>()
   const seen = new Set<string>()
-  for (const version of node.versions as unknown as { comments?: Comment[] }[]) {
+  for (const version of node.versions as unknown as { comments?: LegacyComment[] }[]) {
     for (const c of version.comments ?? []) {
       if (seen.has(c.id)) continue
       seen.add(c.id)
-      flat.push({ ...c, parentId: c.parentId ?? null, anchorKind: c.anchorKind ?? 'text', updatedAt: c.updatedAt ?? c.createdAt })
+      if (c.anchorKind === 'reply') replyIds.add(c.id)
+      const anchorKind: Comment['anchorKind'] = c.anchorKind === 'reply' ? 'inline' : ((c.anchorKind as Comment['anchorKind']) ?? 'text')
+      flat.push({ id: c.id, parentId: c.parentId ?? null, anchorKind, anchorText: c.anchorText, body: c.body, resolved: c.resolved, createdAt: c.createdAt, updatedAt: c.updatedAt ?? c.createdAt })
     }
+  }
+  for (const c of flat) {
+    if (!replyIds.has(c.id)) continue
+    const parent = flat.find((p) => p.id === c.parentId)
+    if (parent) parent.body += `<mark class="comment-anchor" data-comment-id="${c.id}"></mark>`
   }
   node.comments = flat
 }
@@ -191,7 +221,7 @@ export function commentSubtreeIds(node: EssayNode, commentId: string): string[] 
 
 export async function addComment(
   node: EssayNode,
-  opts: { anchorKind: Comment['anchorKind']; anchorText: string; body: string; parentId?: string | null; commentId?: string },
+  opts: { anchorKind: Comment['anchorKind']; anchorText: string; body: string; parentId?: string | null; commentId?: string; displayMode?: 'margin' | 'inline' },
 ): Promise<Comment> {
   const now = Date.now()
   const comment: Comment = {
@@ -200,6 +230,7 @@ export async function addComment(
     anchorKind: opts.anchorKind,
     anchorText: opts.anchorText,
     body: opts.body,
+    displayMode: opts.parentId == null && opts.anchorKind === 'text' ? (opts.displayMode ?? 'margin') : undefined,
     resolved: false,
     createdAt: now,
     updatedAt: now,
@@ -246,6 +277,103 @@ function cssEscapeId(s: string): string {
 }
 
 /**
+ * An inline comment's own marker — always empty, a `contenteditable="false"`
+ * island sitting *inside* one ordinary text segment (never a segment
+ * boundary of its own — see `childMarkers.ts`'s own doc comment for why
+ * that specifically doesn't work for something meant to read inline,
+ * mid-sentence). `data-preview` starts empty here; `SectionBlock` refreshes
+ * it live from the comment's own body every time the section resyncs from
+ * `draftContent` — see its own doc comment.
+ */
+function inlineCommentMarkerHtml(commentId: string): string {
+  return `<span class="inline-comment-marker" data-comment-id="${commentId}" data-preview="" contenteditable="false"></span>`
+}
+
+/** Splices `commentId`'s own `.inline-comment-marker` marker right after its `<mark class="comment-anchor">` anchor in `html` — a no-op if the anchor mark isn't there, or if the marker's already in place. */
+function insertInlineCommentMarkerAfterAnchor(html: string, commentId: string): string {
+  if (!html) return html
+  const doc = new DOMParser().parseFromString(html, 'text/html')
+  const mark = doc.querySelector(`mark.comment-anchor[data-comment-id="${cssEscapeId(commentId)}"]`)
+  if (!mark) return html
+  if ((mark.nextElementSibling as HTMLElement | null)?.matches(`.inline-comment-marker[data-comment-id="${cssEscapeId(commentId)}"]`)) return html
+  const markerDoc = new DOMParser().parseFromString(inlineCommentMarkerHtml(commentId), 'text/html')
+  mark.after(doc.importNode(markerDoc.body.firstChild!, true))
+  return doc.body.innerHTML
+}
+
+/** Removes `commentId`'s own `.inline-comment-marker` marker from `html`, leaving its `<mark class="comment-anchor">` anchor (if any) untouched — the anchor point itself doesn't change between margin and inline, only where the comment's body actually renders. */
+function removeInlineCommentMarker(html: string, commentId: string): string {
+  if (!html) return html
+  const doc = new DOMParser().parseFromString(html, 'text/html')
+  const marker = doc.querySelector(`.inline-comment-marker[data-comment-id="${cssEscapeId(commentId)}"]`)
+  if (!marker) return html
+  marker.remove()
+  return doc.body.innerHTML
+}
+
+/** Replaces `commentId`'s own `.inline-comment-marker` marker in `html` outright with `bodyHtml` — used only by `promoteInlineComment`, where the marker's placeholder gives way to the comment's real body content becoming ordinary document text. */
+function replaceInlineCommentMarker(html: string, commentId: string, bodyHtml: string): string {
+  if (!html) return html
+  const doc = new DOMParser().parseFromString(html, 'text/html')
+  const marker = doc.querySelector(`.inline-comment-marker[data-comment-id="${cssEscapeId(commentId)}"]`)
+  if (!marker) return html
+  const frag = new DOMParser().parseFromString(bodyHtml || '', 'text/html')
+  marker.replaceWith(...Array.from(frag.body.childNodes).map((n) => doc.importNode(n, true)))
+  return doc.body.innerHTML
+}
+
+/**
+ * Switches a top-level, `'text'`-anchored comment between the margin (a
+ * positioned card off to the side) and inline (a small marker rendered
+ * right in the document's own text flow, showing a muted preview of the
+ * comment and opening an editing popover on click — see `SectionBlock`'s
+ * own inline-comment rendering) display modes — see `Comment.displayMode`'s
+ * own doc comment. The comment's anchor mark itself is untouched either
+ * way; only whether a `.inline-comment-marker` for its body also sits
+ * right after that anchor changes. No-op for a comment that isn't a
+ * top-level `'text'` comment (a `'node'` comment has no anchor point to
+ * render inline *at*, and a nested comment always renders as part of its
+ * parent's own thread regardless of this field).
+ */
+export async function setCommentDisplayMode(node: EssayNode, commentId: string, mode: 'margin' | 'inline'): Promise<void> {
+  const comment = findCommentById(node, commentId)
+  if (!comment || comment.anchorKind !== 'text' || comment.parentId !== null) return
+  comment.displayMode = mode
+  node.draftContent = mode === 'inline' ? insertInlineCommentMarkerAfterAnchor(node.draftContent, commentId) : removeInlineCommentMarker(node.draftContent, commentId)
+  await saveNode(node)
+}
+
+/**
+ * Dissolves an inline comment back into ordinary prose: its own body's HTML
+ * is spliced directly into the section's `draftContent` in place of its
+ * `.inline-comment-marker` marker, its anchor `<mark>` is unwrapped (keeping
+ * whatever text it highlighted, same as a deleted comment's mark would be),
+ * and the comment's own record is dropped — there's no longer anything for
+ * it to be. Any comment directly nested under it (a reply, or a genuine
+ * comment-on-a-comment) is promoted along with it: its `parentId` becomes
+ * null and its `anchorKind` becomes `'text'`, since its own anchor mark —
+ * still sitting inside the promoted body's HTML — now lives in the node's
+ * *own* `draftContent` rather than inside another comment's `body`. A
+ * reply/comment nested *under one of those* (two levels down from the
+ * promoted comment) is untouched: its `parentId` still correctly points at
+ * a comment that still exists, just no longer nested itself.
+ */
+export async function promoteInlineComment(node: EssayNode, commentId: string): Promise<void> {
+  const comment = findCommentById(node, commentId)
+  if (!comment || comment.parentId !== null) return
+  let draftContent = replaceInlineCommentMarker(node.draftContent, commentId, comment.body)
+  draftContent = unwrapCommentMark(draftContent, commentId)
+  node.draftContent = draftContent
+  for (const child of commentChildren(node, commentId)) {
+    child.parentId = null
+    child.anchorKind = 'text'
+    if (!child.displayMode) child.displayMode = 'margin'
+  }
+  node.comments = nodeComments(node).filter((c) => c.id !== commentId)
+  await saveNode(node)
+}
+
+/**
  * Deletes `commentId` and every comment nested under it, at any depth
  * (replies, comments-on-comments, and their own replies/comments-on-them,
  * and so on) — the recursive cascade requirement 6 asks for. Also cleans
@@ -263,9 +391,11 @@ export async function deleteCommentCascade(node: EssayNode, commentId: string): 
   const toDelete = new Set(commentSubtreeIds(node, commentId))
   const deletedTextIds = all.filter((c) => toDelete.has(c.id) && c.anchorKind === 'text').map((c) => c.id)
   const deletedInlineIds = all.filter((c) => toDelete.has(c.id) && c.anchorKind === 'inline').map((c) => c.id)
+  const deletedInlineDisplayIds = all.filter((c) => toDelete.has(c.id) && c.displayMode === 'inline').map((c) => c.id)
 
   let draftContent = node.draftContent
   for (const cid of deletedTextIds) draftContent = unwrapCommentMark(draftContent, cid)
+  for (const cid of deletedInlineDisplayIds) draftContent = removeInlineCommentMarker(draftContent, cid)
   node.draftContent = draftContent
 
   const kept = all.filter((c) => !toDelete.has(c.id))

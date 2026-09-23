@@ -105,23 +105,43 @@ export interface QuoteBankEntry {
  * within one) lives flat on the `EssayNode` it belongs to (see
  * `EssayNode.comments`), not on any one version — unlike a node's own text,
  * a comment thread isn't something a version boundary should ever silently
- * cut off or orphan. `parentId`/`anchorKind` together are what unify four
- * different-looking features (a comment on selected text, a comment on a
- * whole section, a comment on a comment, and a plain threaded reply) into
- * one shape:
+ * cut off or orphan. `parentId`/`anchorKind` together are what unify what
+ * used to be four different-looking features (a comment on selected text, a
+ * comment on a whole section, a comment on a comment, and a plain threaded
+ * reply) into one shape:
  *
  * - `'text'` — anchored to a `<mark class="comment-anchor" data-comment-id>`
  *   span sitting in the node's own `draftContent`. Always top-level
  *   (`parentId` null); a comment can't itself be nested *and* anchored to
- *   the main document text; see `'inline'` for nesting with an anchor.
+ *   the main document text; see `'inline'` for nesting with an anchor. The
+ *   mark can be empty (a comment created with nothing selected, anchored to
+ *   the empty span right at the cursor) — that's what an inline comment's
+ *   own anchor point normally looks like; see `displayMode`.
  * - `'node'` — attached to the section as a whole, no mark anywhere. Also
- *   always top-level.
- * - `'inline'` — a comment *on* another comment: anchored to a
+ *   always top-level. Legacy: no longer created by any UI action (a
+ *   `'text'` comment with an empty mark, at whatever `displayMode`, covers
+ *   the same "nothing highlighted" case now) but still rendered for a node
+ *   that already has one.
+ * - `'inline'` — nested under `parentId`, anchored to a
  *   `<mark class="comment-anchor" data-comment-id>` span sitting inside
  *   `parentId`'s own `body` HTML, exactly the same marking scheme as
- *   `'text'` just applied to a comment's body instead of a section's.
- * - `'reply'` — a plain threaded reply to `parentId`, no mark, no anchor
- *   text — just another comment in the same thread.
+ *   `'text'` just applied to a comment's body instead of a section's. A
+ *   genuine "comment on a comment" has real anchor text in that mark; a
+ *   plain reply is the same thing with an *empty* mark appended at the very
+ *   end of the parent's body — one mechanism covers both, so there's no
+ *   separate "reply" shape to keep in sync with it.
+ *
+ * `displayMode` only applies to a top-level, `'text'`-anchored comment (a
+ * nested comment always renders as part of its parent's own thread, and a
+ * `'node'` comment has no anchor point to render inline *at*):
+ * - `'margin'` (the default, and the only mode before this existed) — a
+ *   positioned card off to the side, as before.
+ * - `'inline'` — the comment's own body renders directly in the document's
+ *   own text flow, right after its anchor mark, in place — a real mounted
+ *   segment (see `childMarkers.ts`'s `'inline-comment'` segment kind), not
+ *   markup spliced into `draftContent` itself, so it stays editable and
+ *   convertible back to a margin comment (or promotable to ordinary prose —
+ *   see `promoteInlineComment`) without losing anything.
  *
  * Deliberately never auto-pruned the way a `Footnote` is (see
  * `pruneOrphanedFootnotes` in `essaysRepo.ts`): editing away the text a
@@ -133,11 +153,13 @@ export interface Comment {
   id: string
   /** Id of the comment this one is nested under, or null for a top-level comment. */
   parentId: string | null
-  anchorKind: 'node' | 'text' | 'inline' | 'reply'
-  /** Plain-text snippet the comment is anchored to (best-effort, for display) — empty for 'node' and 'reply' comments, which have nothing to quote. */
+  anchorKind: 'node' | 'text' | 'inline'
+  /** Plain-text snippet the comment is anchored to (best-effort, for display) — empty for a 'node' comment, a comment with nothing selected, or a plain reply (an 'inline' comment anchored to an empty mark). */
   anchorText: string
   /** Rich-text HTML, edited the same uncontrolled-contentEditable way as a footnote's own body. */
   body: string
+  /** Only meaningful for a top-level `'text'` comment — see this type's own doc comment. Absent (both here and in stored data predating this field) means `'margin'`. */
+  displayMode?: 'margin' | 'inline'
   resolved: boolean
   createdAt: number
   updatedAt: number

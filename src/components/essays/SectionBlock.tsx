@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks'
-import { commentIdsInContent, commitNewVersion, deleteFootnote, deleteNodeOnly, headVersion, nodeComments, nodeFootnotes, revertToVersion, saveNode, updateFootnoteContent } from '../../models/essaysRepo'
+import { commentIdsInContent, commitNewVersion, deleteFootnote, deleteNodeOnly, findCommentById, headVersion, nodeComments, nodeFootnotes, revertToVersion, saveNode, updateFootnoteContent } from '../../models/essaysRepo'
+import { htmlToPlainText } from '../../lib/textExtraction'
 import { parseSegments, reconstructContent } from '../../lib/childMarkers'
 import { FrozenPreview } from './FrozenPreview'
 import type { EssayNode, Footnote, NodeVersion } from '../../models/types'
@@ -139,6 +140,7 @@ export function SectionBlock({
       if (el && el !== document.activeElement) {
         if (el.innerHTML !== seg.html) el.innerHTML = seg.html
         if (removeEmptySourceChips(el)) anyCleaned = true
+        refreshInlineCommentPreviews(el, node)
       }
       i++
     }
@@ -549,6 +551,7 @@ function FootnoteRow({
   )
 }
 
+
 function cssEscapeId(s: string): string {
   return typeof CSS !== 'undefined' && CSS.escape ? CSS.escape(s) : s.replace(/["\\]/g, '\\$&')
 }
@@ -710,6 +713,28 @@ function removeEmptySourceChips(root: HTMLElement): boolean {
     removed = true
   })
   return removed
+}
+
+/**
+ * Refreshes every inline comment marker's own `data-preview` attribute
+ * (rendered via CSS — see `.inline-comment-marker::after` in styles.css)
+ * inside `root` (a whole shard, swept on every unfocused resync, same as
+ * `removeEmptySourceChips` above) from that comment's own current `body` —
+ * the marker itself is deliberately kept plain HTML rather than a live,
+ * mounted component (see `childMarkers.ts`'s own doc comment for why), so
+ * nothing else keeps this in sync automatically the way a real component
+ * re-rendering would. Not run on every keystroke — only whenever this
+ * section's content gets resynced from a fresh `draftContent` (e.g. after
+ * `reload()` following an edit made through the comment's own popover, or
+ * on first load) — a moment of staleness between typing in the popover and
+ * the preview catching up is an acceptable tradeoff for not having to wire
+ * up a live subscription just for this.
+ */
+function refreshInlineCommentPreviews(root: HTMLElement, node: EssayNode): void {
+  root.querySelectorAll<HTMLElement>('.inline-comment-marker[data-comment-id]').forEach((marker) => {
+    const comment = findCommentById(node, marker.getAttribute('data-comment-id')!)
+    marker.setAttribute('data-preview', comment ? htmlToPlainText(comment.body) : '')
+  })
 }
 
 /** How many characters into `el`'s own text the (container, offset) boundary point sits. */

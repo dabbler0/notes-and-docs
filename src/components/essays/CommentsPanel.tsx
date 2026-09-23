@@ -1,40 +1,12 @@
 import { useEffect, useRef, useState } from 'preact/hooks'
-import { commentChildren, commentSubtreeIds, deleteCommentCascade, saveNode, setCommentResolved, topLevelComments, updateCommentBody, addComment } from '../../models/essaysRepo'
-import { reconstructContent } from '../../lib/childMarkers'
+import { commentChildren, setCommentResolved, topLevelComments, updateCommentBody, addComment } from '../../models/essaysRepo'
+import { deleteComment, toggleCommentDisplayMode } from './commentActions'
 import { id } from '../../lib/id'
 import type { Comment, EssayNode } from '../../models/types'
 
 interface Row {
   node: EssayNode
   comment: Comment
-}
-
-/**
- * Unwraps `commentId`'s own `<mark class="comment-anchor" data-comment-id>`
- * — if it has one — out of wherever it lives before the underlying record
- * is deleted: a `'text'` comment's mark sits in `node.draftContent`, found
- * (and removed) here through the *live* mounted DOM first, same division of
- * labor as footnote deletion in SectionBlock.tsx, since the section's own
- * `contentEditable` shard can be a moment ahead of what's actually been
- * debounce-saved. An `'inline'` comment's mark, sitting inside some other
- * comment's own `body` string, has no live DOM counterpart to worry about
- * here — `deleteCommentCascade` unwraps that one directly out of the saved
- * data instead.
- */
-async function deleteComment(node: EssayNode, commentId: string, scrollEl: HTMLElement | null) {
-  const ids = commentSubtreeIds(node, commentId)
-  if (scrollEl) {
-    for (const cid of ids) {
-      const mark = scrollEl.querySelector(`mark.comment-anchor[data-comment-id="${cssEscape(cid)}"]`)
-      if (mark) mark.replaceWith(...Array.from(mark.childNodes))
-    }
-  }
-  const html = reconstructContent(node.id)
-  if (html != null) {
-    node.draftContent = html
-    await saveNode(node)
-  }
-  await deleteCommentCascade(node, commentId)
 }
 
 /**
@@ -99,15 +71,26 @@ export function CommentsPanel({
 
     const raw: { id: string; top: number }[] = []
     for (const { comment, node } of rows) {
+      // Inline top-level comments only ever show a margin row when they
+      // have replies/comments-on-them (see the render below) — nothing to
+      // position otherwise.
+      if (comment.displayMode === 'inline' && commentChildren(node, comment.id).length === 0) continue
       // A 'node' (whole-section) comment has no mark to look for at all —
       // it always anchors to the section's own heading. A 'text' comment
-      // normally has one, but falls back the same way if its mark is
-      // collapsed out of view (its own section, or an ancestor, toggled
-      // closed) — getBoundingClientRect() on anything inside a `display:
-      // none` subtree returns all zeroes, which would otherwise pin the
-      // comment to the very top of the margin instead of near its real
-      // (collapsed) location.
-      const mark = comment.anchorKind === 'text' ? (scrollEl.querySelector(`[data-comment-id="${cssEscape(comment.id)}"]`) as HTMLElement | null) : null
+      // anchored inline positions off its own rendered body (guaranteed
+      // visible/sized whenever displayMode is 'inline'); a margin one
+      // positions off its anchor mark instead, falling back the same way
+      // if that mark is collapsed out of view (its own section, or an
+      // ancestor, toggled closed) — getBoundingClientRect() on anything
+      // inside a `display: none` subtree returns all zeroes, which would
+      // otherwise pin the comment to the very top of the margin instead of
+      // near its real (collapsed) location.
+      const mark =
+        comment.anchorKind === 'text'
+          ? comment.displayMode === 'inline'
+            ? (scrollEl.querySelector(`.inline-comment-marker[data-comment-id="${cssEscape(comment.id)}"]`) as HTMLElement | null)
+            : (scrollEl.querySelector(`mark.comment-anchor[data-comment-id="${cssEscape(comment.id)}"]`) as HTMLElement | null)
+          : null
       const anchorEl = isVisible(mark) ? mark : nearestVisibleHeader(scrollEl, node.id)
       if (!anchorEl) continue
       const top = anchorEl.getBoundingClientRect().top - scrollRect.top + scrollEl.scrollTop + deltaTop
@@ -161,7 +144,12 @@ export function CommentsPanel({
 
   async function handleDelete(node: EssayNode, commentId: string) {
     if (!confirm('Delete this comment, and everything replied or commented on it?')) return
-    await deleteComment(node, commentId, scrollRef.current)
+    await deleteComment(node, commentId)
+    onChanged()
+  }
+
+  async function handleToggleDisplayMode(node: EssayNode, commentId: string, target: 'margin' | 'inline') {
+    await toggleCommentDisplayMode(node, commentId, target)
     onChanged()
   }
 
@@ -175,7 +163,11 @@ export function CommentsPanel({
             <div className="comment-section-label" onClick={() => onJumpTo?.(row.node.id)}>
               {row.node.title || 'Untitled section'}
             </div>
-            <CommentCard node={row.node} comment={row.comment} depth={0} onChanged={onChanged} onDelete={handleDelete} scrollEl={scrollRef.current} />
+            {row.comment.displayMode === 'inline' ? (
+              <InlineTopLevelThread node={row.node} comment={row.comment} onChanged={onChanged} onDelete={handleDelete} />
+            ) : (
+              <CommentCard node={row.node} comment={row.comment} depth={0} onChanged={onChanged} onDelete={handleDelete} onToggleDisplayMode={handleToggleDisplayMode} onPromote={undefined} />
+            )}
           </div>
         ))}
       </div>
@@ -187,13 +179,49 @@ export function CommentsPanel({
       <span className="margin-comments-count chip">{openCount} open</span>
       {rows.length === 0 && <p className="muted margin-comments-empty">No comments yet. Select some text (or use the Comment button with nothing selected) to leave one.</p>}
       <div className="margin-comments-inner" ref={innerRef} style={{ height: canvasHeight, transform: `translateY(${-scrollTop}px)` }}>
-        {rows.map((row) => (
-          <div className="comment-thread-root" key={row.comment.id} data-comment-thread-id={row.comment.id} style={{ top: positions.get(row.comment.id) ?? 0 }}>
-            {row.comment.anchorKind === 'node' && <div className="comment-section-label">{row.node.title || 'Untitled section'}</div>}
-            <CommentCard node={row.node} comment={row.comment} depth={0} onChanged={onChanged} onDelete={handleDelete} scrollEl={scrollRef.current} />
-          </div>
-        ))}
+        {rows
+          .filter((row) => row.comment.displayMode !== 'inline' || commentChildren(row.node, row.comment.id).length > 0)
+          .map((row) => (
+            <div className="comment-thread-root" key={row.comment.id} data-comment-thread-id={row.comment.id} style={{ top: positions.get(row.comment.id) ?? 0 }}>
+              {row.comment.anchorKind === 'node' && <div className="comment-section-label">{row.node.title || 'Untitled section'}</div>}
+              {row.comment.displayMode === 'inline' ? (
+                <InlineTopLevelThread node={row.node} comment={row.comment} onChanged={onChanged} onDelete={handleDelete} />
+              ) : (
+                <CommentCard node={row.node} comment={row.comment} depth={0} onChanged={onChanged} onDelete={handleDelete} onToggleDisplayMode={handleToggleDisplayMode} onPromote={undefined} />
+              )}
+            </div>
+          ))}
       </div>
+    </div>
+  )
+}
+
+/**
+ * An inline top-level comment's own body doesn't render here at all — it
+ * shows as a small marker right in the document's own text (see
+ * SectionBlock's `.inline-comment-marker`) and opens an editing popover on
+ * click (see EssayWorkspace's `InlineCommentPopover`). This only ever shows
+ * once it has at least one reply or comment-on-it (the row-filtering above
+ * skips it entirely otherwise), rendering just that nested thread, indented
+ * under a small label rather than a full card of its own.
+ */
+function InlineTopLevelThread({
+  node,
+  comment,
+  onChanged,
+  onDelete,
+}: {
+  node: EssayNode
+  comment: Comment
+  onChanged: () => void
+  onDelete: (node: EssayNode, commentId: string) => void
+}) {
+  const children = commentChildren(node, comment.id)
+  return (
+    <div className="comment-children inline-thread-children">
+      {children.map((child) => (
+        <CommentCard key={child.id} node={node} comment={child} depth={1} onChanged={onChanged} onDelete={onDelete} onToggleDisplayMode={undefined} onPromote={undefined} />
+      ))}
     </div>
   )
 }
@@ -213,20 +241,24 @@ export function CommentsPanel({
  * thread lives inside the one positioned top-level card, rather than each
  * reply trying to claim its own spot in the margin.
  */
-function CommentCard({
+export function CommentCard({
   node,
   comment,
   depth,
   onChanged,
   onDelete,
-  scrollEl,
+  onToggleDisplayMode,
+  onPromote,
 }: {
   node: EssayNode
   comment: Comment
   depth: number
   onChanged: () => void
   onDelete: (node: EssayNode, commentId: string) => void
-  scrollEl: HTMLElement | null
+  /** Only present for a top-level `'text'` comment — lets it flip between margin and inline display. Undefined for a nested comment (that field only ever applies to a top-level comment in the first place). */
+  onToggleDisplayMode: ((node: EssayNode, commentId: string, target: 'margin' | 'inline') => void) | undefined
+  /** Only present when this card is rendered inside an inline comment's own editing popover (see EssayWorkspace's `InlineCommentPopover`) — dissolves the comment into ordinary prose. Undefined everywhere else (a margin card, or a nested reply/comment-on-a-comment, has no "paper text" to promote into). */
+  onPromote: ((node: EssayNode, commentId: string) => void) | undefined
 }) {
   const bodyRef = useRef<HTMLDivElement>(null)
   const savedRangeRef = useRef<Range | null>(null)
@@ -280,8 +312,26 @@ function CommentCard({
     onChanged()
   }
 
+  /**
+   * A reply is just an 'inline' comment anchored to an empty mark appended
+   * at the very end of *this* comment's own body — the same mechanism
+   * `handleAddInline` above uses for a genuine comment-on-a-comment, just
+   * with an empty (rather than a real, highlighted) anchor. See `Comment`'s
+   * own doc comment in models/types.ts for why replies don't get their own
+   * separate shape.
+   */
   async function handleReply(replyBody: string) {
-    await addComment(node, { anchorKind: 'reply', anchorText: '', body: replyBody, parentId: comment.id })
+    const newCommentId = id()
+    const mark = `<mark class="comment-anchor" data-comment-id="${newCommentId}"></mark>`
+    if (bodyRef.current) {
+      bodyRef.current.insertAdjacentHTML('beforeend', mark)
+      const html = bodyRef.current.innerHTML
+      synced.current = { comment, body: html }
+      await updateCommentBody(node, comment.id, html)
+    } else {
+      await updateCommentBody(node, comment.id, comment.body + mark)
+    }
+    await addComment(node, { anchorKind: 'inline', anchorText: '', body: replyBody, parentId: comment.id, commentId: newCommentId })
     setReplying(false)
     onChanged()
   }
@@ -290,8 +340,8 @@ function CommentCard({
 
   return (
     <div className={`comment-item${comment.resolved ? ' resolved' : ''}`} style={depth > 0 ? { marginLeft: 16 } : undefined}>
-      {comment.anchorKind === 'text' && <div className="anchor">“{comment.anchorText}”</div>}
-      {comment.anchorKind === 'inline' && <div className="anchor">on: “{comment.anchorText}”</div>}
+      {comment.anchorKind === 'text' && comment.anchorText && <div className="anchor">“{comment.anchorText}”</div>}
+      {comment.anchorKind === 'inline' && comment.anchorText && <div className="anchor">on: “{comment.anchorText}”</div>}
       <div className="comment-mini-toolbar">
         <button className="icon-btn" title="Bold" onMouseDown={(e) => e.preventDefault()} onClick={() => exec('bold')}>
           B
@@ -317,6 +367,25 @@ function CommentCard({
         <button className="icon-btn" title="Reply" onClick={() => setReplying(true)}>
           ↩
         </button>
+        {onToggleDisplayMode && comment.anchorKind === 'text' && comment.displayMode !== 'inline' && (
+          <button className="icon-btn" title="Show this comment inline, in the text, instead of in the margin" onClick={() => onToggleDisplayMode(node, comment.id, 'inline')}>
+            →¶
+          </button>
+        )}
+        {onToggleDisplayMode && comment.anchorKind === 'text' && comment.displayMode === 'inline' && (
+          <button className="icon-btn" title="Show this comment in the margin instead of inline" onClick={() => onToggleDisplayMode(node, comment.id, 'margin')}>
+            →▤
+          </button>
+        )}
+        {onPromote && (
+          <button
+            className="icon-btn"
+            title="Promote to regular paper text (comments on this comment move up to comments on the section itself)"
+            onClick={() => onPromote(node, comment.id)}
+          >
+            ⇧¶
+          </button>
+        )}
         <button className="icon-btn" title="Delete this comment (and anything nested under it)" onClick={() => onDelete(node, comment.id)}>
           ×
         </button>
@@ -338,7 +407,7 @@ function CommentCard({
       {children.length > 0 && (
         <div className="comment-children">
           {children.map((child) => (
-            <CommentCard key={child.id} node={node} comment={child} depth={depth + 1} onChanged={onChanged} onDelete={onDelete} scrollEl={scrollEl} />
+            <CommentCard key={child.id} node={node} comment={child} depth={depth + 1} onChanged={onChanged} onDelete={onDelete} onToggleDisplayMode={undefined} onPromote={undefined} />
           ))}
         </div>
       )}

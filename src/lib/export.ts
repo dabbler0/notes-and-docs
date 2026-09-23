@@ -129,10 +129,11 @@ export function essayToMarkdown(essay: Essay, nodeMap: Map<string, EssayNode>): 
     for (const seg of parseSegments(node.draftContent)) {
       if (seg.kind === 'text') {
         for (const block of htmlToMarkdownBlocks(seg.html, fnCtx)) lines.push(block, '')
-      } else {
+      } else if (seg.kind === 'child') {
         const child = nodeMap.get(seg.childId)
         if (child) renderNode(child, depth + 1)
       }
+      // Comments (inline or margin) are commentary, not document text — never exported.
     }
   }
   const root = nodeMap.get(essay.rootNodeId)
@@ -340,10 +341,11 @@ export function essayToLatex(essay: Essay, nodeMap: Map<string, EssayNode>, sour
     for (const seg of parseSegments(node.draftContent)) {
       if (seg.kind === 'text') {
         for (const block of htmlToLatexBlocks(seg.html, ctx)) body.push(block, '')
-      } else {
+      } else if (seg.kind === 'child') {
         const child = nodeMap.get(seg.childId)
         if (child) renderNode(child, depth + 1)
       }
+      // Comments (inline or margin) are commentary, not document text — never exported.
     }
   }
   const root = nodeMap.get(essay.rootNodeId)

@@ -1550,6 +1550,63 @@ select {
   gap: 8px;
 }
 
+/* The margin panel's own row for an inline top-level comment's thread —
+   its own body isn't shown here at all (it's a small marker rendered right
+   in the document's own text instead — see .inline-comment-marker below,
+   and EssayWorkspace's click-to-open editing popover), just whatever's
+   nested under it. */
+.inline-thread-children {
+  margin-top: 0;
+  padding-left: 0;
+  border-left: none;
+}
+
+/* --- inline comments (a marker rendered directly in the document's own
+   text, opening an editing popover on click — see SectionBlock's own
+   `refreshInlineCommentPreviews` and EssayWorkspace's `handleDocClick`) --- */
+
+/* Always empty — content comes entirely from `data-preview` (kept in sync
+   with the comment's own body; see `refreshInlineCommentPreviews`), a
+   plain-text CSS-rendered preview rather than live HTML, so this can stay
+   ordinary inline content sitting *inside* one text segment (like a
+   citation chip or a footnote marker already does) instead of forcing a
+   block-level split — see childMarkers.ts's own doc comment for why a
+   segment-boundary marker specifically doesn't work for this. */
+.inline-comment-marker {
+  color: var(--ink-dim);
+  font-style: italic;
+  cursor: pointer;
+  border-bottom: 1px dotted var(--border);
+}
+
+.inline-comment-marker:hover {
+  border-bottom-color: var(--ink-dim);
+}
+
+.inline-comment-marker::after {
+  content: attr(data-preview);
+}
+
+.inline-comment-marker:not([data-preview])::after,
+.inline-comment-marker[data-preview='']::after {
+  content: '(empty inline comment — click to write)';
+}
+
+/* The popover an inline comment's own marker opens on click — same
+   positioning mechanism as the ordinary "add a comment" popover
+   (`.comment-widget`), just holding a `CommentCard` instead of a plain
+   composer. */
+.inline-comment-widget {
+  padding: 0;
+  background: none;
+  box-shadow: none;
+  width: min(360px, calc(100vw - 24px));
+}
+
+.inline-comment-widget .comment-item {
+  box-shadow: var(--shadow-soft);
+}
+
 .comment-item.resolved {
   background: var(--surface-2);
   opacity: 0.7;
