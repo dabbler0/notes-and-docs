@@ -195,8 +195,26 @@ async function encodeForRemote(collectionName: SyncedCollection, localDoc: Local
   const metadata: Record<string, unknown> = {}
   const payload: Record<string, unknown> = {}
   for (const [k, v] of Object.entries(localDoc)) {
-    if (sensitiveFields.includes(k)) payload[k] = v
-    else metadata[k] = v
+    if (sensitiveFields.includes(k)) {
+      // `payload` is only ever read back out via `JSON.stringify` (inside
+      // `encryptJson`), which already silently drops an `undefined`-valued
+      // object property on its own — nothing to do here for this branch.
+      payload[k] = v
+      continue
+    }
+    // An optional field an app-level type allows to be `undefined` (e.g.
+    // `Source.pdfBlobId` once a PDF is removed — `removeSourcePdf` sets it
+    // to `undefined` rather than deleting the key) reaches here as a plain
+    // object property whose value is `undefined`. Firestore's `setDoc`
+    // rejects that outright ("Unsupported field value: undefined") — unlike
+    // `JSON.stringify`, it never silently drops it, so it has to be handled
+    // here instead. Simply omitting the key is correct either way: this is
+    // a plain (non-merge) `setDoc` that replaces the whole remote document,
+    // so a key that isn't present in the object being written ends up
+    // absent from the resulting document exactly as an explicit "delete
+    // this field" would — no `deleteField()` sentinel needed.
+    if (v === undefined) continue
+    metadata[k] = v
   }
   if (sensitiveFields.length > 0) metadata._enc = await encryptJson(cryptoKey, payload)
   return metadata

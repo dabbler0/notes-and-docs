@@ -252,10 +252,28 @@ export function EssayWorkspace({ essayId, onBack }: { essayId: string; onBack: (
    * Inserts a new, empty footnote at the cursor and hands focus straight to
    * its own body so it's ready to type into immediately — same shape as
    * "Split into subsection" handing focus to the new child's title. The
-   * marker itself carries no visible number (SectionBlock numbers footnotes
-   * with a CSS counter, purely from marker order — see its own doc comment)
-   * so there's nothing here that could ever go stale if more footnotes get
-   * added before or after this one later.
+   * marker itself carries no visible *number* (SectionBlock numbers
+   * footnotes with a CSS counter, purely from marker order — see its own
+   * doc comment) so there's nothing here that could ever go stale if more
+   * footnotes get added before or after this one later — but it is
+   * immediately followed by one real, invisible character (`​`, a
+   * zero-width space, as a plain sibling *outside* the `<sup>`, never
+   * inside it): a genuinely empty inline element has no content for a
+   * browser to place a caret before-or-after relative to at a text
+   * boundary, so clicking (or typing) right where the marker visually sits
+   * — most commonly right after it, at the end of a paragraph — could land
+   * the caret *before* the marker instead, and typing there inserted new
+   * text ahead of the footnote rather than after it. Confirmed directly
+   * against a real browser, along with why the zero-width space has to sit
+   * *outside* the `<sup>` rather than as its own child text node (the more
+   * obvious-looking fix, tried first): with real content inside it, the
+   * browser treats a caret sitting right after the marker as still "inside"
+   * its inline formatting context, and pressing Enter there carries the
+   * `<sup>` — `data-footnote-id` and all — onto the freshly-created
+   * paragraph, duplicating one footnote's marker under two different
+   * pieces of text. A plain sibling text node gives the caret a real,
+   * unambiguous position immediately after the marker without ever being
+   * considered part of it, avoiding that entirely.
    */
   async function insertFootnote() {
     const range = savedRange.current
@@ -264,7 +282,7 @@ export function EssayWorkspace({ essayId, onBack }: { essayId: string; onBack: (
     if (!range || !el || !node) return
     el.focus()
     const footnote = addFootnote(node)
-    insertHtmlAtRange(range, `<sup class="footnote-ref" data-footnote-id="${footnote.id}"></sup>`)
+    insertHtmlAtRange(range, `<sup class="footnote-ref" data-footnote-id="${footnote.id}"></sup>​`)
     await persistActiveNode(node)
     setFocusFootnoteId(footnote.id)
     reload()

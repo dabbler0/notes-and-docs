@@ -374,7 +374,12 @@ function convertInline(text: string, ctx: ConvertCtx): string {
         } else {
           const fid = id()
           ctx.footnotes.push({ id: fid, content: `<p>${innerHtml}</p>` })
-          out += `<sup class="footnote-ref" data-footnote-id="${fid}"></sup>`
+          // The trailing zero-width space is load-bearing, not decorative
+          // — see `insertFootnote`'s own doc comment in
+          // `EssayWorkspace.tsx` for why a genuinely empty marker breaks
+          // caret placement right after it, and why the zero-width space
+          // has to sit *outside* the `<sup>` rather than inside it.
+          out += `<sup class="footnote-ref" data-footnote-id="${fid}"></sup>​`
           ctx.stats.footnotesKept++
         }
         i = arg.end

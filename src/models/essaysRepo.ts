@@ -19,9 +19,23 @@ export async function getNode(nodeId: string): Promise<EssayNode | undefined> {
   return backend.docs.get<EssayNode>(NODES, nodeId)
 }
 
-export async function saveNode(node: EssayNode): Promise<void> {
+/**
+ * Returns whether saving this node also pruned one or more orphaned
+ * footnotes (see `pruneOrphanedFootnotes`) — `node.footnotes` is mutated
+ * in place, so a caller holding onto the same `node` object already sees
+ * the change without needing this return value at all, *except* a UI
+ * component whose rendered footnote list came from a still-mounted React
+ * prop: mutating the array in place doesn't itself trigger a re-render,
+ * so `SectionBlock`'s debounced autosave uses this to know when it needs
+ * to explicitly ask for one (see its own `scheduleSave`) rather than
+ * leaving a just-deleted footnote looking like it's still there until
+ * something unrelated happens to re-render the page.
+ */
+export async function saveNode(node: EssayNode): Promise<boolean> {
+  const pruned = pruneOrphanedFootnotes(node)
   node.updatedAt = Date.now()
   await backend.docs.put(NODES, node)
+  return pruned
 }
 
 export async function saveEssay(essay: Essay): Promise<void> {
@@ -172,6 +186,44 @@ export function findComment(node: EssayNode, commentId: string): { version: Node
 /** `node.footnotes` is optional (absent on any node saved before footnotes existed) — this is the one place that reads it, so "absent" and "empty" are treated identically everywhere else. */
 export function nodeFootnotes(node: EssayNode): Footnote[] {
   return node.footnotes ?? []
+}
+
+/** Every footnote id a `<sup class="footnote-ref" data-footnote-id>` marker in `html` still points to. */
+function footnoteIdsInContent(html: string): string[] {
+  if (!html) return []
+  const doc = new DOMParser().parseFromString(html, 'text/html')
+  return Array.from(doc.querySelectorAll('sup.footnote-ref[data-footnote-id]')).map((el) => el.getAttribute('data-footnote-id')!)
+}
+
+/**
+ * Drops any footnote whose marker no longer appears *anywhere* this node's
+ * content could still show it — not just the live draft, but every saved
+ * version too. Unlike a `Comment`, a `Footnote` isn't per-version data at
+ * all (see the design note above `EssayNode.versions`): `node.footnotes` is
+ * one flat list, and "which footnotes exist" has always meant "whichever
+ * ones some marker, in some version or the live draft, still references."
+ * A marker referenced only by an *older* version's frozen content — most
+ * commonly right after "Make a new version" clears the live draft for
+ * fresh writing, leaving the just-frozen version as the only place its
+ * markers still live — still needs its footnote kept around in case that
+ * version is ever reverted to; pruning purely off the live draft would
+ * silently destroy it the moment the freeze happened, long before anyone
+ * asked to delete anything. Only once a footnote's marker is gone from
+ * every version *and* the live draft — normal editing deleted the marker,
+ * and nothing in the node's own history still points back to it — is it
+ * genuinely unreachable, which is when this drops it: the fix for a
+ * footnote whose only "delete" affordance used to be a separate button in
+ * the footnote list, disconnected from the ordinary act of deleting its
+ * reference from the text.
+ */
+function pruneOrphanedFootnotes(node: EssayNode): boolean {
+  if (!node.footnotes || node.footnotes.length === 0) return false
+  const referenced = new Set(footnoteIdsInContent(node.draftContent))
+  for (const version of node.versions) for (const fid of footnoteIdsInContent(version.content)) referenced.add(fid)
+  const kept = node.footnotes.filter((f) => referenced.has(f.id))
+  if (kept.length === node.footnotes.length) return false
+  node.footnotes = kept
+  return true
 }
 
 /** Appends a new, empty footnote to the node and returns it — the caller inserts its `<sup class="footnote-ref" data-footnote-id>` marker into the live content separately (see EssayWorkspace's `insertFootnote`) and saves the node itself once both changes are made. */

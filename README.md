@@ -1364,11 +1364,11 @@ is just another direct edit to the live DOM the browser's already editing,
 exactly like a toolbar click would be.
 
 **Footnotes.** "Insert footnote" (a small baseline with a raised digit)
-drops an empty `<sup class="footnote-ref" data-footnote-id>` marker at the
-cursor and hands focus straight to the new footnote's own body, listed
-right under that section's text, ready to type into immediately — the same
-"create it, then focus its editable surface" shape "Split into subsection"
-already uses for a new child's title. A footnote's actual content lives in
+drops a `<sup class="footnote-ref" data-footnote-id>` marker at the cursor
+and hands focus straight to the new footnote's own body, listed right under
+that section's text, ready to type into immediately — the same "create it,
+then focus its editable surface" shape "Split into subsection" already uses
+for a new child's title. A footnote's actual content lives in
 `EssayNode.footnotes` (see the `Footnote` type in `models/types.ts`), not
 inline in the marker itself — the marker is just a reference, exactly like
 a subsection marker references a child node — so numbering is never stored
@@ -1376,15 +1376,61 @@ anywhere: it's purely how many footnote-ref markers precede this one in
 the node's own content, computed with a CSS counter scoped to each node's
 own `.section-body` for the inline superscripts, and independently for the
 list underneath (see the CSS's own comment on why those are deliberately
-*separate* counters, not one shared one). Deleting a footnote (the "×" on
-its own row) removes both its record and its marker, if the marker's still
-actually mounted. Footnotes aren't versioned — there's no per-footnote
-history the way a node's own text has `versions` — they just always reflect
-whatever's currently in `node.footnotes`, comparing-a-version or not.
-`node.footnotes` is optional precisely so a node saved before this feature
-existed doesn't need any migration: every read goes through
-`essaysRepo.nodeFootnotes()`, which treats "the field is absent" and "the
-field is an empty array" identically everywhere in the app, export included.
+*separate* counters, not one shared one). Footnotes aren't versioned —
+there's no per-footnote history the way a node's own text has `versions` —
+they just always reflect whatever's currently in `node.footnotes`,
+comparing-a-version or not. `node.footnotes` is optional precisely so a
+node saved before this feature existed doesn't need any migration: every
+read goes through `essaysRepo.nodeFootnotes()`, which treats "the field is
+absent" and "the field is an empty array" identically everywhere in the
+app, export included.
+
+The marker itself carries no visible number (see above) *but does* carry
+one real, invisible character right after its closing tag: a zero-width
+space (`​`), as a plain sibling text node, never inside the `<sup>`
+itself. A genuinely empty inline element has no content for a browser to
+place a caret before-or-after relative to at a text boundary — confirmed
+directly against a real browser, this used to mean clicking (or continuing
+to type) right where a footnote sits at the end of a paragraph could land
+the caret *before* the marker instead of after it, silently inserting new
+text ahead of the footnote rather than extending the paragraph past it. The
+more obvious-looking fix — putting the zero-width space *inside* the
+`<sup>` as its own child text node — was tried first and made things worse:
+with real content inside it, the browser treats a caret sitting right after
+the marker as still inside its inline formatting context, and pressing
+Enter there carried the `<sup>` (`data-footnote-id` and all) onto the
+freshly-created paragraph, duplicating one footnote's marker under two
+different pieces of text. A plain sibling text node avoids both: a real,
+unambiguous caret position immediately after the marker that was never
+part of it to begin with.
+
+Deleting a footnote works two ways now, not just one. The "×" on its own
+row in the footnote list (`handleDeleteFootnote` in `SectionBlock.tsx`)
+still explicitly removes both the record and the marker (plus its trailing
+zero-width space, now just a stray invisible character with nothing left
+to anchor) in one step, for whenever you want to remove a footnote without
+first hunting down its marker in the text. But deleting the marker
+*itself* — selecting the superscript in the running text and backspacing
+or deleting it, the ordinary way anyone would expect a reference to
+disappear — used to leave the footnote's own body sitting in the list
+forever, with no automatic connection back to the text it no longer
+referenced (the "×" button was the *only* way to get rid of it, and
+nothing suggested you needed to go find it there). `saveNode`
+(`essaysRepo.ts`) now prunes any footnote whose marker isn't referenced by
+the live draft *or* any saved version's own content — checking every
+version, not just the current draft, matters here specifically: right
+after "Make a new version" clears the live draft for fresh writing, a
+footnote's only remaining marker briefly lives solely in the version that
+was just frozen, and pruning purely off the live draft would destroy that
+footnote's body the instant the freeze happened, long before reverting to
+that version could ever need it back. Since `node.footnotes` is mutated in
+place, a component already holding that same `node` object sees the prune
+immediately on its own — except React doesn't know an in-place array
+mutation happened and won't re-render for it on its own, so `saveNode`
+reports whether it actually pruned anything and `SectionBlock`'s debounced
+autosave asks for an explicit re-render when it did, rather than leaving a
+just-deleted footnote looking like it's still there until something
+unrelated happens to refresh the page.
 
 **Linking to a source.** "🔗 Link to source" wraps the current selection
 (or, with nothing selected, the source's own title) in a real hyperlink to
@@ -1726,6 +1772,24 @@ deliberate, not laziness: it's what lets a device list which local docs
 are dirty and pull only what's changed without decrypting everything
 first, while still keeping every piece of actual user content — not just
 the prose — unreadable to anyone who can merely read your Firestore data.
+
+One of those plaintext metadata fields, `pdfBlobId`, is also optional —
+`removeSourcePdf` sets it to `undefined` rather than deleting the key
+outright, the ordinary "how an optional field is cleared" idiom everywhere
+else in this codebase. `encodeForRemote` used to pass that straight
+through into the plain object handed to `setDoc()`, which real Firestore
+(confirmed directly) rejects outright — `Function setDoc() called with
+invalid data. Unsupported field value: undefined` — the moment a source
+with a since-removed PDF next got pushed. Unlike a *sensitive* field's
+`undefined` (harmless: `JSON.stringify`, which sensitive fields go through
+on their way into `_enc`, already drops an `undefined`-valued object
+property on its own), a plain metadata field going straight to Firestore
+needed handling here specifically. The fix just omits any metadata field
+whose value is `undefined` from the object built for `setDoc()` at all: this
+is already a plain (non-merge) `setDoc()` that replaces the whole remote
+document, so a key that's simply not present in the object being written
+ends up absent from the resulting document exactly as an explicit "delete
+this field" sentinel would, with no need for one.
 
 This wasn't always the policy — titles, a source's BibTeX/comment/PDF
 filename, and a quote's page number used to sit in that same plaintext

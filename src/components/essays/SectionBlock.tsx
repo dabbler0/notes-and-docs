@@ -172,9 +172,18 @@ export function SectionBlock({
 
   function scheduleSave() {
     window.clearTimeout(saveTimer.current)
-    saveTimer.current = window.setTimeout(() => {
+    saveTimer.current = window.setTimeout(async () => {
       const html = reconstructContent(node.id)
-      if (html != null) persist(html)
+      if (html == null) return
+      const prunedFootnotes = await persist(html)
+      // node.footnotes is mutated in place by saveNode — this component
+      // would already read the updated array on its next render regardless
+      // — but a mutation to a prop object doesn't itself trigger a React
+      // re-render, so without asking for one explicitly here, a footnote
+      // deleted by deleting its reference from the text (rather than via
+      // the footnote list's own delete button) stays looking present until
+      // something unrelated happens to re-render the page.
+      if (prunedFootnotes) onTitleChanged()
     }, 500)
   }
 
@@ -233,6 +242,12 @@ export function SectionBlock({
   async function handleDeleteFootnote(footnoteId: string) {
     window.clearTimeout(saveTimer.current)
     const marker = wrapperRef.current?.querySelector(`sup.footnote-ref[data-footnote-id="${cssEscapeId(footnoteId)}"]`)
+    // The zero-width space `insertFootnote` places right after the marker
+    // (see its own doc comment) is only there to give the caret something
+    // real to anchor to next to the marker — with the marker itself gone,
+    // it's just a stray invisible character with nothing left to anchor.
+    const zwsp = marker?.nextSibling
+    if (zwsp?.nodeType === Node.TEXT_NODE && zwsp.textContent === '​') zwsp.remove()
     marker?.remove()
     const html = reconstructContent(node.id)
     if (html != null) await persist(html)

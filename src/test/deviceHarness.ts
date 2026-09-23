@@ -56,7 +56,7 @@ export interface Device {
   getEssay(id: string): Promise<Essay | undefined>
   saveEssay(essay: Essay): Promise<void>
   getNode(id: string): Promise<EssayNode | undefined>
-  saveNode(node: EssayNode): Promise<void>
+  saveNode(node: EssayNode): Promise<boolean>
   /** Writes a node straight to local storage, bypassing saveNode's own `updatedAt = Date.now()` stamp — for tests that need to construct an exact, explicit timestamp rather than whatever the wall clock happens to produce. */
   putNodeRaw(node: EssayNode): Promise<void>
   /** Same as putNodeRaw, for essays. */
@@ -69,6 +69,7 @@ export interface Device {
   getSource(id: string): Promise<Source | undefined>
   listSources(): Promise<Source[]>
   getSourcePdfBlob(source: Source): Promise<Blob | undefined>
+  removeSourcePdf(source: Source): Promise<void>
 
   createQuote(sourceId: string, page: number, quoteText: string, annotation: string): Promise<QuoteBankEntry>
   listQuotes(): Promise<QuoteBankEntry[]>
@@ -166,6 +167,7 @@ export async function newDevice(config = DEFAULT_CONFIG): Promise<Device> {
     getSource: (id) => withStorageAsync(() => sourcesRepoMod.getSource(id)),
     listSources: () => withStorageAsync(() => sourcesRepoMod.listSources()),
     getSourcePdfBlob: (source) => withStorageAsync(() => sourcesRepoMod.getSourcePdfBlob(source)),
+    removeSourcePdf: (source) => withStorageAsync(() => sourcesRepoMod.removeSourcePdf(source)),
 
     createQuote: (sourceId, page, quoteText, annotation) => withStorageAsync(() => quoteBankRepoMod.addQuoteToBank(sourceId, page, quoteText, annotation)),
     listQuotes: () => withStorageAsync(() => quoteBankRepoMod.listQuoteBank()),

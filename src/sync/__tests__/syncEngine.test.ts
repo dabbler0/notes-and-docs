@@ -78,6 +78,28 @@ describe('basic push/pull round trip', () => {
     expect(roundTripped).toEqual(bytes)
   })
 
+  it('pushes a source whose pdfBlobId was cleared back to undefined without Firestore rejecting it', async () => {
+    // Regression test: removeSourcePdf sets pdfBlobId to undefined (rather
+    // than deleting the key), and encodeForRemote used to pass that
+    // straight through into the plain metadata object handed to setDoc —
+    // which real Firestore (and the fake here, deliberately mirroring it;
+    // see fakeFirestore.ts) rejects outright with "Unsupported field
+    // value: undefined".
+    const { a, b } = await pairedDevices()
+    const file = new File([new Uint8Array([1, 2, 3])], 'paper.pdf', { type: 'application/pdf' })
+    const source = await a.createSource({ type: 'article', key: 'x', fields: {} }, { pdfFile: file })
+    await a.sync()
+    await b.sync()
+    expect((await b.listSources())[0].pdfBlobId).toBeTruthy()
+
+    await a.removeSourcePdf(source)
+    await expect(a.sync()).resolves.toMatchObject({ pushed: expect.objectContaining({ sources: 1 }) })
+
+    await b.sync()
+    const [pulled] = await b.listSources()
+    expect(pulled.pdfBlobId).toBeUndefined()
+  })
+
   it('propagates a deletion as a tombstone, not a resurrection on the next pull', async () => {
     const { a, b } = await pairedDevices()
     const essay = await a.createEssay('Doomed essay')
