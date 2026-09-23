@@ -252,7 +252,18 @@ async function migrateAccountEncryption(db: Firestore, uid: string, cryptoKey: C
     for (const docSnap of snap.docs) {
       const decoded = await decodeFromRemote(docSnap.data(), cryptoKey)
       const reencoded = await encodeForRemote(col, decoded, cryptoKey)
-      await setDoc(docSnap.ref, reencoded)
+      try {
+        await setDoc(docSnap.ref, reencoded)
+      } catch (err) {
+        // Same reasoning as the main push loop's own try/catch: this runs
+        // unconditionally over every remote doc regardless of whether it's
+        // actually dirty, so an unusual old-shape document nobody's touched
+        // in years is exactly the kind of thing likeliest to surface here
+        // first — naming which one matters just as much as it does there.
+        console.error(`Encryption-policy migration failed for ${col}/${docSnap.id}`, { error: err, remoteDocKeys: Object.keys(reencoded) })
+        const message = err instanceof Error ? err.message : String(err)
+        throw new Error(`Failed migrating ${col}/${docSnap.id}: ${message}`, { cause: err })
+      }
     }
   }
 }
@@ -363,7 +374,27 @@ async function runSyncPassNow(onProgress?: (message: string) => void): Promise<S
       const remoteUpdatedAt = remoteSnap.exists() ? ((remoteSnap.data()?.updatedAt as number) ?? 0) : 0
       if (remoteUpdatedAt >= (localDoc.updatedAt ?? 0)) continue
       const remoteDoc = await encodeForRemote(col, localDoc, cryptoKey)
-      await setDoc(remoteRef, remoteDoc)
+      try {
+        await setDoc(remoteRef, remoteDoc)
+      } catch (err) {
+        // A raw Firestore rejection on its own only ever says what's wrong
+        // in the abstract ("Property _enc contains an invalid nested
+        // entity") — it says nothing about *which* local document triggered
+        // it, since by the time it reaches Firestore the sensitive half is
+        // already opaque ciphertext even to us. Logging the actual
+        // `metadata` keys and top-level `payload` shape *before* encryption
+        // (never the ciphertext or the plaintext values themselves — this
+        // still shouldn't leak real content to the console) alongside which
+        // collection/id failed is the difference between "somewhere in your
+        // whole library" and "this specific document, this specific field."
+        console.error(`Sync push failed for ${col}/${localDoc.id}`, {
+          error: err,
+          localDocKeys: Object.keys(localDoc),
+          remoteDocKeys: Object.keys(remoteDoc),
+        })
+        const message = err instanceof Error ? err.message : String(err)
+        throw new Error(`Failed pushing ${col}/${localDoc.id}: ${message}`, { cause: err })
+      }
       result.pushed[col]++
     }
   }

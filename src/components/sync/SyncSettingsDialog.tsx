@@ -529,6 +529,13 @@ function AccountPanel({ uid, onKeyForgotten }: { uid: string; onKeyForgotten: ()
       const result: SyncResult = await syncNow((message) => setStatus({ kind: 'running', message }))
       setStatus({ kind: 'ok', message: summarize(result) })
     } catch (err) {
+      // The modal only ever has room for the one-line message, but a
+      // Firestore error's `.code`/`.customData` (and, for the "which
+      // document" case, `.cause` — see syncEngine.ts's own push-loop
+      // instrumentation) can matter for actually diagnosing a failure;
+      // logging the whole object means that's still available in devtools
+      // even though nothing here is shown for it on screen.
+      console.error('Sync failed', err)
       setStatus({ kind: 'error', message: err instanceof Error ? err.message : String(err) })
     }
   }
