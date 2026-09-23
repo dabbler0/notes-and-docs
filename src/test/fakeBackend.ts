@@ -40,6 +40,17 @@ class InMemoryDocStore implements DocStore {
     }
     return out
   }
+
+  async listSince<T>(collection: string, since: number): Promise<T[]> {
+    const prefix = `${collection}/`
+    const out: T[] = []
+    for (const [key, value] of this.data.entries()) {
+      if (!key.startsWith(prefix)) continue
+      const updatedAt = (value as { updatedAt?: number }).updatedAt ?? 0
+      if (updatedAt > since) out.push(structuredClone(value) as T)
+    }
+    return out
+  }
 }
 
 class InMemoryBlobStore implements BlobStore {
@@ -92,6 +103,9 @@ export const backend: Backend = {
     },
     list<T>(collection: string) {
       return active.docs.list<T>(collection)
+    },
+    listSince<T>(collection: string, since: number) {
+      return active.docs.listSince<T>(collection, since)
     },
   } as DocStore,
   blobs: {

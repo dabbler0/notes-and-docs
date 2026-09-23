@@ -39,6 +39,9 @@ class GoogleDriveDocStore implements DocStore {
   async list<T>(_collection: string): Promise<T[]> {
     throw new Error('Google Drive backend not implemented in this prototype')
   }
+  async listSince<T>(_collection: string, _since: number): Promise<T[]> {
+    throw new Error('Google Drive backend not implemented in this prototype')
+  }
 }
 
 class GoogleDriveBlobStore implements BlobStore {

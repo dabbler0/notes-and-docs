@@ -507,8 +507,13 @@ async function runSyncPassNow(onProgress?: (message: string) => void): Promise<S
 
   for (const col of SYNCED_COLLECTIONS) {
     onProgress?.(`Checking ${col} for local changes…`)
-    const localDocs = await backend.docs.list<LocalDoc>(col)
-    const dirty = localDocs.filter((d) => (d.updatedAt ?? 0) > cursors.pushedAt)
+    // listSince() (backed by an index on updatedAt — see localBackend.ts)
+    // finds only what's actually dirty without having to read every
+    // document in the collection to check — list()+filter's old approach,
+    // which meant fully deserializing a whole library's worth of sources
+    // (compressed extracted-PDF-text payload included) on every single
+    // pass, even when nothing had changed.
+    const dirty = await backend.docs.listSince<LocalDoc>(col, cursors.pushedAt)
     for (const localDoc of dirty) {
       const remoteRef = doc(db, 'accounts', uid, col, localDoc.id)
       // "Dirty since I last pushed" only tells us this device has a

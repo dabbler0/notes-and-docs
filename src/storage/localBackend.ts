@@ -2,17 +2,25 @@ import { gzipCompressBytes, gzipDecompressBytes } from '../lib/compression'
 import type { Backend, BlobStore, DocStore } from './types'
 
 const DB_NAME = 'marginal'
-const DB_VERSION = 2
+const DB_VERSION = 3
 const STORE = 'docs'
 const BLOB_STORE = 'blobs'
+/** Every record this store ever holds has a numeric `updatedAt` (see `listSince`'s own doc comment) — indexing on it is what lets `listSince` skip straight to the docs that actually changed instead of visiting every record in a collection. */
+const UPDATED_AT_INDEX = 'updatedAt'
 
 function openDb(): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
     const req = indexedDB.open(DB_NAME, DB_VERSION)
     req.onupgradeneeded = () => {
       const db = req.result
-      if (!db.objectStoreNames.contains(STORE)) {
-        db.createObjectStore(STORE) // keyed by `${collection}/${id}`
+      // `req.transaction` is the in-progress upgrade transaction — the only
+      // way to reach a store that already existed from an earlier version
+      // (an object store can only be created fresh via db.createObjectStore,
+      // but adding an index to one that's already there needs the store
+      // handle from *this* transaction instead).
+      const store = db.objectStoreNames.contains(STORE) ? req.transaction!.objectStore(STORE) : db.createObjectStore(STORE) // keyed by `${collection}/${id}`
+      if (!store.indexNames.contains(UPDATED_AT_INDEX)) {
+        store.createIndex(UPDATED_AT_INDEX, UPDATED_AT_INDEX)
       }
       if (!db.objectStoreNames.contains(BLOB_STORE)) {
         db.createObjectStore(BLOB_STORE) // keyed by blob id
@@ -77,6 +85,40 @@ class IndexedDbDocStore implements DocStore {
         const cursor = req.result
         if (cursor) {
           out.push(cursor.value as T)
+          cursor.continue()
+        } else {
+          resolve(out)
+        }
+      }
+      req.onerror = () => reject(req.error)
+    })
+  }
+
+  /**
+   * Walks the `updatedAt` index instead of a per-collection key range —
+   * the browser can jump straight past every record at or before `since`
+   * without ever deserializing them, which `list()`'s plain key-range
+   * cursor can't do (it still has to visit — and fully deserialize — every
+   * record in the collection to read its `updatedAt`, even ones nowhere
+   * near what's being asked for). The index spans every collection at
+   * once, not just this one, so a hit outside `collection` gets skipped
+   * here purely by checking its *primary* key's prefix — cheap, since
+   * `cursor.primaryKey` doesn't require deserializing `cursor.value` the
+   * way pushing a non-matching record into the results would.
+   */
+  async listSince<T>(collection: string, since: number): Promise<T[]> {
+    const conn = await db()
+    return new Promise((resolve, reject) => {
+      const tx = conn.transaction(STORE, 'readonly')
+      const index = tx.objectStore(STORE).index(UPDATED_AT_INDEX)
+      const range = IDBKeyRange.lowerBound(since, true) // exclusive: strictly greater than `since`, matching list()+filter's `> since`
+      const req = index.openCursor(range)
+      const prefix = collection + '/'
+      const out: T[] = []
+      req.onsuccess = () => {
+        const cursor = req.result
+        if (cursor) {
+          if (typeof cursor.primaryKey === 'string' && cursor.primaryKey.startsWith(prefix)) out.push(cursor.value as T)
           cursor.continue()
         } else {
           resolve(out)

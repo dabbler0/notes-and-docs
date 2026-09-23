@@ -9,6 +9,18 @@ export interface DocStore {
   put<T extends { id: string }>(collection: string, doc: T): Promise<void>
   delete(collection: string, id: string): Promise<void>
   list<T>(collection: string): Promise<T[]>
+  /**
+   * Every doc in `collection` whose own `updatedAt` is strictly greater
+   * than `since` — the same result `list(collection)` filtered by
+   * `updatedAt > since` would give, but for a backend that can index on
+   * it (see localBackend.ts) without having to read every document in the
+   * collection just to find the handful that actually qualify. Used by
+   * sync's "what's changed locally since I last pushed" check, which
+   * otherwise has to fully deserialize every record in every synced
+   * collection — including a source's own compressed extracted-PDF-text
+   * payload — on every single pass, dirty or not.
+   */
+  listSince<T>(collection: string, since: number): Promise<T[]>
 }
 
 /** Binary blob store, keyed by id (used for PDF files). */
