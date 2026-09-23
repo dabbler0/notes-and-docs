@@ -197,13 +197,13 @@ export function CommentsPanel({
 }
 
 /**
- * An inline top-level comment's own body doesn't render here at all — it
- * shows as a small marker right in the document's own text (see
- * SectionBlock's `.inline-comment-marker`) and opens an editing popover on
- * click (see EssayWorkspace's `InlineCommentPopover`). This only ever shows
- * once it has at least one reply or comment-on-it (the row-filtering above
- * skips it entirely otherwise), rendering just that nested thread, indented
- * under a small label rather than a full card of its own.
+ * An inline top-level comment's own body doesn't render here at all — it's
+ * a real, live component portal-mounted directly into the document's own
+ * text (see SectionBlock's `InlineCommentBody`), expanding into its own
+ * editing card right there on click. This only ever shows once it has at
+ * least one reply or comment-on-it (the row-filtering above skips it
+ * entirely otherwise), rendering just that nested thread, indented under a
+ * small label rather than a full card of its own.
  */
 function InlineTopLevelThread({
   node,
@@ -257,7 +257,7 @@ export function CommentCard({
   onDelete: (node: EssayNode, commentId: string) => void
   /** Only present for a top-level `'text'` comment — lets it flip between margin and inline display. Undefined for a nested comment (that field only ever applies to a top-level comment in the first place). */
   onToggleDisplayMode: ((node: EssayNode, commentId: string, target: 'margin' | 'inline') => void) | undefined
-  /** Only present when this card is rendered inside an inline comment's own editing popover (see EssayWorkspace's `InlineCommentPopover`) — dissolves the comment into ordinary prose. Undefined everywhere else (a margin card, or a nested reply/comment-on-a-comment, has no "paper text" to promote into). */
+  /** Only present when this card is rendered inside an inline comment's own expanded editor (see SectionBlock's `InlineCommentBody`) — dissolves the comment into ordinary prose. Undefined everywhere else (a margin card, or a nested reply/comment-on-a-comment, has no "paper text" to promote into). */
   onPromote: ((node: EssayNode, commentId: string) => void) | undefined
 }) {
   const bodyRef = useRef<HTMLDivElement>(null)

@@ -1,11 +1,9 @@
 import { useEffect, useRef, useState } from 'preact/hooks'
-import { addFootnote, createChildNode, addComment, findCommentById, getEssay, getNode, loadNodeMap, moveNode, saveEssay, saveNode } from '../../models/essaysRepo'
-import { deleteComment, promoteComment, toggleCommentDisplayMode } from './commentActions'
+import { addFootnote, createChildNode, addComment, getEssay, getNode, loadNodeMap, moveNode, saveEssay, saveNode } from '../../models/essaysRepo'
 import { addToGraveyard } from '../../models/graveyardRepo'
 import { citationHtml, displayTitle } from '../../lib/bibtex'
 import { extractAroundRange, insertHtmlAtRange } from '../../lib/selection'
 import { escapeAttr, escapeHtml } from '../../lib/html'
-import { htmlToPlainText } from '../../lib/textExtraction'
 import { id } from '../../lib/id'
 import { buildParentMap, isPlaceholderTitle, placeholderTitle } from '../../lib/treeNumbering'
 import { getChildIds, reconstructContent, markerHtml, type MarkerPlacement } from '../../lib/childMarkers'
@@ -13,7 +11,7 @@ import type { Essay, EssayNode, Source } from '../../models/types'
 import { Icon } from '../Icon'
 import { SectionBlock } from './SectionBlock'
 import { NodeTree } from './NodeTree'
-import { CommentsPanel, CommentCard } from './CommentsPanel'
+import { CommentsPanel } from './CommentsPanel'
 import { GraveyardPanel } from './GraveyardPanel'
 import { CitationPickerDialog } from './CitationPickerDialog'
 import { QuoteInsertDialog } from './QuoteInsertDialog'
@@ -59,9 +57,6 @@ export function EssayWorkspace({ essayId, onBack }: { essayId: string; onBack: (
     anchorRect: { top: number; bottom: number; left: number; right: number }
   } | null>(null)
   const commentWidgetRef = useRef<HTMLDivElement>(null)
-  /** The editing popover opened by clicking an inline comment's own marker in the document (see `handleDocClick`) — null when none is open. */
-  const [openInlineComment, setOpenInlineComment] = useState<{ nodeId: string; commentId: string; anchorRect: { top: number; bottom: number; left: number; right: number } } | null>(null)
-  const inlineCommentWidgetRef = useRef<HTMLDivElement>(null)
   const [focusTitleId, setFocusTitleId] = useState<string | null>(null)
   const [focusFootnoteId, setFocusFootnoteId] = useState<string | null>(null)
 
@@ -97,23 +92,6 @@ export function EssayWorkspace({ essayId, onBack }: { essayId: string; onBack: (
     return () => document.removeEventListener('mousedown', onDown, true)
   }, [pendingComment])
 
-  // Same idea for the inline comment editing popover — dismissing it also
-  // reloads, so the marker's own preview text (only ever refreshed when a
-  // section resyncs from a fresh draftContent — see SectionBlock's
-  // `refreshInlineCommentPreviews`) picks up whatever was just edited.
-  useEffect(() => {
-    if (!openInlineComment) return
-    function onDown(e: MouseEvent) {
-      if (inlineCommentWidgetRef.current && !inlineCommentWidgetRef.current.contains(e.target as Node)) {
-        setOpenInlineComment(null)
-        reload()
-      }
-    }
-    document.addEventListener('mousedown', onDown, true)
-    return () => document.removeEventListener('mousedown', onDown, true)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [openInlineComment])
-
   async function saveEssayTitle() {
     if (!essay) return
     essay.title = essayTitle || 'Untitled essay'
@@ -142,21 +120,6 @@ export function EssayWorkspace({ essayId, onBack }: { essayId: string; onBack: (
    * shard is vertically closest and place the cursor at its end, rather
    * than leaving the click a no-op.
    */
-  /** A click anywhere in the document — checked for an inline comment marker first (opens its editing popover; see `openInlineComment`), then handed to `handleDocMissClick` below for its own, unrelated fallback. */
-  function handleDocClick(e: MouseEvent) {
-    const marker = (e.target as HTMLElement).closest<HTMLElement>('.inline-comment-marker[data-comment-id]')
-    if (marker) {
-      const nodeId = marker.closest('[data-node-id]')?.getAttribute('data-node-id')
-      const commentId = marker.getAttribute('data-comment-id')
-      if (nodeId && commentId) {
-        const rect = marker.getBoundingClientRect()
-        setOpenInlineComment({ nodeId, commentId, anchorRect: { top: rect.top, bottom: rect.bottom, left: rect.left, right: rect.right } })
-      }
-      return
-    }
-    handleDocMissClick(e)
-  }
-
   function handleDocMissClick(e: MouseEvent) {
     if (commentMode) return // nothing is editable in comment mode — this fallback would have nowhere useful to send focus
     const target = e.target as HTMLElement
@@ -465,7 +428,6 @@ export function EssayWorkspace({ essayId, onBack }: { essayId: string; onBack: (
           const marker = document.createElement('span')
           marker.className = 'inline-comment-marker'
           marker.setAttribute('data-comment-id', commentId)
-          marker.setAttribute('data-preview', htmlToPlainText(body))
           marker.setAttribute('contenteditable', 'false')
           mark.after(marker)
         }
@@ -696,7 +658,7 @@ export function EssayWorkspace({ essayId, onBack }: { essayId: string; onBack: (
             <div className="spacer" />
           </div>
 
-          <div className={`editor-scroll doc-scroll${commentMode ? ' comment-mode' : ''}`} ref={docScrollRef} onMouseUp={handleMouseUpForComments} onClick={handleDocClick}>
+          <div className={`editor-scroll doc-scroll${commentMode ? ' comment-mode' : ''}`} ref={docScrollRef} onMouseUp={handleMouseUpForComments} onClick={handleDocMissClick}>
             <SectionBlock
               node={rootNode}
               nodeMap={nodeMap}
@@ -798,39 +760,6 @@ export function EssayWorkspace({ essayId, onBack }: { essayId: string; onBack: (
           <CommentComposer onCancel={() => setPendingComment(null)} onSubmit={submitComment} />
         </div>
       )}
-
-      {openInlineComment &&
-        (() => {
-          const node = nodeMap.get(openInlineComment.nodeId)
-          const comment = node && findCommentById(node, openInlineComment.commentId)
-          if (!node || !comment) return null
-          return (
-            <div ref={inlineCommentWidgetRef} className="comment-widget inline-comment-widget" style={commentWidgetStyle(openInlineComment.anchorRect)}>
-              <CommentCard
-                node={node}
-                comment={comment}
-                depth={0}
-                onChanged={reload}
-                onDelete={async (n, commentId) => {
-                  if (!confirm('Delete this comment, and everything replied or commented on it?')) return
-                  await deleteComment(n, commentId)
-                  setOpenInlineComment(null)
-                  reload()
-                }}
-                onToggleDisplayMode={async (n, commentId, target) => {
-                  await toggleCommentDisplayMode(n, commentId, target)
-                  setOpenInlineComment(null)
-                  reload()
-                }}
-                onPromote={async (n, commentId) => {
-                  await promoteComment(n, commentId)
-                  setOpenInlineComment(null)
-                  reload()
-                }}
-              />
-            </div>
-          )
-        })()}
 
       {showCitation && <CitationPickerDialog onClose={() => setShowCitation(false)} onSelect={insertCitation} />}
       {showQuoteDialog && <QuoteInsertDialog onClose={() => setShowQuoteDialog(false)} onInsertBlock={insertQuote} onInsertInline={insertInlineQuote} />}

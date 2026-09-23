@@ -1,9 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks'
+import { createPortal } from 'preact/compat'
 import { commentIdsInContent, commitNewVersion, deleteFootnote, deleteNodeOnly, findCommentById, headVersion, nodeComments, nodeFootnotes, revertToVersion, saveNode, updateFootnoteContent } from '../../models/essaysRepo'
-import { htmlToPlainText } from '../../lib/textExtraction'
+import { deleteComment, promoteComment, toggleCommentDisplayMode } from './commentActions'
+import { CommentCard } from './CommentsPanel'
 import { parseSegments, reconstructContent } from '../../lib/childMarkers'
 import { FrozenPreview } from './FrozenPreview'
-import type { EssayNode, Footnote, NodeVersion } from '../../models/types'
+import type { Comment, EssayNode, Footnote, NodeVersion } from '../../models/types'
 
 const HEADING_SIZES = [21, 18, 16.5, 15, 14.5]
 function headingSize(depth: number) {
@@ -81,6 +83,25 @@ export function SectionBlock({
   const syncedContent = useRef<{ node: EssayNode | null; html: string }>({ node: null, html: '' })
   const isCollapsed = collapsed.has(node.id)
 
+  // Every inline comment's own `.inline-comment-marker` element currently
+  // sitting somewhere in this node's live shard(s) — the marker is plain,
+  // empty, non-editable HTML baked directly into a text segment's own
+  // string (see childMarkers.ts's own doc comment for why splitting it out
+  // as a separate segment doesn't work), but its *rendered* content is a
+  // real, live, mounted `InlineCommentBody` via a portal (see the render
+  // below) — this is what tells Preact which live DOM node each one
+  // portals into. Recomputed in the same effect that resyncs shard
+  // innerHTML from a fresh draftContent, since that's the only thing that
+  // ever creates, destroys, or replaces these marker elements — an
+  // unfocused shard's markers get fresh DOM nodes right along with the
+  // rest of its innerHTML, and a focused shard's markers (never touched by
+  // typing, since they're non-editable islands) stay exactly as they were.
+  const [inlineMarkers, setInlineMarkers] = useState<HTMLElement[]>([])
+  // Which inline comments' own expanded editors are currently open — kept
+  // here rather than in `InlineCommentBody` itself; see that component's
+  // own doc comment on its `open` prop for why.
+  const [expandedInlineComments, setExpandedInlineComments] = useState<Set<string>>(new Set())
+
   useEffect(() => {
     setTitle(node.title)
   }, [node.id, node.title])
@@ -140,13 +161,17 @@ export function SectionBlock({
       if (el && el !== document.activeElement) {
         if (el.innerHTML !== seg.html) el.innerHTML = seg.html
         if (removeEmptySourceChips(el)) anyCleaned = true
-        refreshInlineCommentPreviews(el, node)
       }
       i++
     }
     syncedContent.current = { node, html: node.draftContent }
     setDirty(node.draftContent !== head.content)
     if (anyCleaned) scheduleSave()
+    // Re-derive the current marker elements *after* the innerHTML syncs
+    // above — an unfocused shard just got fresh ones (its old ones, and
+    // whatever was portal-mounted into them, are gone the instant
+    // innerHTML was reassigned), a focused one kept its originals.
+    setInlineMarkers(wrapperRef.current ? (Array.from(wrapperRef.current.querySelectorAll(':scope > .node-content .inline-comment-marker[data-comment-id]')) as HTMLElement[]) : [])
   }, [node, node.draftContent, segments])
 
   useEffect(() => {
@@ -448,6 +473,30 @@ export function SectionBlock({
           <div className="version-split-pane live-pane" key="live">
             {comparingVersion && <div className="version-split-label">Current draft — editing</div>}
             {liveEditor}
+            {inlineMarkers.map((el) => {
+              const commentId = el.getAttribute('data-comment-id')
+              const comment = commentId ? findCommentById(node, commentId) : undefined
+              if (!comment) return null
+              return createPortal(
+                <InlineCommentBody
+                  key={comment.id}
+                  node={node}
+                  comment={comment}
+                  open={expandedInlineComments.has(comment.id)}
+                  onOpen={() => setExpandedInlineComments((prev) => new Set(prev).add(comment.id))}
+                  onClose={() =>
+                    setExpandedInlineComments((prev) => {
+                      if (!prev.has(comment.id)) return prev
+                      const next = new Set(prev)
+                      next.delete(comment.id)
+                      return next
+                    })
+                  }
+                  onChanged={onTitleChanged}
+                />,
+                el,
+              )
+            })}
           </div>
       </div>
       {!isCollapsed && comparingVersion && (
@@ -716,25 +765,76 @@ function removeEmptySourceChips(root: HTMLElement): boolean {
 }
 
 /**
- * Refreshes every inline comment marker's own `data-preview` attribute
- * (rendered via CSS — see `.inline-comment-marker::after` in styles.css)
- * inside `root` (a whole shard, swept on every unfocused resync, same as
- * `removeEmptySourceChips` above) from that comment's own current `body` —
- * the marker itself is deliberately kept plain HTML rather than a live,
- * mounted component (see `childMarkers.ts`'s own doc comment for why), so
- * nothing else keeps this in sync automatically the way a real component
- * re-rendering would. Not run on every keystroke — only whenever this
- * section's content gets resynced from a fresh `draftContent` (e.g. after
- * `reload()` following an edit made through the comment's own popover, or
- * on first load) — a moment of staleness between typing in the popover and
- * the preview catching up is an acceptable tradeoff for not having to wire
- * up a live subscription just for this.
+ * An inline comment's own live UI — mounted via a portal (see the
+ * `inlineMarkers`/`createPortal` machinery above) directly into its
+ * `.inline-comment-marker` element, which itself sits as plain, ordinary,
+ * `contenteditable="false"` inline content *inside* one continuous text
+ * segment, exactly like a citation chip or footnote marker already does.
+ * That's what makes this a real, live, stateful Preact component — with
+ * its own hooks, a body that's always in sync with `comment.body` with no
+ * manual re-sync step, and ordinary click handlers — while still reading
+ * inline, mid-sentence: the marker was never a segment boundary Range had
+ * to split *through*, so there's no `<p>` (or any other ancestor) for
+ * `cloneContents()` to duplicate around it (see `childMarkers.ts`'s own
+ * doc comment for the fuller story of why an earlier attempt at this,
+ * built on a segment boundary instead, actually broke the paragraph flow).
+ *
+ * Collapsed, it's just the comment's own body rendered read-only and
+ * muted, right there in the flow — click it to expand into the same
+ * editing surface a margin comment's own card offers (`CommentCard`,
+ * reused as-is), plus two buttons a margin comment doesn't need:
+ * converting back to a margin card, and promoting straight into ordinary
+ * paper text.
  */
-function refreshInlineCommentPreviews(root: HTMLElement, node: EssayNode): void {
-  root.querySelectorAll<HTMLElement>('.inline-comment-marker[data-comment-id]').forEach((marker) => {
-    const comment = findCommentById(node, marker.getAttribute('data-comment-id')!)
-    marker.setAttribute('data-preview', comment ? htmlToPlainText(comment.body) : '')
-  })
+function InlineCommentBody({
+  node,
+  comment,
+  open,
+  onOpen,
+  onClose,
+  onChanged,
+}: {
+  node: EssayNode
+  comment: Comment
+  /** Whether/not the expanded editor shows, lifted up into `SectionBlock`'s own state rather than kept here — this component's portal *target* (the marker DOM element itself) gets destroyed and recreated every time this section resyncs from a fresh `draftContent` (e.g. right after `onChanged()`'s own `reload()`, following any edit made through this very card), which would otherwise silently reset `open` back to closed the instant someone, say, posted a reply. `SectionBlock` doesn't get remounted the same way, so state kept there survives. */
+  open: boolean
+  onOpen: () => void
+  onClose: () => void
+  onChanged: () => void
+}) {
+  async function handleDelete(n: EssayNode, commentId: string) {
+    if (!confirm('Delete this comment, and everything replied or commented on it?')) return
+    await deleteComment(n, commentId)
+    onClose()
+    onChanged()
+  }
+
+  async function handleToggleDisplayMode(n: EssayNode, commentId: string, target: 'margin' | 'inline') {
+    await toggleCommentDisplayMode(n, commentId, target)
+    onClose()
+    onChanged()
+  }
+
+  async function handlePromote(n: EssayNode, commentId: string) {
+    await promoteComment(n, commentId)
+    onClose()
+    onChanged()
+  }
+
+  if (!open) {
+    return <span className="inline-comment-preview" onClick={onOpen} dangerouslySetInnerHTML={{ __html: comment.body }} />
+  }
+
+  return (
+    <span className="inline-comment-editor">
+      <CommentCard node={node} comment={comment} depth={0} onChanged={onChanged} onDelete={handleDelete} onToggleDisplayMode={handleToggleDisplayMode} onPromote={handlePromote} />
+      <div className="inline-comment-collapse">
+        <button className="btn btn-ghost btn-sm" onClick={onClose}>
+          Done
+        </button>
+      </div>
+    </span>
+  )
 }
 
 /** How many characters into `el`'s own text the (container, offset) boundary point sits. */

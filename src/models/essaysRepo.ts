@@ -277,16 +277,18 @@ function cssEscapeId(s: string): string {
 }
 
 /**
- * An inline comment's own marker — always empty, a `contenteditable="false"`
- * island sitting *inside* one ordinary text segment (never a segment
- * boundary of its own — see `childMarkers.ts`'s own doc comment for why
- * that specifically doesn't work for something meant to read inline,
- * mid-sentence). `data-preview` starts empty here; `SectionBlock` refreshes
- * it live from the comment's own body every time the section resyncs from
- * `draftContent` — see its own doc comment.
+ * An inline comment's own marker — always empty in the *stored* HTML, a
+ * `contenteditable="false"` island sitting *inside* one ordinary text
+ * segment (never a segment boundary of its own — see `childMarkers.ts`'s
+ * own doc comment for why that specifically doesn't work for something
+ * meant to read inline, mid-sentence). Its rendered content is a real,
+ * live, mounted component instead — see `SectionBlock`'s `InlineCommentBody`
+ * and its own `createPortal` machinery, which finds this exact element by
+ * `data-comment-id` and portals into it directly, so it always reflects the
+ * comment's current body with no manual re-sync step.
  */
 function inlineCommentMarkerHtml(commentId: string): string {
-  return `<span class="inline-comment-marker" data-comment-id="${commentId}" data-preview="" contenteditable="false"></span>`
+  return `<span class="inline-comment-marker" data-comment-id="${commentId}" contenteditable="false"></span>`
 }
 
 /** Splices `commentId`'s own `.inline-comment-marker` marker right after its `<mark class="comment-anchor">` anchor in `html` — a no-op if the anchor mark isn't there, or if the marker's already in place. */
