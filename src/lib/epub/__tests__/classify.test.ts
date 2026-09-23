@@ -166,6 +166,25 @@ describe('classifyPages: layout mode', () => {
     expect(classifyPages([])).toEqual([])
     expect(classifyPages(['', ''])).toEqual([])
   })
+
+  it('still routes to the layout classifier when the first page is image-only (a cover/masthead page with no text)', () => {
+    // Regression test for a real bug: a layout-mode page containing only
+    // an <img> has `position: absolute` on the image but no `font-size`
+    // anywhere (only a text <span> ever carries one), so it alone doesn't
+    // look like layout-mode HTML. Sampling only the *first* non-empty page
+    // to decide which classifier to use misrouted a genuinely layout-mode
+    // document whose first page happened to be image-only (a cover photo,
+    // a masthead) through the plain-mode classifier instead — which looks
+    // for <p> tags the layout extractor never produces — so every page
+    // parsed to zero lines and the resulting EPUB came out essentially
+    // empty, even though the rest of the document was full of real,
+    // properly-extracted text.
+    const imageOnlyCoverPage = page('<img src="data:image/png;base64,x" alt="" style="position:absolute;left:0px;top:0px;width:400px;height:600px;">')
+    const pages = [imageOnlyCoverPage, bodyPage(2, 'Introduction', ['Real body text on page two.']), bodyPage(3, null, ['More real body text on page three.'])]
+    const blocks = classifyPages(pages)
+    expect(blocks.some((b) => b.type === 'heading' && b.text === 'Introduction')).toBe(true)
+    expect(blocks.some((b) => b.type === 'paragraph' && b.text.includes('Real body text'))).toBe(true)
+  })
 })
 
 describe('classifyPages: plain mode', () => {

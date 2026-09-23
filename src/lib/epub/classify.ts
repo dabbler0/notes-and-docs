@@ -35,10 +35,28 @@ const FOOTNOTE_MARKER_RE = /^(\d{1,3}|[*†‡§¶])[.):]?\s+/
 const MIN_PAGES_FOR_EDGE_DETECTION = 3
 const EDGE_BAND_FRACTION = 0.12
 
+/**
+ * Which classifier a source's `pageHtml` actually needs is decided by
+ * checking *every* non-empty page for the layout extractor's signature,
+ * not just the first one — a layout-mode page containing only an image
+ * (a masthead/cover photo, a full-page figure, anything with no running
+ * text on it at all) has `position: absolute` on its `<img>` but no
+ * `font-size` anywhere, since only a text `<span>` ever carries one (see
+ * `isLayoutHtml`'s own doc comment). Sampling only the first non-empty
+ * page — the original version of this function — misclassified exactly
+ * this as `'plain'`-mode whenever a genuinely layout-mode document's
+ * *first* page happened to be image-only, routing the whole document
+ * through `classifyPlainPages`, which looks for `<p>` tags the layout
+ * extractor never produces at all: every page then parsed to zero lines,
+ * and the resulting EPUB came out essentially empty. Confirmed directly
+ * as a real bug, not a hypothetical. Checking every page instead costs a
+ * few extra cheap regex tests but only has to find *one* real text page
+ * to route correctly.
+ */
 export function classifyPages(pageHtml: string[]): DocBlock[] {
-  const firstNonEmpty = pageHtml.find((h) => h && h.trim())
-  if (!firstNonEmpty) return []
-  return isLayoutHtml(firstNonEmpty) ? classifyLayoutPages(pageHtml) : classifyPlainPages(pageHtml)
+  const nonEmpty = pageHtml.filter((h) => h && h.trim())
+  if (nonEmpty.length === 0) return []
+  return nonEmpty.some(isLayoutHtml) ? classifyLayoutPages(pageHtml) : classifyPlainPages(pageHtml)
 }
 
 // ---- shared: repetition-based running header/footer detection -----------

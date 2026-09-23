@@ -567,7 +567,17 @@ the actual work lives in `lib/epub/`:
   parsing — and it works meaningfully better on `'layout'`-mode text (real
   position/size to work from) than `'plain'`-mode (repetition and a few
   textual conventions only, no way to confirm a footnote by its font size
-  at all).
+  at all). Which classifier a source's `pageHtml` actually needs is decided
+  by checking `isLayoutHtml` (the presence of both `position: absolute` and
+  `font-size` — only a text `<span>` ever carries the latter, an `<img>`
+  never does) against *every* non-empty page, not just the first: a real
+  bug produced a completely empty EPUB whenever a genuinely layout-mode
+  document's first page happened to have no text at all — an image-only
+  cover or masthead page, most commonly — since sampling only that page
+  made the whole document look like `'plain'`-mode, which looks for `<p>`
+  tags the layout extractor never produces; every page then parsed to zero
+  lines. Checking every page instead only needs to find *one* real text
+  page to route correctly, which any document worth exporting has.
 - `buildEpub.ts` assembles an actual EPUB 3 file (a zip with the format's
   required internal structure — `mimetype` first and stored uncompressed,
   `META-INF/container.xml`, `content.opf`, an EPUB3 `nav.xhtml` plus a
