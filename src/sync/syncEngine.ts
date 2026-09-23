@@ -190,6 +190,58 @@ interface LocalDoc {
   [key: string]: unknown
 }
 
+/** A shallow, content-free structural description of `value` — its
+ * constructor name and shape (length/byte count/own keys), never the
+ * actual data — safe to log to the console even for a field the user
+ * typed real content into. Flags anything that isn't a plain object,
+ * array, or primitive (a `Map`, a `Date`, a class instance, ...) — real
+ * Firestore rejects those outright, and a *bug* that put one where a
+ * plain object was expected (rather than something this app's own code
+ * ever intentionally constructs) is exactly the kind of thing this exists
+ * to surface. */
+export function describeValue(value: unknown, depth = 0): string {
+  if (value === undefined) return 'undefined'
+  if (value === null) return 'null'
+  if (typeof value === 'string') return `string(${value.length} chars)`
+  if (typeof value === 'number' || typeof value === 'boolean') return typeof value
+  if (Object.prototype.toString.call(value) === '[object Uint8Array]') return `Uint8Array(${(value as Uint8Array).byteLength} bytes)`
+  if (Array.isArray(value)) {
+    if (depth >= 2) return `Array(${value.length})`
+    return `Array(${value.length})[${value.map((v) => describeValue(v, depth + 1)).join(', ')}]`
+  }
+  if (typeof value === 'object') {
+    const proto = Object.getPrototypeOf(value)
+    const isPlain = proto === Object.prototype || proto === null
+    const entries = Object.entries(value as Record<string, unknown>)
+    const shape = depth >= 2 ? `{${entries.length} keys}` : `{${entries.map(([k, v]) => `${k}: ${describeValue(v, depth + 1)}`).join(', ')}}`
+    return isPlain ? shape : `${value.constructor?.name ?? 'non-plain object'} ${shape} — NOT A PLAIN OBJECT`
+  }
+  return `${typeof value} (unexpected type!)`
+}
+
+/** Pulls out whatever's most human-identifying for a collection's own
+ * document shape (a source's title, an essay/node's own title, ...) plus a
+ * per-field structural report — see `describeValue`. `identify` is
+ * `undefined` when nothing usable is found (an untitled/blank document),
+ * not an error. */
+export function describeLocalDoc(collectionName: SyncedCollection, localDoc: LocalDoc): { identify?: string; fields: Record<string, string> } {
+  const fields: Record<string, string> = {}
+  for (const [k, v] of Object.entries(localDoc)) fields[k] = describeValue(v)
+
+  let identify: string | undefined
+  if (collectionName === 'sources') {
+    const bibtex = localDoc.bibtex as { fields?: Record<string, string> } | undefined
+    identify = bibtex?.fields?.title || (localDoc.pdfFileName as string) || (localDoc.comment as string)?.slice(0, 60)
+  } else if (collectionName === 'essays' || collectionName === 'nodes') {
+    identify = localDoc.title as string
+  } else if (collectionName === 'quotes') {
+    identify = (localDoc.quoteText as string)?.slice(0, 60)
+  } else if (collectionName === 'graveyard') {
+    identify = localDoc.nodeTitle as string
+  }
+  return { identify: identify || undefined, fields }
+}
+
 async function encodeForRemote(collectionName: SyncedCollection, localDoc: LocalDoc, cryptoKey: CryptoKey): Promise<Record<string, unknown>> {
   const sensitiveFields = SENSITIVE_FIELDS[collectionName]
   const metadata: Record<string, unknown> = {}
@@ -260,9 +312,9 @@ async function migrateAccountEncryption(db: Firestore, uid: string, cryptoKey: C
         // actually dirty, so an unusual old-shape document nobody's touched
         // in years is exactly the kind of thing likeliest to surface here
         // first — naming which one matters just as much as it does there.
-        console.error(`Encryption-policy migration failed for ${col}/${docSnap.id}`, { error: err, remoteDocKeys: Object.keys(reencoded) })
+        console.error(`Encryption-policy migration failed for ${col}/${docSnap.id}`, { error: err, doc: describeLocalDoc(col, decoded) })
         const message = err instanceof Error ? err.message : String(err)
-        throw new Error(`Failed migrating ${col}/${docSnap.id}: ${message}`, { cause: err })
+        throw new Error(`Failed migrating ${col}/${docSnap.id} (${describeLocalDoc(col, decoded).identify ?? 'see console for details'}): ${message}`, { cause: err })
       }
     }
   }
@@ -380,20 +432,17 @@ async function runSyncPassNow(onProgress?: (message: string) => void): Promise<S
         // A raw Firestore rejection on its own only ever says what's wrong
         // in the abstract ("Property _enc contains an invalid nested
         // entity") — it says nothing about *which* local document triggered
-        // it, since by the time it reaches Firestore the sensitive half is
-        // already opaque ciphertext even to us. Logging the actual
-        // `metadata` keys and top-level `payload` shape *before* encryption
-        // (never the ciphertext or the plaintext values themselves — this
-        // still shouldn't leak real content to the console) alongside which
-        // collection/id failed is the difference between "somewhere in your
-        // whole library" and "this specific document, this specific field."
-        console.error(`Sync push failed for ${col}/${localDoc.id}`, {
-          error: err,
-          localDocKeys: Object.keys(localDoc),
-          remoteDocKeys: Object.keys(remoteDoc),
-        })
+        // it (an id alone isn't something a person can recognize their own
+        // library by), nor which field. `describeLocalDoc` pulls out
+        // whatever's most human-identifying for this collection (a
+        // source's title, an essay/node's title, ...) and a shallow
+        // per-field structural report — constructor name and shape, never
+        // the actual field *content* — so the console shows enough to find
+        // both the document and the culprit field without ever logging
+        // real user text.
+        console.error(`Sync push failed for ${col}/${localDoc.id}`, { error: err, doc: describeLocalDoc(col, localDoc) })
         const message = err instanceof Error ? err.message : String(err)
-        throw new Error(`Failed pushing ${col}/${localDoc.id}: ${message}`, { cause: err })
+        throw new Error(`Failed pushing ${col}/${localDoc.id} (${describeLocalDoc(col, localDoc).identify ?? 'see console for details'}): ${message}`, { cause: err })
       }
       result.pushed[col]++
     }
