@@ -73,6 +73,35 @@ function assertNoUndefined(value: unknown, label: string): void {
   }
 }
 
+// Real Firestore rejects a single field value over roughly this many UTF-8
+// bytes — for a string field (the only kind this app ever writes something
+// large enough to matter for), that's one byte per character for the
+// plain-ASCII base64 this app always stores, so length works as a stand-in
+// for byte count here. Caught a real production bug directly: a source's
+// encrypted page text ran past this without the app-level chunking that's
+// supposed to kick in first (see syncEngine.ts's own `_enc` chunking doc
+// comment) — this check exists so a *future* regression of that same kind
+// fails a test locally instead of only ever surfacing against real
+// Firestore, in production, after the fact.
+const MAX_FIELD_BYTES = 1_048_487
+
+/** Mirrors Firestore's real rejection of an oversized *nested* field value
+ * — its actual wording for this ("Property X contains an invalid nested
+ * entity") is distinct from the top-level "Unsupported field value"
+ * `assertNoUndefined` reproduces above, so this reproduces it separately
+ * with its own matching message rather than piggybacking on that one. */
+function assertNoOversizedField(value: unknown, label: string, depth = 0): void {
+  if (typeof value === 'string' && value.length > MAX_FIELD_BYTES) {
+    const kind = depth === 0 ? 'Unsupported field value' : 'invalid nested entity'
+    throw new Error(`Fake Firestore: ${kind} — field longer than ${MAX_FIELD_BYTES} bytes (at ${label})`)
+  }
+  if (Array.isArray(value)) {
+    value.forEach((v, i) => assertNoOversizedField(v, `${label}[${i}]`, depth + 1))
+  } else if (value && typeof value === 'object') {
+    for (const [k, v] of Object.entries(value)) assertNoOversizedField(v, `${label}.${k}`, depth + 1)
+  }
+}
+
 export function doc(parent: FakeDb | DocRef | ColRef, ...segs: string[]): DocRef {
   if (segs.length === 0) throw new Error('doc() needs at least one path segment')
   const base = isDocRef(parent) || isColRef(parent) ? parent.path : ''
@@ -98,6 +127,7 @@ export function query(col: ColRef, ...clauses: WhereClause[]): FakeQuery {
 /** `options.merge` mirrors real Firestore's shallow top-level merge (not a deep merge, not field-path merge — the one form this app's own code actually uses, in accountMeta.ts's markEncryptionVersion). Without it, setDoc replaces the whole document, same as real Firestore's own default. */
 export async function setDoc(ref: DocRef, data: Record<string, unknown>, options?: { merge?: boolean }): Promise<void> {
   assertNoUndefined(data, ref.path)
+  assertNoOversizedField(data, ref.path)
   const cloud = __getFakeCloud()
   if (options?.merge) {
     const existing = cloud.get(ref.path)

@@ -78,6 +78,35 @@ describe('basic push/pull round trip', () => {
     expect(roundTripped).toEqual(bytes)
   })
 
+  it('round-trips a document whose encrypted payload is too large for one Firestore field', { timeout: 20_000 }, async () => {
+    // Regression test for a real production bug: a source's compressed
+    // page text (already gzipped) can itself run past a megabyte for a
+    // long or heavily-illustrated PDF, and by the time that's base64-tagged
+    // for JSON *and then* the resulting ciphertext is base64-encoded again
+    // for storage, it roughly doubles twice over — comfortably past
+    // Firestore's ~1,048,487-byte single-field cap well before anything
+    // else on the document counts. Firestore rejected it outright with
+    // "Property _enc contains an invalid nested entity" — its message for
+    // an oversized *nested* field value, as opposed to the clearer
+    // "Unsupported field value: undefined" it gives for a plain top-level
+    // problem. A plain long string (an essay's own draftContent, not a
+    // compressed source) exercises the exact same "the encrypted payload
+    // itself doesn't fit in one field" path without needing to reproduce a
+    // specific gzip ratio to get there.
+    const { a, b } = await pairedDevices()
+    const essay = await a.createEssay('Long essay')
+    const root = await a.getNode(essay.rootNodeId)
+    root!.draftContent = 'x'.repeat(2_000_000)
+    await a.saveNode(root!)
+    const pushResult = await a.sync()
+    expect(pushResult.pushed.nodes).toBe(1)
+
+    const pullResult = await b.sync()
+    expect(pullResult.pulled.nodes).toBe(1)
+    const pulledRoot = await b.getNode(essay.rootNodeId)
+    expect(pulledRoot?.draftContent).toBe(root!.draftContent)
+  })
+
   it('pushes a source whose pdfBlobId was cleared back to undefined without Firestore rejecting it', async () => {
     // Regression test: removeSourcePdf sets pdfBlobId to undefined (rather
     // than deleting the key), and encodeForRemote used to pass that

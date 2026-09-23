@@ -1829,6 +1829,49 @@ against the Spark plan's daily quota (50K reads / 20K writes free per day)
 faster than Storage's own free tier would have — worth knowing if syncing
 many or large PDFs.
 
+**When a document's own encrypted payload is too big for one field.** PDF
+bytes aren't the only thing that can outgrow a single ~1MiB Firestore
+field — a source's compressed page text can too, and unlike a PDF this
+lives on the source's own document, inside `_enc`, not a separate blob. A
+real account hit this directly: a long PDF's `pageHtmlCompressed` (already
+gzipped) was itself past a megabyte, and by the time that's base64-tagged
+for JSON (`jsonReplacer` in `lib/crypto.ts`, so the underlying
+`Uint8Array` survives the trip through `JSON.stringify`) and the resulting
+ciphertext is base64-encoded *again* to store as a Firestore string field,
+it's roughly its own size times 1.8 — comfortably past the field cap
+before anything else on the document even counts. Firestore's rejection
+for this ("`Property _enc contains an invalid nested entity`") is
+Firestore's own wording for an oversized *nested* field value specifically
+— distinct from the plainer "Unsupported field value: undefined" it gives
+for a top-level problem (see the `pdfBlobId` incident above) — which is
+part of why this one took an actual production report, a real Firestore
+emulator run to rule out several other theories, and a round of
+document-identifying diagnostics (`describeLocalDoc`/`describeValue` in
+`syncEngine.ts` — a shallow, content-free structural report of a failing
+document's own fields, safe to log to the console since it only ever
+shows shapes and byte counts, never real user text) before landing on the
+actual cause.
+
+The fix is the exact same chunking scheme PDF blobs already use, applied
+to `_enc` itself: `encodeForRemote` checks the encrypted payload's own
+base64 length before writing anything, and once it's over the same
+700,000-character threshold, the `data` half moves out into an
+`encChunks` subcollection under the document (small per-chunk docs, same
+shape a blob's own `chunks` subcollection uses) while the field actually
+left on the document becomes a small pointer —
+`{iv, chunked: true, totalChunks}` — instead of the ciphertext directly.
+`decodeFromRemote` checks for that pointer shape and, when present,
+reassembles the chunks before decrypting; a document whose payload fits in
+one field (the overwhelming majority) never touches any of this. Verified
+directly with a dedicated sync test pushing a two-million-character
+`draftContent` through the real chunking path — and, since the in-memory
+fake Firestore these tests otherwise run against didn't actually enforce
+any size limit at all (so this specific bug could have shipped without a
+single test noticing), `fakeFirestore.ts`'s `setDoc` now also rejects an
+oversized field the same way real Firestore does, with the same "nested vs.
+top-level" wording distinction, so a future regression of this kind fails
+locally instead of only ever surfacing in production.
+
 **How sync actually decides what to send.** Every local record already
 carries an `updatedAt`; each pass pushes anything newer than the last push,
 and pulls anything remote newer than the last pull, applying a remote

@@ -37,6 +37,11 @@
  *    reused for a different file, so simple "pushed already?" membership
  *    is enough — no timestamp comparison needed); a blob referenced by a
  *    synced Source but missing locally gets downloaded and decrypted.
+ *  - A document's own encrypted payload (`_enc`) can independently run
+ *    past what fits in one Firestore field too — a source's compressed
+ *    page text, not just a PDF's own bytes — and gets the same chunking
+ *    treatment when it does; see `encodeForRemote`'s own doc comment for
+ *    why and how.
  *  - Concurrent calls into this module (a "Sync now" click landing mid-tick
  *    of the 30-second auto-sync loop, say) share one in-flight pass rather
  *    than running two overlapping ones — see `inFlightPass` below. Without
@@ -52,7 +57,9 @@
  * smaller window — two devices would need to push the *same* doc within
  * moments of each other to still collide — but doesn't eliminate it the
  * way a Firestore transaction would), or garbage collection of a deleted
- * source's now-orphaned blob chunk documents.
+ * source's now-orphaned blob chunk documents (or, the same gap for the
+ * same reason, a document's own now-unused `encChunks` once its encrypted
+ * payload next shrinks back under the inline-field limit).
  */
 import { collection, doc, getDoc, getDocs, query, setDoc, where, type Firestore } from 'firebase/firestore'
 import { currentUser, firestoreDb } from './firebaseClient'
@@ -190,6 +197,20 @@ interface LocalDoc {
   [key: string]: unknown
 }
 
+// A single Firestore field/document caps out around 1,048,487 bytes.
+// 700,000 base64 characters (≈700,000 bytes, since base64 is ASCII) leaves
+// generous headroom under that for field-name/document overhead — shared
+// by both the PDF-blob chunking below and `_enc`'s own chunking right
+// below it, since both are exactly the same problem: a base64 string that
+// might not fit in one field.
+const FIRESTORE_STRING_CHUNK_SIZE = 700_000
+
+function splitIntoChunks(s: string, size: number): string[] {
+  const chunks: string[] = []
+  for (let i = 0; i < s.length; i += size) chunks.push(s.slice(i, i + size))
+  return chunks.length > 0 ? chunks : ['']
+}
+
 /** A shallow, content-free structural description of `value` — its
  * constructor name and shape (length/byte count/own keys), never the
  * actual data — safe to log to the console even for a field the user
@@ -242,7 +263,44 @@ export function describeLocalDoc(collectionName: SyncedCollection, localDoc: Loc
   return { identify: identify || undefined, fields }
 }
 
-async function encodeForRemote(collectionName: SyncedCollection, localDoc: LocalDoc, cryptoKey: CryptoKey): Promise<Record<string, unknown>> {
+/**
+ * `_enc.data` is the base64 ciphertext of a document's entire sensitive
+ * payload as one JSON blob — for most documents (a title, some prose, a
+ * short comment) that's a few KB at most, comfortably inside a single
+ * Firestore field. A source's `pageHtmlCompressed` breaks that assumption:
+ * it's already-gzipped bytes that can themselves run past a megabyte for a
+ * long or heavily-illustrated PDF (the experimental layout extractor
+ * embeds each figure as its own base64 PNG), and by the time that's
+ * base64-tagged for JSON (`jsonReplacer` in `lib/crypto.ts`) *and then*
+ * the resulting ciphertext is base64-encoded again for storage, it's
+ * roughly 1.8x its own already-compressed size — comfortably past
+ * Firestore's ~1,048,487-byte single-field cap on its own, well before
+ * anything else on the document even counts. Confirmed directly: a real
+ * account hit exactly this (`Property _enc contains an invalid nested
+ * entity`, Firestore's rejection for an oversized nested field value) on
+ * a source whose compressed page text alone was already 1.1MB.
+ *
+ * The fix is the same one already used for PDF blobs (see the section
+ * below): when the encrypted payload is too big for one field, its base64
+ * `data` moves out into a `encChunks` subcollection under the document
+ * (each chunk a small doc of its own, same shape a blob's `chunks`
+ * subcollection uses), and the field left on the document itself becomes
+ * a small pointer — `{iv, chunked: true, totalChunks}` — rather than the
+ * ciphertext directly. A document whose payload fits in one field (the
+ * overwhelming majority) is completely unaffected — this only ever
+ * activates once `data` is actually too large to store inline.
+ */
+interface ChunkedEncPointer {
+  iv: string
+  chunked: true
+  totalChunks: number
+}
+
+function isChunkedEncPointer(value: unknown): value is ChunkedEncPointer {
+  return !!value && typeof value === 'object' && (value as ChunkedEncPointer).chunked === true
+}
+
+async function encodeForRemote(collectionName: SyncedCollection, localDoc: LocalDoc, cryptoKey: CryptoKey, docRef: ReturnType<typeof doc>): Promise<Record<string, unknown>> {
   const sensitiveFields = SENSITIVE_FIELDS[collectionName]
   const metadata: Record<string, unknown> = {}
   const payload: Record<string, unknown> = {}
@@ -268,14 +326,32 @@ async function encodeForRemote(collectionName: SyncedCollection, localDoc: Local
     if (v === undefined) continue
     metadata[k] = v
   }
-  if (sensitiveFields.length > 0) metadata._enc = await encryptJson(cryptoKey, payload)
+  if (sensitiveFields.length > 0) {
+    const enc = await encryptJson(cryptoKey, payload)
+    if (enc.data.length > FIRESTORE_STRING_CHUNK_SIZE) {
+      const chunks = splitIntoChunks(enc.data, FIRESTORE_STRING_CHUNK_SIZE)
+      await Promise.all(chunks.map((data, i) => setDoc(doc(docRef, 'encChunks', String(i)), { data })))
+      const pointer: ChunkedEncPointer = { iv: enc.iv, chunked: true, totalChunks: chunks.length }
+      metadata._enc = pointer
+    } else {
+      metadata._enc = enc
+    }
+  }
   return metadata
 }
 
-async function decodeFromRemote(remote: Record<string, unknown>, cryptoKey: CryptoKey): Promise<LocalDoc> {
+async function decodeFromRemote(remote: Record<string, unknown>, cryptoKey: CryptoKey, docRef: ReturnType<typeof doc>): Promise<LocalDoc> {
   const { _enc, ...metadata } = remote
   if (_enc) {
-    const payload = await decryptJson<Record<string, unknown>>(cryptoKey, _enc as EncryptedField)
+    let field: EncryptedField
+    if (isChunkedEncPointer(_enc)) {
+      const chunkSnaps = await Promise.all(Array.from({ length: _enc.totalChunks }, (_, i) => getDoc(doc(docRef, 'encChunks', String(i)))))
+      const data = chunkSnaps.map((snap) => (snap.data()?.data as string) ?? '').join('')
+      field = { iv: _enc.iv, data }
+    } else {
+      field = _enc as EncryptedField
+    }
+    const payload = await decryptJson<Record<string, unknown>>(cryptoKey, field)
     return { ...metadata, ...payload } as LocalDoc
   }
   return metadata as LocalDoc
@@ -302,8 +378,8 @@ async function migrateAccountEncryption(db: Firestore, uid: string, cryptoKey: C
     onProgress?.(`Upgrading ${col} to the current encryption policy…`)
     const snap = await getDocs(collection(db, 'accounts', uid, col))
     for (const docSnap of snap.docs) {
-      const decoded = await decodeFromRemote(docSnap.data(), cryptoKey)
-      const reencoded = await encodeForRemote(col, decoded, cryptoKey)
+      const decoded = await decodeFromRemote(docSnap.data(), cryptoKey, docSnap.ref)
+      const reencoded = await encodeForRemote(col, decoded, cryptoKey, docSnap.ref)
       try {
         await setDoc(docSnap.ref, reencoded)
       } catch (err) {
@@ -325,19 +401,11 @@ async function migrateAccountEncryption(db: Firestore, uid: string, cryptoKey: C
 // A blob is stored as one manifest doc (`accounts/{uid}/blobs/{blobId}`,
 // holding the encryption IV and how many chunks to expect) plus that many
 // chunk docs in a `chunks` subcollection under it, each just one base64
-// string field. 700,000 base64 characters (≈700,000 bytes, since base64 is
-// ASCII) leaves generous headroom under the ~1,048,576-byte real limit for
-// field-name/document overhead. A few-MB PDF is a few chunk documents —
-// more Firestore reads/writes than a single-file upload would cost, which
-// eats into the free (Spark) plan's daily quota faster, but needs nothing
+// string field — see `FIRESTORE_STRING_CHUNK_SIZE`'s own doc comment for
+// the chunk size itself. A few-MB PDF is a few chunk documents — more
+// Firestore reads/writes than a single-file upload would cost, which eats
+// into the free (Spark) plan's daily quota faster, but needs nothing
 // beyond Firestore itself: no Storage bucket, no Blaze plan.
-const BLOB_CHUNK_SIZE = 700_000
-
-function splitIntoChunks(s: string, size: number): string[] {
-  const chunks: string[] = []
-  for (let i = 0; i < s.length; i += size) chunks.push(s.slice(i, i + size))
-  return chunks.length > 0 ? chunks : ['']
-}
 
 // Shared by every concurrent caller of runSyncPass — see the module doc
 // comment above. `onProgress` is deliberately per-caller even when a pass
@@ -425,7 +493,7 @@ async function runSyncPassNow(onProgress?: (message: string) => void): Promise<S
       const remoteSnap = await getDoc(remoteRef)
       const remoteUpdatedAt = remoteSnap.exists() ? ((remoteSnap.data()?.updatedAt as number) ?? 0) : 0
       if (remoteUpdatedAt >= (localDoc.updatedAt ?? 0)) continue
-      const remoteDoc = await encodeForRemote(col, localDoc, cryptoKey)
+      const remoteDoc = await encodeForRemote(col, localDoc, cryptoKey, remoteRef)
       try {
         await setDoc(remoteRef, remoteDoc)
       } catch (err) {
@@ -474,7 +542,7 @@ async function runSyncPassNow(onProgress?: (message: string) => void): Promise<S
       if (remoteUpdatedAt > maxSeenRemoteUpdatedAt) maxSeenRemoteUpdatedAt = remoteUpdatedAt
       const localDoc = await backend.docs.get<LocalDoc>(col, docSnap.id)
       if (localDoc && (localDoc.updatedAt ?? 0) >= remoteUpdatedAt) continue
-      const decoded = await decodeFromRemote(remote, cryptoKey)
+      const decoded = await decodeFromRemote(remote, cryptoKey, docSnap.ref)
       await backend.docs.put(col, decoded as LocalDoc & { id: string })
       result.pulled[col]++
     }
@@ -490,7 +558,7 @@ async function runSyncPassNow(onProgress?: (message: string) => void): Promise<S
     onProgress?.(`Uploading ${source.pdfFileName || 'a PDF'}…`)
     const bytes = await blob.arrayBuffer()
     const { iv, cipher } = await encryptBytes(cryptoKey, bytes)
-    const chunks = splitIntoChunks(bufToB64(cipher), BLOB_CHUNK_SIZE)
+    const chunks = splitIntoChunks(bufToB64(cipher), FIRESTORE_STRING_CHUNK_SIZE)
     const blobDocRef = doc(db, 'accounts', uid, 'blobs', source.pdfBlobId)
     await Promise.all([
       setDoc(blobDocRef, { iv, totalChunks: chunks.length, updatedAt: Date.now() }),
