@@ -124,16 +124,67 @@ export function query(col: ColRef, ...clauses: WhereClause[]): FakeQuery {
   return { __isFakeQuery: true, col, clauses }
 }
 
+// Real Firestore's client SDK caps how many individual write mutations can
+// be in flight on its one write stream at once (around 500) — a genuine
+// production bug (this app once fired hundreds of independent `setDoc()`
+// calls via `Promise.all` for a large PDF/encrypted-payload's worth of
+// chunks) hit exactly this: "Write stream exhausted maximum allowed queued
+// writes." `writeBatch()`'s own 500-op cap (see below) only catches the
+// case where writes are *already* batched — it says nothing about the
+// unbatched `Promise.all`-of-many-`setDoc()`-calls pattern that actually
+// caused the bug, which needs its own, separate simulation: this tracks
+// how many `setDoc()` calls are simultaneously in flight (started but not
+// yet resolved) and rejects once too many are, the same shape of failure
+// real Firestore's stream limit produces. A real await point (not just an
+// already-resolved microtask) matters here — it's what actually lets
+// several concurrently-fired calls overlap in flight at once the way
+// `Promise.all` would trigger for real, rather than each one finishing
+// before the next even starts.
+const MAX_CONCURRENT_WRITES = 500
+let inFlightWrites = 0
+
 /** `options.merge` mirrors real Firestore's shallow top-level merge (not a deep merge, not field-path merge — the one form this app's own code actually uses, in accountMeta.ts's markEncryptionVersion). Without it, setDoc replaces the whole document, same as real Firestore's own default. */
 export async function setDoc(ref: DocRef, data: Record<string, unknown>, options?: { merge?: boolean }): Promise<void> {
-  assertNoUndefined(data, ref.path)
-  assertNoOversizedField(data, ref.path)
-  const cloud = __getFakeCloud()
-  if (options?.merge) {
-    const existing = cloud.get(ref.path)
-    cloud.set(ref.path, { ...(existing ? structuredClone(existing) : {}), ...structuredClone(data) })
-  } else {
-    cloud.set(ref.path, structuredClone(data))
+  inFlightWrites++
+  try {
+    // A microtask yield, not a macrotask (`setTimeout`) one: this needs to
+    // let several concurrently-fired `setDoc()` calls actually interleave
+    // in flight, which any real `await` already does regardless of what
+    // it's awaiting — but a real timer would never fire at all under a
+    // test using `vi.useFakeTimers()` (a real, hit-directly bug this had
+    // at first) unless that test explicitly advanced it, which nothing
+    // about ordinary Firestore usage should ever require a test to do.
+    await Promise.resolve()
+    if (inFlightWrites > MAX_CONCURRENT_WRITES) {
+      throw new Error('Fake Firestore: Write stream exhausted maximum allowed queued writes.')
+    }
+    assertNoUndefined(data, ref.path)
+    assertNoOversizedField(data, ref.path)
+    const cloud = __getFakeCloud()
+    if (options?.merge) {
+      const existing = cloud.get(ref.path)
+      cloud.set(ref.path, { ...(existing ? structuredClone(existing) : {}), ...structuredClone(data) })
+    } else {
+      cloud.set(ref.path, structuredClone(data))
+    }
+  } finally {
+    inFlightWrites--
+  }
+}
+
+const MAX_BATCH_WRITES = 500
+
+/** Mirrors real Firestore's `writeBatch()`: queues `.set()` calls locally and only actually writes anything on `.commit()`, as one unit — real Firestore also caps a single batch at 500 writes and rejects a bigger one outright, which this reproduces too (see `syncEngine.ts`'s own chunked-write helper, which pages into batches of exactly this size specifically to respect it). */
+export function writeBatch(_db: FakeDb): { set(ref: DocRef, data: Record<string, unknown>): void; commit(): Promise<void> } {
+  const ops: { ref: DocRef; data: Record<string, unknown> }[] = []
+  return {
+    set(ref, data) {
+      ops.push({ ref, data })
+    },
+    async commit() {
+      if (ops.length > MAX_BATCH_WRITES) throw new Error(`Fake Firestore: a WriteBatch cannot have more than ${MAX_BATCH_WRITES} writes`)
+      for (const { ref, data } of ops) await setDoc(ref, data)
+    },
   }
 }
 

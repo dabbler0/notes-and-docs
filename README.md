@@ -1872,6 +1872,38 @@ oversized field the same way real Firestore does, with the same "nested vs.
 top-level" wording distinction, so a future regression of this kind fails
 locally instead of only ever surfacing in production.
 
+Chunking a large payload immediately surfaced the next problem in the same
+family: `"Write stream exhausted maximum allowed queued writes"` — a
+Firestore client-SDK flow-control limit on how many mutations can be in
+flight on its one write stream at once (around 500), not a Spark-plan
+quota (those fail with a distinctly different, quota-specific error, and
+are counted per *day*, not per moment). Both the PDF-blob chunking and the
+`_enc` chunking above were firing every one of their chunk writes as
+independent `setDoc()` calls via one `Promise.all` — fine for the common
+case of a handful of chunks, but a many-page, heavily-illustrated PDF under
+the experimental layout extractor (which embeds each page's own raster
+images as base64 PNGs) can easily need several hundred 700,000-character
+chunks, comfortably over that limit. `writeChunkedDocs` in `syncEngine.ts`
+replaces both call sites: it pages the chunk writes into `WriteBatch`es of
+at most 500 operations each (Firestore's own hard cap per batch) and
+commits them one at a time — a batch is one atomic network round trip
+rather than N independent streamed mutations, and awaiting each batch
+before starting the next keeps the number of writes actually in flight at
+any moment bounded by a single batch's worth, never a whole PDF's. Confirmed
+against a genuinely paced write path directly: the in-memory fake Firestore
+didn't model this failure mode at all until now either (every fake `setDoc`
+resolved as fast as the synchronous code around it, so a `Promise.all` of a
+thousand of them never actually got the chance to look like real concurrent
+writes) — it now tracks how many `setDoc()` calls are simultaneously in
+flight (via a real microtask yield inside the fake, deliberately *not* a
+`setTimeout`, so a test using `vi.useFakeTimers()` isn't left waiting on a
+timer nothing ever advances) and fails the same way real Firestore does
+once too many overlap, plus enforces `writeBatch()`'s own 500-op cap — so a
+dedicated test pushing 1,200 synthetic writes through `writeChunkedDocs`
+directly (spanning three batches) actually exercises the pacing logic
+itself, rather than only ever being validatable against real Firestore in
+production after the fact.
+
 **How sync actually decides what to send.** Every local record already
 carries an `updatedAt`; each pass pushes anything newer than the last push,
 and pulls anything remote newer than the last pull, applying a remote
