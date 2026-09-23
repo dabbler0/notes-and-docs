@@ -50,7 +50,7 @@ async function persistTree(essayId: string, node: ParsedLatexNode, now: number):
     id: node.id,
     essayId,
     title: node.title,
-    versions: [{ id: id(), content: node.html, comments: [], createdAt: now, label: 'Imported from LaTeX' }],
+    versions: [{ id: id(), content: node.html, createdAt: now, label: 'Imported from LaTeX' }],
     headVersionId: '',
     draftContent: node.html,
     footnotes: node.footnotes,

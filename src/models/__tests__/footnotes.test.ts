@@ -28,7 +28,7 @@ function oldFormatNode(): EssayNode {
     id: 'n1',
     essayId: 'e1',
     title: 'Old section',
-    versions: [{ id: 'v1', content: 'text', comments: [], createdAt: 0 }],
+    versions: [{ id: 'v1', content: 'text', createdAt: 0 }],
     headVersionId: 'v1',
     draftContent: 'text',
     createdAt: 0,
@@ -124,7 +124,7 @@ describe('saveNode auto-pruning orphaned footnotes', () => {
     const footnote = addFootnote(node)
     const markerHtml = `<sup class="footnote-ref" data-footnote-id="${footnote.id}">​</sup>`
     node.draftContent = `frozen text${markerHtml}`
-    node.versions = [{ id: 'v1', content: `frozen text${markerHtml}`, comments: [], createdAt: 0 }]
+    node.versions = [{ id: 'v1', content: `frozen text${markerHtml}`, createdAt: 0 }]
     node.headVersionId = 'v1'
     await saveNode(node) // establishes the version as the current save
 

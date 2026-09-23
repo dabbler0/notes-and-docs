@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks'
-import { commentIdsInContent, commitNewVersion, deleteFootnote, deleteNodeOnly, findComment, headVersion, nodeFootnotes, revertToVersion, saveNode, updateFootnoteContent } from '../../models/essaysRepo'
+import { commentIdsInContent, commitNewVersion, deleteFootnote, deleteNodeOnly, headVersion, nodeComments, nodeFootnotes, revertToVersion, saveNode, updateFootnoteContent } from '../../models/essaysRepo'
 import { parseSegments, reconstructContent } from '../../lib/childMarkers'
 import { FrozenPreview } from './FrozenPreview'
 import type { EssayNode, Footnote, NodeVersion } from '../../models/types'
@@ -268,17 +268,22 @@ export function SectionBlock({
     setShowHistory(false)
   }
 
-  // Counted the same way CommentsPanel finds its rows: by which comment
-  // marks are actually still in the current content, not by `head.comments`
-  // — a comment recorded against an older version stays open (and its mark
-  // stays right there in the text) across a later commitNewVersion, which
-  // resets the *new* version's own comments list to empty. See
-  // `commentIdsInContent`'s doc comment.
-  const openComments = Array.from(new Set(commentIdsInContent(node.draftContent)))
-    .map((commentId) => findComment(node, commentId)?.comment)
-    .filter((c): c is NonNullable<typeof c> => !!c && !c.resolved).length
+  // Comments live flat on the node now, not per-version (see
+  // `nodeComments`'s own doc comment) — so, unlike the old per-version
+  // model, this never falls behind a `commitNewVersion` and never needs to
+  // cross-reference the content's own marks to find a comment that's still
+  // "open" but recorded against an older version. Only top-level comments
+  // count here; a reply or a comment-on-a-comment being unresolved doesn't
+  // make the thread itself show as open in this badge.
+  const openComments = nodeComments(node).filter((c) => c.parentId === null && !c.resolved).length
   const comparingVersion: NodeVersion | undefined = comparingVersionId ? node.versions.find((v) => v.id === comparingVersionId) : undefined
   const sortedVersions = [...node.versions].sort((a, b) => b.createdAt - a.createdAt)
+  // Which of this node's text-anchored comments were actually present (by
+  // mark) in `comparingVersion`'s own frozen content — a comment added
+  // after that version was frozen has no mark there at all, and one whose
+  // mark's *text* has since been edited away in later versions still shows
+  // here exactly as it looked at the time this version was made.
+  const frozenComments = comparingVersion ? nodeComments(node).filter((c) => c.anchorKind === 'text' && commentIdsInContent(comparingVersion.content).includes(c.id)) : []
 
   const historyDropdown = showHistory && (
     <div className="history-dropdown">
@@ -426,12 +431,12 @@ export function SectionBlock({
                 {comparingVersion.id === node.headVersionId && ' (current)'}
               </div>
               <FrozenPreview content={comparingVersion.content} nodeMap={nodeMap} depth={0} isRoot />
-              {comparingVersion.comments.length > 0 && (
+              {frozenComments.length > 0 && (
                 <div className="version-split-comments">
-                  {comparingVersion.comments.map((c) => (
+                  {frozenComments.map((c) => (
                     <div className={`comment-item${c.resolved ? ' resolved' : ''}`} key={c.id}>
                       <div className="anchor">“{c.anchorText}”</div>
-                      {c.body}
+                      <div dangerouslySetInnerHTML={{ __html: c.body }} />
                     </div>
                   ))}
                 </div>

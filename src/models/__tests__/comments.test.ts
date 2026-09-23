@@ -1,18 +1,12 @@
 /**
- * A comment's own data lives on whichever version was head when it was
- * added (`addComment`'s `versionId` argument) — but `commitNewVersion`
- * always starts a fresh version's `comments` array empty (see `makeVersion`
- * in `essaysRepo.ts`), even though the version's own `content` snapshot
- * carries the comment's `<mark data-comment-id>` right along with it. So a
- * comment can go on being anchored in the *current* content while its own
- * record sits on an older, no-longer-head version. `commentIdsInContent`
- * and `findComment` are what let a caller (`CommentsPanel`,
- * `SectionBlock`'s open-comment-count badge) reunite the two: "what marks
- * are actually in the document right now" and "who recorded this one, and
- * is that still the current version."
+ * Comments live flat on `EssayNode.comments` now (see `Comment`'s own doc
+ * comment in models/types.ts) — not per-version — with `parentId` unifying
+ * "reply" and "comment on a comment" as children of any comment, and
+ * `anchorKind` distinguishing where each one's mark (if it has one at all)
+ * actually lives.
  */
 import { describe, expect, it } from 'vitest'
-import { addComment, commentIdsInContent, commitNewVersion, findComment } from '../essaysRepo'
+import { addComment, commentChildren, commentIdsInContent, commentSubtreeIds, deleteCommentCascade, findCommentById, nodeComments, setCommentResolved, topLevelComments, updateCommentBody } from '../essaysRepo'
 import type { EssayNode } from '../types'
 
 interface FakeStorageModule {
@@ -30,7 +24,7 @@ function node(content: string): EssayNode {
     id: 'n1',
     essayId: 'e1',
     title: 'Section',
-    versions: [{ id: 'v1', content, comments: [], createdAt: 0 }],
+    versions: [{ id: 'v1', content, createdAt: 0 }],
     headVersionId: 'v1',
     draftContent: content,
     createdAt: 0,
@@ -50,55 +44,112 @@ describe('commentIdsInContent', () => {
   })
 })
 
-describe('findComment', () => {
-  it('finds a comment recorded on a non-head version', async () => {
+describe('addComment / nodeComments / findCommentById', () => {
+  it('appends a top-level, text-anchored comment', async () => {
     await useFakeBackend()
-    const n = node('<mark data-comment-id="c1">hi</mark>')
-    await addComment(n, 'v1', 'hi', 'a note', 'c1')
-    const v2 = await commitNewVersion(n, 'v2')
-    expect(n.headVersionId).toBe(v2.id)
-    const found = findComment(n, 'c1')
-    expect(found?.version.id).toBe('v1')
-    expect(found?.comment.body).toBe('a note')
+    const n = node('<mark class="comment-anchor" data-comment-id="c1">anchor</mark>')
+    await addComment(n, { anchorKind: 'text', anchorText: 'anchor', body: 'a note', commentId: 'c1' })
+    expect(nodeComments(n)).toHaveLength(1)
+    expect(findCommentById(n, 'c1')?.body).toBe('a note')
+    expect(findCommentById(n, 'c1')?.parentId).toBeNull()
+    expect(topLevelComments(n).map((c) => c.id)).toEqual(['c1'])
   })
 
-  it('returns undefined for an id that was never recorded', async () => {
+  it('appends a whole-section comment with no anchor text', async () => {
     await useFakeBackend()
-    expect(findComment(node(''), 'missing')).toBeUndefined()
+    const n = node('<p>plain text</p>')
+    const c = await addComment(n, { anchorKind: 'node', anchorText: '', body: 'comment on the whole section' })
+    expect(c.anchorKind).toBe('node')
+    expect(c.anchorText).toBe('')
+    expect(topLevelComments(n)).toHaveLength(1)
+  })
+
+  it('a reply and a comment-on-a-comment both nest as children via parentId', async () => {
+    await useFakeBackend()
+    const n = node('<mark class="comment-anchor" data-comment-id="c1">anchor</mark>')
+    await addComment(n, { anchorKind: 'text', anchorText: 'anchor', body: 'root comment', commentId: 'c1' })
+    const reply = await addComment(n, { anchorKind: 'reply', anchorText: '', body: 'a reply', parentId: 'c1' })
+    const inline = await addComment(n, { anchorKind: 'inline', anchorText: 'root', body: 'comment on the comment', parentId: 'c1' })
+    expect(commentChildren(n, 'c1').map((c) => c.id).sort()).toEqual([reply.id, inline.id].sort())
+    expect(topLevelComments(n).map((c) => c.id)).toEqual(['c1'])
   })
 })
 
-describe('the cross-version persistence scenario end to end', () => {
-  it('a comment whose mark survives a new version is still findable via the current content, marked stale', async () => {
+describe('updateCommentBody / setCommentResolved', () => {
+  it('edits an existing comment body and bumps updatedAt', async () => {
     await useFakeBackend()
-    const n = node('before <mark class="comment-anchor" data-comment-id="c1">anchor</mark> after')
-    await addComment(n, 'v1', 'anchor', 'still relevant', 'c1')
-
-    // A later, unrelated edit commits a new version — the mark rides along
-    // in draftContent/the new version's content, but the new version's own
-    // comments array starts empty.
-    n.draftContent = 'before <mark class="comment-anchor" data-comment-id="c1">anchor</mark> after, plus more text'
-    const v2 = await commitNewVersion(n, 'v2')
-    expect(v2.comments).toEqual([])
-
-    const ids = commentIdsInContent(n.draftContent)
-    expect(ids).toContain('c1')
-    const found = findComment(n, 'c1')
-    expect(found).toBeDefined()
-    expect(found!.comment.body).toBe('still relevant')
-    // Stale: the comment's own version (v1) is no longer the node's head.
-    expect(found!.version.id).not.toBe(n.headVersionId)
+    const n = node('')
+    const c = await addComment(n, { anchorKind: 'node', anchorText: '', body: 'first draft' })
+    await updateCommentBody(n, c.id, 'edited body')
+    const found = findCommentById(n, c.id)
+    expect(found?.body).toBe('edited body')
+    expect(found?.updatedAt).toBeGreaterThanOrEqual(found!.createdAt)
   })
 
-  it('a comment whose mark was edited out of the content is no longer found among current ids', async () => {
+  it('toggles resolved', async () => {
     await useFakeBackend()
-    const n = node('before <mark data-comment-id="c1">anchor</mark> after')
-    await addComment(n, 'v1', 'anchor', 'note', 'c1')
+    const n = node('')
+    const c = await addComment(n, { anchorKind: 'node', anchorText: '', body: 'x' })
+    expect(findCommentById(n, c.id)?.resolved).toBe(false)
+    await setCommentResolved(n, c.id, true)
+    expect(findCommentById(n, c.id)?.resolved).toBe(true)
+  })
+})
 
-    // The user deletes the commented-on text (mark and all) and commits.
-    n.draftContent = 'before  after'
-    await commitNewVersion(n, 'v2')
+describe('deleteCommentCascade', () => {
+  it('deleting a top-level comment recursively removes its replies and comments-on-it', async () => {
+    await useFakeBackend()
+    const n = node('<mark class="comment-anchor" data-comment-id="c1">anchor</mark>')
+    await addComment(n, { anchorKind: 'text', anchorText: 'anchor', body: 'root', commentId: 'c1' })
+    const reply = await addComment(n, { anchorKind: 'reply', anchorText: '', body: 'a reply', parentId: 'c1' })
+    const grandReply = await addComment(n, { anchorKind: 'reply', anchorText: '', body: 'reply to the reply', parentId: reply.id })
+    await addComment(n, { anchorKind: 'inline', anchorText: 'root', body: 'nested comment', parentId: 'c1' })
 
-    expect(commentIdsInContent(n.draftContent)).toEqual([])
+    expect(commentSubtreeIds(n, 'c1')).toHaveLength(4)
+    await deleteCommentCascade(n, 'c1')
+    expect(nodeComments(n)).toEqual([])
+    expect(findCommentById(n, reply.id)).toBeUndefined()
+    expect(findCommentById(n, grandReply.id)).toBeUndefined()
+  })
+
+  it('deleting a reply leaves its parent and siblings intact', async () => {
+    await useFakeBackend()
+    const n = node('')
+    const root = await addComment(n, { anchorKind: 'node', anchorText: '', body: 'root' })
+    const reply1 = await addComment(n, { anchorKind: 'reply', anchorText: '', body: 'r1', parentId: root.id })
+    const reply2 = await addComment(n, { anchorKind: 'reply', anchorText: '', body: 'r2', parentId: root.id })
+
+    await deleteCommentCascade(n, reply1.id)
+    expect(findCommentById(n, root.id)).toBeDefined()
+    expect(findCommentById(n, reply1.id)).toBeUndefined()
+    expect(findCommentById(n, reply2.id)).toBeDefined()
+  })
+
+  it('unwraps the deleted comment\'s own mark from the section content ("text") or its parent\'s body ("inline"), keeping the underlying text', async () => {
+    await useFakeBackend()
+    const n = node('before <mark class="comment-anchor" data-comment-id="c1">anchor</mark> after')
+    await addComment(n, { anchorKind: 'text', anchorText: 'anchor', body: 'root', commentId: 'c1' })
+    await deleteCommentCascade(n, 'c1')
+    expect(n.draftContent).toBe('before anchor after')
+
+    const n2 = node('')
+    const root = await addComment(n2, { anchorKind: 'node', anchorText: '', body: 'before <mark class="comment-anchor" data-comment-id="c2">span</mark> after' })
+    await addComment(n2, { anchorKind: 'inline', anchorText: 'span', body: 'nested', parentId: root.id, commentId: 'c2' })
+    await deleteCommentCascade(n2, 'c2')
+    expect(findCommentById(n2, root.id)?.body).toBe('before span after')
+  })
+})
+
+describe('migrating a node still carrying the old per-version comments shape', () => {
+  it('flattens version-scoped comments into node.comments the first time they are read', async () => {
+    await useFakeBackend()
+    const n = node('<mark data-comment-id="c1">anchor</mark>') as unknown as EssayNode & { versions: { comments?: unknown[] }[] }
+    delete (n as unknown as { comments?: unknown }).comments
+    n.versions[0].comments = [{ id: 'c1', anchorText: 'anchor', body: 'old-style comment', resolved: false, createdAt: 5 }]
+    const flat = nodeComments(n)
+    expect(flat).toHaveLength(1)
+    expect(flat[0].id).toBe('c1')
+    expect(flat[0].parentId).toBeNull()
+    expect(flat[0].anchorKind).toBe('text')
   })
 })

@@ -1499,11 +1499,55 @@ select {
   font-size: 13.5px;
 }
 
-.margin-comment-item {
+/* The one positioned element in the margin view — its own top-level
+   comment's card, plus every reply/comment-on-a-comment nested underneath
+   it (see CommentCard in CommentsPanel.tsx), all riding along together as
+   one block rather than each nested item trying to claim its own spot. */
+.margin-comments-inner .comment-thread-root {
   position: absolute;
   left: 12px;
   right: 12px;
+}
+
+.margin-comments-inner .comment-item {
   box-shadow: var(--shadow-soft);
+}
+
+.comments-list-view .comment-thread-root {
+  margin-bottom: 14px;
+}
+
+.comment-mini-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  margin-bottom: 6px;
+}
+
+.comment-mini-toolbar .icon-btn {
+  font-size: 12px;
+  font-weight: 700;
+  min-width: 22px;
+  height: 22px;
+}
+
+.comment-body {
+  min-height: 1.4em;
+  outline: none;
+}
+
+.comment-body:empty::before {
+  content: 'Write a comment…';
+  color: var(--ink-dim);
+}
+
+.comment-children {
+  margin-top: 8px;
+  padding-left: 10px;
+  border-left: 2px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
 }
 
 .comment-item.resolved {

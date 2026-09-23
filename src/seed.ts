@@ -28,7 +28,7 @@ export async function seedDemoDataIfEmpty() {
     `<p>Marginal notes have always done two jobs at once: they record a reaction, and they mark a place worth returning to. This draft argues that a good annotation tool should keep those jobs separate <cite class="citation" data-source-id="${ongSource.id}">(Ong, 1982)</cite>, rather than flattening them into a single "comment" feature.</p>`
   await saveNode(root)
   await commitNewVersion(root, 'Add the Ong framing')
-  await addComment(root, root.headVersionId, 'flattening them into a single "comment" feature', 'Is this too strong a claim for an opening paragraph? Might want a hedge.')
+  await addComment(root, { anchorKind: 'node', anchorText: '', body: 'Is this too strong a claim for an opening paragraph? Might want a hedge.' })
 
   const related = await createChildNode(
     essay.id,

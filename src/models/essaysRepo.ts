@@ -16,7 +16,34 @@ export async function getEssay(essayId: string): Promise<Essay | undefined> {
 }
 
 export async function getNode(nodeId: string): Promise<EssayNode | undefined> {
-  return backend.docs.get<EssayNode>(NODES, nodeId)
+  const node = await backend.docs.get<EssayNode>(NODES, nodeId)
+  if (node) migrateComments(node)
+  return node
+}
+
+/**
+ * A node saved before comments moved to this flat, node-level model still
+ * has them scattered across `version.comments` (an old field no longer
+ * declared on `NodeVersion`, but still sitting in already-stored data) —
+ * one array per version, keyed by whichever version happened to be head
+ * when each comment was added. Flattens all of that into `node.comments`
+ * the first time the node is loaded, deduplicating by id (the same comment
+ * could in principle appear on more than one version if it predates a
+ * commitNewVersion). Only ever runs once per node: a node that already has
+ * `comments` (even an empty array) is left alone.
+ */
+function migrateComments(node: EssayNode): void {
+  if (node.comments) return
+  const flat: Comment[] = []
+  const seen = new Set<string>()
+  for (const version of node.versions as unknown as { comments?: Comment[] }[]) {
+    for (const c of version.comments ?? []) {
+      if (seen.has(c.id)) continue
+      seen.add(c.id)
+      flat.push({ ...c, parentId: c.parentId ?? null, anchorKind: c.anchorKind ?? 'text', updatedAt: c.updatedAt ?? c.createdAt })
+    }
+  }
+  node.comments = flat
 }
 
 /**
@@ -44,7 +71,7 @@ export async function saveEssay(essay: Essay): Promise<void> {
 }
 
 function makeVersion(content: string, label?: string): NodeVersion {
-  return { id: id(), content, comments: [], createdAt: Date.now(), label }
+  return { id: id(), content, createdAt: Date.now(), label }
 }
 
 export async function createEssay(title: string): Promise<Essay> {
@@ -129,58 +156,126 @@ export async function revertToVersion(node: EssayNode, versionId: string): Promi
   await saveNode(node)
 }
 
-export async function addComment(node: EssayNode, versionId: string, anchorText: string, body: string, commentId?: string): Promise<Comment> {
-  const version = node.versions.find((v) => v.id === versionId)
-  if (!version) throw new Error('version not found')
-  const comment: Comment = { id: commentId ?? id(), anchorText, body, resolved: false, createdAt: Date.now() }
-  version.comments.push(comment)
+/** `node.comments` is optional (absent on a node not yet touched by `migrateComments` — see `getNode`) — this is the one place that reads it directly, so "absent" and "empty" are treated identically everywhere else. */
+export function nodeComments(node: EssayNode): Comment[] {
+  migrateComments(node)
+  return node.comments!
+}
+
+/** Every comment anchored directly to the node itself or to its own text — i.e. every comment that isn't a reply or a comment-on-a-comment. */
+export function topLevelComments(node: EssayNode): Comment[] {
+  return nodeComments(node).filter((c) => c.parentId === null)
+}
+
+/** The replies and comments-on-a-comment nested directly under `commentId` (one level — a caller walking a full thread recurses using this). */
+export function commentChildren(node: EssayNode, commentId: string): Comment[] {
+  return nodeComments(node).filter((c) => c.parentId === commentId)
+}
+
+export function findCommentById(node: EssayNode, commentId: string): Comment | undefined {
+  return nodeComments(node).find((c) => c.id === commentId)
+}
+
+/** `commentId` itself, plus every comment nested under it at any depth (replies, comments-on-comments, and their own replies/comments, and so on) — the set `deleteCommentCascade` removes, and what a caller needs to also strip any `'text'`-anchor mark for out of live DOM before that runs (see EssayWorkspace/CommentsPanel's own `deleteComment`). */
+export function commentSubtreeIds(node: EssayNode, commentId: string): string[] {
+  const all = nodeComments(node)
+  const result: string[] = []
+  const stack = [commentId]
+  while (stack.length) {
+    const cid = stack.pop()!
+    result.push(cid)
+    for (const c of all) if (c.parentId === cid) stack.push(c.id)
+  }
+  return result
+}
+
+export async function addComment(
+  node: EssayNode,
+  opts: { anchorKind: Comment['anchorKind']; anchorText: string; body: string; parentId?: string | null; commentId?: string },
+): Promise<Comment> {
+  const now = Date.now()
+  const comment: Comment = {
+    id: opts.commentId ?? id(),
+    parentId: opts.parentId ?? null,
+    anchorKind: opts.anchorKind,
+    anchorText: opts.anchorText,
+    body: opts.body,
+    resolved: false,
+    createdAt: now,
+    updatedAt: now,
+  }
+  node.comments = [...nodeComments(node), comment]
   await saveNode(node)
   return comment
 }
 
-export async function setCommentResolved(node: EssayNode, versionId: string, commentId: string, resolved: boolean): Promise<void> {
-  const version = node.versions.find((v) => v.id === versionId)
-  const comment = version?.comments.find((c) => c.id === commentId)
+export async function updateCommentBody(node: EssayNode, commentId: string, body: string): Promise<void> {
+  const comment = findCommentById(node, commentId)
+  if (!comment) return
+  comment.body = body
+  comment.updatedAt = Date.now()
+  await saveNode(node)
+}
+
+export async function setCommentResolved(node: EssayNode, commentId: string, resolved: boolean): Promise<void> {
+  const comment = findCommentById(node, commentId)
   if (!comment) return
   comment.resolved = resolved
   await saveNode(node)
 }
 
-/**
- * All comment ids whose `<mark class="comment-anchor" data-comment-id>`
- * still exists somewhere in `html` — i.e. comments whose anchor text is
- * still actually present in the document. `commitNewVersion` snapshots
- * whatever markup the draft currently contains (mark included) into a new
- * version, but always starts that version's own `comments` array empty
- * (see `makeVersion`) — a comment's data lives on whichever version was
- * head at the moment it was added, which can fall behind the node's
- * *current* head the very next time an edit gets committed, even though
- * the mark it's attached to rides along in the content unchanged. This is
- * "what marks are actually in the document right now," independent of
- * which version(s) happen to still be tracking them.
- */
+/** All comment ids whose `<mark class="comment-anchor" data-comment-id>` still exists somewhere in `html` — used for a `'text'` comment's mark in a node's own content, or (with a comment's own `body` instead) an `'inline'` comment's mark within its parent. */
 export function commentIdsInContent(html: string): string[] {
   if (!html) return []
   const doc = new DOMParser().parseFromString(html, 'text/html')
   return Array.from(doc.querySelectorAll('[data-comment-id]')).map((el) => el.getAttribute('data-comment-id')!)
 }
 
+/** Removes just the `<mark class="comment-anchor" data-comment-id="commentId">` wrapper from `html`, keeping whatever text/markup it wrapped in place — the string-level counterpart of unwrapping the same mark out of a live, mounted DOM shard (see EssayWorkspace/CommentsPanel's own `deleteComment`), used here so a comment can be deleted (and its mark cleaned up) even when the section it's anchored in, or the parent comment its mark sits inside, isn't currently mounted. */
+function unwrapCommentMark(html: string, commentId: string): string {
+  if (!html) return html
+  const doc = new DOMParser().parseFromString(html, 'text/html')
+  const mark = doc.querySelector(`mark.comment-anchor[data-comment-id="${cssEscapeId(commentId)}"]`)
+  if (!mark) return html
+  mark.replaceWith(...Array.from(mark.childNodes))
+  return doc.body.innerHTML
+}
+
+function cssEscapeId(s: string): string {
+  return typeof CSS !== 'undefined' && CSS.escape ? CSS.escape(s) : s.replace(/["\\]/g, '\\$&')
+}
+
 /**
- * Finds a comment by id across every version of `node`, not just the head
- * — see `commentIdsInContent`'s doc comment for why a comment's own
- * version can be older than the node's current head while its mark is
- * still sitting right there in the current content. Returns the version
- * that actually recorded it, so a caller can both resolve/unresolve it
- * (which needs that version's real id, not just whatever's head right now)
- * and tell whether it belongs to the current head version or an earlier
- * one.
+ * Deletes `commentId` and every comment nested under it, at any depth
+ * (replies, comments-on-comments, and their own replies/comments-on-them,
+ * and so on) — the recursive cascade requirement 6 asks for. Also cleans
+ * up whatever anchor mark each deleted comment owned: a deleted `'text'`
+ * comment's mark is unwrapped out of the node's own `draftContent`, and a
+ * deleted `'inline'` comment's mark is unwrapped out of whichever
+ * *surviving* comment's `body` it sat inside (no need to touch a parent
+ * that's being deleted too — its whole body is going away regardless).
+ * The caller is responsible for unwrapping a `'text'` mark from the live,
+ * mounted DOM shard *first* if one exists (same division of labor as
+ * footnote deletion) — this only ever touches the saved data.
  */
-export function findComment(node: EssayNode, commentId: string): { version: NodeVersion; comment: Comment } | undefined {
-  for (const version of node.versions) {
-    const comment = version.comments.find((c) => c.id === commentId)
-    if (comment) return { version, comment }
+export async function deleteCommentCascade(node: EssayNode, commentId: string): Promise<void> {
+  const all = nodeComments(node)
+  const toDelete = new Set(commentSubtreeIds(node, commentId))
+  const deletedTextIds = all.filter((c) => toDelete.has(c.id) && c.anchorKind === 'text').map((c) => c.id)
+  const deletedInlineIds = all.filter((c) => toDelete.has(c.id) && c.anchorKind === 'inline').map((c) => c.id)
+
+  let draftContent = node.draftContent
+  for (const cid of deletedTextIds) draftContent = unwrapCommentMark(draftContent, cid)
+  node.draftContent = draftContent
+
+  const kept = all.filter((c) => !toDelete.has(c.id))
+  for (const c of kept) {
+    let body = c.body
+    for (const cid of deletedInlineIds) body = unwrapCommentMark(body, cid)
+    c.body = body
   }
-  return undefined
+  node.comments = kept
+  await saveNode(node)
 }
 
 /** `node.footnotes` is optional (absent on any node saved before footnotes existed) — this is the one place that reads it, so "absent" and "empty" are treated identically everywhere else. */

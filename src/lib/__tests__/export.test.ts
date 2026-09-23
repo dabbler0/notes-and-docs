@@ -10,7 +10,7 @@ function makeNode(overrides: Partial<EssayNode> & { id: string; draftContent: st
   return {
     essayId: 'e1',
     title: 'Untitled section',
-    versions: [{ id: 'v1', content: overrides.draftContent, comments: [], createdAt: 0 }],
+    versions: [{ id: 'v1', content: overrides.draftContent, createdAt: 0 }],
     headVersionId: 'v1',
     createdAt: 0,
     updatedAt: 0,
@@ -63,7 +63,7 @@ describe('footnotes in Markdown export', () => {
       id: 'root',
       essayId: 'e1',
       title: 'Untitled',
-      versions: [{ id: 'v1', content: '', comments: [], createdAt: 0 }],
+      versions: [{ id: 'v1', content: '', createdAt: 0 }],
       headVersionId: 'v1',
       draftContent: '<p>Old content from before footnotes existed.</p>',
       createdAt: 0,

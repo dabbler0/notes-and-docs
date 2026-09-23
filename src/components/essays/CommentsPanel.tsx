@@ -1,14 +1,40 @@
 import { useEffect, useRef, useState } from 'preact/hooks'
-import { commentIdsInContent, findComment, setCommentResolved } from '../../models/essaysRepo'
+import { commentChildren, commentSubtreeIds, deleteCommentCascade, saveNode, setCommentResolved, topLevelComments, updateCommentBody, addComment } from '../../models/essaysRepo'
+import { reconstructContent } from '../../lib/childMarkers'
+import { id } from '../../lib/id'
 import type { Comment, EssayNode } from '../../models/types'
 
 interface Row {
   node: EssayNode
   comment: Comment
-  /** The id of the version that actually recorded this comment — not necessarily `node.headVersionId`; see `stale`. */
-  versionId: string
-  /** True when this comment's own version has fallen behind the node's current head (a later edit committed a new version without it) — its anchor mark is still sitting in the current content, which is the only reason it's showing up here at all, but a viewer should know it's talking about a version that's no longer current. */
-  stale: boolean
+}
+
+/**
+ * Unwraps `commentId`'s own `<mark class="comment-anchor" data-comment-id>`
+ * — if it has one — out of wherever it lives before the underlying record
+ * is deleted: a `'text'` comment's mark sits in `node.draftContent`, found
+ * (and removed) here through the *live* mounted DOM first, same division of
+ * labor as footnote deletion in SectionBlock.tsx, since the section's own
+ * `contentEditable` shard can be a moment ahead of what's actually been
+ * debounce-saved. An `'inline'` comment's mark, sitting inside some other
+ * comment's own `body` string, has no live DOM counterpart to worry about
+ * here — `deleteCommentCascade` unwraps that one directly out of the saved
+ * data instead.
+ */
+async function deleteComment(node: EssayNode, commentId: string, scrollEl: HTMLElement | null) {
+  const ids = commentSubtreeIds(node, commentId)
+  if (scrollEl) {
+    for (const cid of ids) {
+      const mark = scrollEl.querySelector(`mark.comment-anchor[data-comment-id="${cssEscape(cid)}"]`)
+      if (mark) mark.replaceWith(...Array.from(mark.childNodes))
+    }
+  }
+  const html = reconstructContent(node.id)
+  if (html != null) {
+    node.draftContent = html
+    await saveNode(node)
+  }
+  await deleteCommentCascade(node, commentId)
 }
 
 /**
@@ -18,10 +44,13 @@ interface Row {
  * editor's) over a tall inner canvas that's shifted up by the *document's*
  * own scroll position, so a card visually tracks its anchor as the document
  * scrolls, without the two ever needing to be inside the same scrolling
- * element. `top` for each card is computed once in "unscrolled" document
- * coordinates (anchor position + however far the document is already
- * scrolled) — a value that stays correct at any scroll offset, since the
- * transform below re-applies that same offset in the other direction.
+ * element. `top` for each top-level card is computed once in "unscrolled"
+ * document coordinates (anchor position + however far the document is
+ * already scrolled) — a value that stays correct at any scroll offset,
+ * since the transform below re-applies that same offset in the other
+ * direction. Only top-level comments (anchored to text, or to a whole
+ * section) get their own position — every reply and comment-on-a-comment
+ * nested under one renders inside that same card instead (see `CommentCard`).
  */
 export function CommentsPanel({
   nodeMap,
@@ -47,15 +76,7 @@ export function CommentsPanel({
 
   const rows: Row[] = []
   for (const node of nodeMap.values()) {
-    // The document's current content (what's actually rendered/edited),
-    // not any one version's — a comment shows here exactly as long as its
-    // anchor mark is still somewhere in that content, regardless of which
-    // version last recorded the comment itself. See `commentIdsInContent`.
-    for (const commentId of new Set(commentIdsInContent(node.draftContent))) {
-      const found = findComment(node, commentId)
-      if (!found) continue
-      rows.push({ node, comment: found.comment, versionId: found.version.id, stale: found.version.id !== node.headVersionId })
-    }
+    for (const comment of topLevelComments(node)) rows.push({ node, comment })
   }
   rows.sort((a, b) => b.comment.createdAt - a.comment.createdAt)
   const openCount = rows.filter((r) => !r.comment.resolved).length
@@ -78,18 +99,15 @@ export function CommentsPanel({
 
     const raw: { id: string; top: number }[] = []
     for (const { comment, node } of rows) {
-      const mark = scrollEl.querySelector(`[data-comment-id="${cssEscape(comment.id)}"]`) as HTMLElement | null
-      // A mark that's collapsed out of view (its own section, or an
-      // ancestor section, has been toggled closed) still exists in the
-      // DOM, so the query above finds it either way — but
-      // getBoundingClientRect() on anything inside a `display: none`
-      // subtree returns all zeroes, which used to pin every comment in a
-      // collapsed section to the very top of the margin instead of near
-      // its real (collapsed) location, stacking them on top of each other
-      // and the "N open" badge. Fall back to the nearest *visible* section
-      // header instead, walking up through collapsed ancestors as needed —
-      // a comment three levels deep under three collapsed sections still
-      // lands at the outermost one's header rather than at the top.
+      // A 'node' (whole-section) comment has no mark to look for at all —
+      // it always anchors to the section's own heading. A 'text' comment
+      // normally has one, but falls back the same way if its mark is
+      // collapsed out of view (its own section, or an ancestor, toggled
+      // closed) — getBoundingClientRect() on anything inside a `display:
+      // none` subtree returns all zeroes, which would otherwise pin the
+      // comment to the very top of the margin instead of near its real
+      // (collapsed) location.
+      const mark = comment.anchorKind === 'text' ? (scrollEl.querySelector(`[data-comment-id="${cssEscape(comment.id)}"]`) as HTMLElement | null) : null
       const anchorEl = isVisible(mark) ? mark : nearestVisibleHeader(scrollEl, node.id)
       if (!anchorEl) continue
       const top = anchorEl.getBoundingClientRect().top - scrollRect.top + scrollEl.scrollTop + deltaTop
@@ -100,10 +118,10 @@ export function CommentsPanel({
     const CARD_GAP = 10
     let prevBottom = -Infinity
     const next = new Map<string, number>()
-    for (const { id, top } of raw) {
+    for (const { id: cid, top } of raw) {
       const t = Math.max(top, prevBottom + CARD_GAP)
-      next.set(id, t)
-      const cardEl = innerRef.current?.querySelector(`[data-comment-id="${cssEscape(id)}"]`) as HTMLElement | null
+      next.set(cid, t)
+      const cardEl = innerRef.current?.querySelector(`[data-comment-thread-id="${cssEscape(cid)}"]`) as HTMLElement | null
       prevBottom = t + (cardEl?.offsetHeight ?? 90)
     }
     setPositions(next)
@@ -141,8 +159,9 @@ export function CommentsPanel({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [nodeMap, mode])
 
-  async function toggle(row: Row, resolved: boolean) {
-    await setCommentResolved(row.node, row.versionId, row.comment.id, resolved)
+  async function handleDelete(node: EssayNode, commentId: string) {
+    if (!confirm('Delete this comment, and everything replied or commented on it?')) return
+    await deleteComment(node, commentId, scrollRef.current)
     onChanged()
   }
 
@@ -150,19 +169,13 @@ export function CommentsPanel({
     return (
       <div className="comments-list-view">
         <h2 style={{ marginTop: 0 }}>Comments ({openCount} open)</h2>
-        {rows.length === 0 && <p className="muted">No comments yet. Turn on Comment mode and select some text to leave one.</p>}
+        {rows.length === 0 && <p className="muted">No comments yet. Select some text (or use the Comment button with nothing selected) to leave one.</p>}
         {rows.map((row) => (
-          <div className={`comment-item${row.comment.resolved ? ' resolved' : ''}`} key={row.comment.id}>
+          <div className="comment-thread-root" key={row.comment.id}>
             <div className="comment-section-label" onClick={() => onJumpTo?.(row.node.id)}>
               {row.node.title || 'Untitled section'}
             </div>
-            {row.stale && <div className="comment-stale-note">From a previous version of this section</div>}
-            <div className="anchor">“{row.comment.anchorText}”</div>
-            <div>{row.comment.body}</div>
-            <label className="comment-checkbox-row">
-              <input type="checkbox" checked={row.comment.resolved} onChange={(e) => toggle(row, (e.target as HTMLInputElement).checked)} />
-              <span className="muted">Dealt with</span>
-            </label>
+            <CommentCard node={row.node} comment={row.comment} depth={0} onChanged={onChanged} onDelete={handleDelete} scrollEl={scrollRef.current} />
           </div>
         ))}
       </div>
@@ -172,24 +185,188 @@ export function CommentsPanel({
   return (
     <div className="comments-panel" ref={panelRef}>
       <span className="margin-comments-count chip">{openCount} open</span>
-      {rows.length === 0 && <p className="muted margin-comments-empty">No comments yet. Turn on Comment mode and select some text to leave one.</p>}
+      {rows.length === 0 && <p className="muted margin-comments-empty">No comments yet. Select some text (or use the Comment button with nothing selected) to leave one.</p>}
       <div className="margin-comments-inner" ref={innerRef} style={{ height: canvasHeight, transform: `translateY(${-scrollTop}px)` }}>
         {rows.map((row) => (
-          <div
-            className={`comment-item margin-comment-item${row.comment.resolved ? ' resolved' : ''}`}
-            key={row.comment.id}
-            data-comment-id={row.comment.id}
-            style={{ top: positions.get(row.comment.id) ?? 0 }}
-          >
-            {row.stale && <div className="comment-stale-note">From a previous version</div>}
-            <div className="anchor">“{row.comment.anchorText}”</div>
-            <div>{row.comment.body}</div>
-            <label className="comment-checkbox-row">
-              <input type="checkbox" checked={row.comment.resolved} onChange={(e) => toggle(row, (e.target as HTMLInputElement).checked)} />
-              <span className="muted">Dealt with</span>
-            </label>
+          <div className="comment-thread-root" key={row.comment.id} data-comment-thread-id={row.comment.id} style={{ top: positions.get(row.comment.id) ?? 0 }}>
+            {row.comment.anchorKind === 'node' && <div className="comment-section-label">{row.node.title || 'Untitled section'}</div>}
+            <CommentCard node={row.node} comment={row.comment} depth={0} onChanged={onChanged} onDelete={handleDelete} scrollEl={scrollRef.current} />
           </div>
         ))}
+      </div>
+    </div>
+  )
+}
+
+/**
+ * One comment's own card — its rich-text body (an uncontrolled
+ * `contentEditable` div, same debounced-save shape as a footnote's body in
+ * SectionBlock.tsx: editable in place, satisfying "edit existing comments"
+ * with no separate edit mode needed at all), a small formatting toolbar
+ * (Bold/Italic/Underline via `document.execCommand`, same mechanism the
+ * main editor's own toolbar uses), and buttons to comment on a highlighted
+ * span within this body (nesting a new comment under this one, anchored
+ * with the same `<mark class="comment-anchor">` scheme the main document
+ * uses), to reply (a plain nested comment, no highlight needed), and to
+ * delete (recursively — see `deleteCommentCascade`). Renders its own
+ * children (`commentChildren`) recursively underneath, indented — a whole
+ * thread lives inside the one positioned top-level card, rather than each
+ * reply trying to claim its own spot in the margin.
+ */
+function CommentCard({
+  node,
+  comment,
+  depth,
+  onChanged,
+  onDelete,
+  scrollEl,
+}: {
+  node: EssayNode
+  comment: Comment
+  depth: number
+  onChanged: () => void
+  onDelete: (node: EssayNode, commentId: string) => void
+  scrollEl: HTMLElement | null
+}) {
+  const bodyRef = useRef<HTMLDivElement>(null)
+  const savedRangeRef = useRef<Range | null>(null)
+  const saveTimer = useRef<number | undefined>(undefined)
+  const synced = useRef<{ comment: Comment | null; body: string }>({ comment: null, body: '' })
+  const [replying, setReplying] = useState(false)
+  const [commentingOnSelection, setCommentingOnSelection] = useState(false)
+
+  useEffect(() => {
+    if (synced.current.comment === comment && synced.current.body === comment.body) return
+    if (bodyRef.current) bodyRef.current.innerHTML = comment.body
+    synced.current = { comment, body: comment.body }
+  }, [comment, comment.body])
+
+  function scheduleSave() {
+    window.clearTimeout(saveTimer.current)
+    saveTimer.current = window.setTimeout(() => {
+      const html = bodyRef.current?.innerHTML ?? ''
+      synced.current = { comment, body: html }
+      updateCommentBody(node, comment.id, html)
+    }, 500)
+  }
+
+  function captureBodyRange() {
+    const sel = window.getSelection()
+    if (!sel || sel.rangeCount === 0 || !bodyRef.current || !bodyRef.current.contains(sel.anchorNode)) return
+    savedRangeRef.current = sel.getRangeAt(0).cloneRange()
+  }
+
+  function exec(cmd: string) {
+    bodyRef.current?.focus()
+    document.execCommand(cmd)
+  }
+
+  async function handleAddInline(replyBody: string) {
+    const range = savedRangeRef.current
+    if (!range || range.collapsed || !bodyRef.current) return
+    const newCommentId = id()
+    const mark = document.createElement('mark')
+    mark.className = 'comment-anchor'
+    mark.dataset.commentId = newCommentId
+    const contents = range.extractContents()
+    const anchorText = contents.textContent || ''
+    mark.appendChild(contents)
+    range.insertNode(mark)
+    const html = bodyRef.current.innerHTML
+    synced.current = { comment, body: html }
+    await updateCommentBody(node, comment.id, html)
+    await addComment(node, { anchorKind: 'inline', anchorText, body: replyBody, parentId: comment.id, commentId: newCommentId })
+    setCommentingOnSelection(false)
+    onChanged()
+  }
+
+  async function handleReply(replyBody: string) {
+    await addComment(node, { anchorKind: 'reply', anchorText: '', body: replyBody, parentId: comment.id })
+    setReplying(false)
+    onChanged()
+  }
+
+  const children = commentChildren(node, comment.id)
+
+  return (
+    <div className={`comment-item${comment.resolved ? ' resolved' : ''}`} style={depth > 0 ? { marginLeft: 16 } : undefined}>
+      {comment.anchorKind === 'text' && <div className="anchor">“{comment.anchorText}”</div>}
+      {comment.anchorKind === 'inline' && <div className="anchor">on: “{comment.anchorText}”</div>}
+      <div className="comment-mini-toolbar">
+        <button className="icon-btn" title="Bold" onMouseDown={(e) => e.preventDefault()} onClick={() => exec('bold')}>
+          B
+        </button>
+        <button className="icon-btn" title="Italic" onMouseDown={(e) => e.preventDefault()} onClick={() => exec('italic')}>
+          I
+        </button>
+        <button className="icon-btn" title="Underline" onMouseDown={(e) => e.preventDefault()} onClick={() => exec('underline')}>
+          U
+        </button>
+        <span className="spacer" />
+        <button
+          className="icon-btn"
+          title="Comment on the selected text within this comment"
+          onMouseDown={(e) => {
+            e.preventDefault()
+            captureBodyRange()
+          }}
+          onClick={() => setCommentingOnSelection(true)}
+        >
+          💬
+        </button>
+        <button className="icon-btn" title="Reply" onClick={() => setReplying(true)}>
+          ↩
+        </button>
+        <button className="icon-btn" title="Delete this comment (and anything nested under it)" onClick={() => onDelete(node, comment.id)}>
+          ×
+        </button>
+      </div>
+      <div className="comment-body" ref={bodyRef} contentEditable onInput={scheduleSave} onMouseUp={captureBodyRange} onKeyUp={captureBodyRange} />
+      <label className="comment-checkbox-row">
+        <input
+          type="checkbox"
+          checked={comment.resolved}
+          onChange={async (e) => {
+            await setCommentResolved(node, comment.id, (e.target as HTMLInputElement).checked)
+            onChanged()
+          }}
+        />
+        <span className="muted">Dealt with</span>
+      </label>
+      {commentingOnSelection && <InlineComposer placeholder="Comment on the highlighted text…" onCancel={() => setCommentingOnSelection(false)} onSubmit={handleAddInline} />}
+      {replying && <InlineComposer placeholder="Write a reply…" onCancel={() => setReplying(false)} onSubmit={handleReply} />}
+      {children.length > 0 && (
+        <div className="comment-children">
+          {children.map((child) => (
+            <CommentCard key={child.id} node={node} comment={child} depth={depth + 1} onChanged={onChanged} onDelete={onDelete} scrollEl={scrollEl} />
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+function InlineComposer({ placeholder, onCancel, onSubmit }: { placeholder: string; onCancel: () => void; onSubmit: (body: string) => void }) {
+  const [body, setBody] = useState('')
+  return (
+    <div className="field">
+      <textarea
+        autoFocus
+        rows={2}
+        placeholder={placeholder}
+        value={body}
+        onInput={(e) => setBody((e.target as HTMLTextAreaElement).value)}
+        onKeyDown={(e) => {
+          if (e.key === 'Escape') onCancel()
+        }}
+      />
+      <div className="comment-widget-actions">
+        <button className="btn btn-ghost btn-sm" onClick={onCancel}>
+          Cancel
+        </button>
+        <button className="btn btn-primary btn-sm" disabled={!body.trim()} onClick={() => onSubmit(body.trim())}>
+          Add
+        </button>
       </div>
     </div>
   )

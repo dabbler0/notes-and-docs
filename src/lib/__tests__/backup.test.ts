@@ -37,7 +37,7 @@ function oldFormatManifest(): Omit<BackupManifest, 'quotes' | 'graveyard'> {
     id: 'node-1',
     essayId: 'essay-1',
     title: 'Pre-existing essay',
-    versions: [{ id: 'v1', content: 'Old content', comments: [], createdAt: now }],
+    versions: [{ id: 'v1', content: 'Old content', createdAt: now }],
     headVersionId: 'v1',
     draftContent: 'Old content',
     createdAt: now,

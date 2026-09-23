@@ -100,20 +100,53 @@ export interface QuoteBankEntry {
 
 // ---- Essays / drafts -----------------------------------------------------
 
+/**
+ * A comment (or a reply to one, or a comment made on a highlighted span
+ * within one) lives flat on the `EssayNode` it belongs to (see
+ * `EssayNode.comments`), not on any one version — unlike a node's own text,
+ * a comment thread isn't something a version boundary should ever silently
+ * cut off or orphan. `parentId`/`anchorKind` together are what unify four
+ * different-looking features (a comment on selected text, a comment on a
+ * whole section, a comment on a comment, and a plain threaded reply) into
+ * one shape:
+ *
+ * - `'text'` — anchored to a `<mark class="comment-anchor" data-comment-id>`
+ *   span sitting in the node's own `draftContent`. Always top-level
+ *   (`parentId` null); a comment can't itself be nested *and* anchored to
+ *   the main document text; see `'inline'` for nesting with an anchor.
+ * - `'node'` — attached to the section as a whole, no mark anywhere. Also
+ *   always top-level.
+ * - `'inline'` — a comment *on* another comment: anchored to a
+ *   `<mark class="comment-anchor" data-comment-id>` span sitting inside
+ *   `parentId`'s own `body` HTML, exactly the same marking scheme as
+ *   `'text'` just applied to a comment's body instead of a section's.
+ * - `'reply'` — a plain threaded reply to `parentId`, no mark, no anchor
+ *   text — just another comment in the same thread.
+ *
+ * Deliberately never auto-pruned the way a `Footnote` is (see
+ * `pruneOrphanedFootnotes` in `essaysRepo.ts`): editing away the text a
+ * comment (or a reply thread under it) is anchored to doesn't silently
+ * destroy the discussion — only an explicit, recursively-cascading delete
+ * does (see `deleteCommentCascade`).
+ */
 export interface Comment {
   id: string
-  /** Plain-text snippet the comment is anchored to (best-effort, for display). */
+  /** Id of the comment this one is nested under, or null for a top-level comment. */
+  parentId: string | null
+  anchorKind: 'node' | 'text' | 'inline' | 'reply'
+  /** Plain-text snippet the comment is anchored to (best-effort, for display) — empty for 'node' and 'reply' comments, which have nothing to quote. */
   anchorText: string
+  /** Rich-text HTML, edited the same uncontrolled-contentEditable way as a footnote's own body. */
   body: string
   resolved: boolean
   createdAt: number
+  updatedAt: number
 }
 
 export interface NodeVersion {
   id: string
   /** HTML content of this node's own text (not including children). */
   content: string
-  comments: Comment[]
   createdAt: number
   label?: string
 }
@@ -161,6 +194,16 @@ export interface EssayNode {
    * are treated identically everywhere this is read.
    */
   footnotes?: Footnote[]
+  /**
+   * This node's own comment threads — every comment anchored to its text,
+   * to itself as a whole section, and every reply/comment-on-a-comment
+   * nested under any of those (see `Comment`'s own doc comment). Absent on
+   * any node saved before this flat, node-level model replaced the old
+   * per-version one; always read through `essaysRepo.nodeComments()`,
+   * which also lazily migrates a node still carrying the old
+   * `NodeVersion.comments` shape the first time it's loaded.
+   */
+  comments?: Comment[]
   createdAt: number
   updatedAt: number
   /** Tombstone — see the note on Source.deleted. */

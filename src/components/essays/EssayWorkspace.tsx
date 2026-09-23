@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'preact/hooks'
-import { addFootnote, commitNewVersion, createChildNode, addComment, getEssay, getNode, headVersion, loadNodeMap, moveNode, saveEssay, saveNode } from '../../models/essaysRepo'
+import { addFootnote, createChildNode, addComment, getEssay, getNode, loadNodeMap, moveNode, saveEssay, saveNode } from '../../models/essaysRepo'
 import { addToGraveyard } from '../../models/graveyardRepo'
 import { citationHtml, displayTitle } from '../../lib/bibtex'
 import { extractAroundRange, insertHtmlAtRange } from '../../lib/selection'
@@ -48,7 +48,14 @@ export function EssayWorkspace({ essayId, onBack }: { essayId: string; onBack: (
   const [showQuoteDialog, setShowQuoteDialog] = useState(false)
   const [showLink, setShowLink] = useState(false)
   const [showExport, setShowExport] = useState(false)
-  const [pendingComment, setPendingComment] = useState<{ nodeId: string; range: Range; text: string; anchorRect: { top: number; bottom: number; left: number; right: number } } | null>(null)
+  const [pendingComment, setPendingComment] = useState<{
+    nodeId: string
+    /** null for a section-level ('node') comment — there's no selection to wrap. */
+    range: Range | null
+    anchorKind: 'text' | 'node'
+    text: string
+    anchorRect: { top: number; bottom: number; left: number; right: number }
+  } | null>(null)
   const commentWidgetRef = useRef<HTMLDivElement>(null)
   const [focusTitleId, setFocusTitleId] = useState<string | null>(null)
   const [focusFootnoteId, setFocusFootnoteId] = useState<string | null>(null)
@@ -321,49 +328,21 @@ export function EssayWorkspace({ essayId, onBack }: { essayId: string; onBack: (
   }
 
   /**
-   * Comment mode is meant to let you start commenting *anywhere in the
-   * document* immediately: a comment always anchors to a specific
-   * *version*, so any section with unsaved draft changes needs one made
-   * for it first. Freezing only the section you happen to click into
-   * first (which is what used to happen, in handleMouseUpForComments
-   * below) left every *other* dirty section still un-versioned — visibly
-   * so, since it'd still show its "unsaved" pill — until you separately
-   * selected text in each one too. Entering comment mode now freezes
-   * every dirty section across the whole essay up front, in one pass, so
-   * "unsaved" disappears everywhere the moment you turn it on rather than
-   * one section at a time. Like the per-section freeze it replaces here,
-   * this does *not* clear any section afterward — the text stays right
-   * there to anchor comments to and keep reading normally.
+   * "Comment mode" just switches the document to a closer-to-print-view
+   * reading mode (editing off, selecting text to comment on still on) — see
+   * SectionBlock's own `contentEditable={!commentMode}`. It doesn't need to
+   * freeze anything into a new version anymore: comments live flat on the
+   * node now (see `Comment`'s own doc comment in models/types.ts), not
+   * pinned to whichever version happened to be head when they were added,
+   * so there's no version-boundary problem for entering comment mode to
+   * work around in the first place.
    */
-  async function toggleCommentMode() {
-    const entering = !commentMode
-    setCommentMode(entering)
-    if (!entering) return
-    let anyFrozen = false
-    for (const node of nodeMap.values()) {
-      // The currently-focused section's draftContent may be behind
-      // in-progress DOM edits that haven't been debounce-saved yet —
-      // reconstruct it from the live DOM first so its frozen version
-      // actually captures what's on screen. Every other node's
-      // draftContent is already authoritative.
-      if (node.id === activeNodeId.current) {
-        const html = reconstructContent(node.id)
-        if (html != null) node.draftContent = html
-      }
-      if (node.draftContent === headVersion(node).content) continue
-      await commitNewVersion(node)
-      anyFrozen = true
-    }
-    if (anyFrozen) reload()
+  function toggleCommentMode() {
+    setCommentMode((v) => !v)
   }
 
-  /**
-   * Selecting text in comment mode still freezes its own section first if
-   * comment mode somehow left it dirty (e.g. typed after entering comment
-   * mode, before selecting) — a safety net on top of toggleCommentMode's
-   * own upfront freeze above, not the primary mechanism anymore.
-   */
-  async function handleMouseUpForComments() {
+  /** Selecting text while in comment mode opens the same comment composer the toolbar's own "Comment" button does (see `beginComment`) — this is just the mouseup-triggered shortcut for it that only applies while comment mode is on. */
+  function handleMouseUpForComments() {
     if (!commentMode) return
     const sel = document.getSelection()
     const el = activeEditorEl.current
@@ -373,19 +352,55 @@ export function EssayWorkspace({ essayId, onBack }: { essayId: string; onBack: (
     if (!el.contains(range.commonAncestorContainer)) return
     const text = range.toString().trim()
     if (!text) return
-
-    if (node.draftContent !== headVersion(node).content) {
-      node.draftContent = reconstructContent(node.id) ?? node.draftContent
-      await commitNewVersion(node)
-      reload()
-    }
-
     const rect = range.getBoundingClientRect()
     setPendingComment({
       nodeId: node.id,
       range: range.cloneRange(),
+      anchorKind: 'text',
       text,
       anchorRect: { top: rect.top, bottom: rect.bottom, left: rect.left, right: rect.right },
+    })
+  }
+
+  /**
+   * The toolbar's "Comment" button — the primary way to add a comment now,
+   * usable whether or not comment mode is on (requirement: comment mode
+   * shouldn't be the *only* way to add one). Selected text opens the
+   * ordinary text-anchored composer, same as selecting text in comment mode
+   * does; nothing selected (or no section focused at all) falls back to a
+   * whole-section comment instead, positioned near that section's own
+   * heading, satisfying "comments attached to sections" without needing any
+   * text highlighted at all.
+   */
+  function beginComment() {
+    const range = savedRange.current
+    const el = activeEditorEl.current
+    const node = activeNode()
+    if (!node) {
+      alert('Click into a section first.')
+      return
+    }
+    const usableRange = range && el?.contains(range.commonAncestorContainer) ? range : null
+    const text = usableRange ? usableRange.toString().trim() : ''
+    if (usableRange && text) {
+      const rect = usableRange.getBoundingClientRect()
+      setPendingComment({
+        nodeId: node.id,
+        range: usableRange.cloneRange(),
+        anchorKind: 'text',
+        text,
+        anchorRect: { top: rect.top, bottom: rect.bottom, left: rect.left, right: rect.right },
+      })
+      return
+    }
+    const headerEl = document.querySelector(`[data-node-id="${node.id}"] > .section-header`) as HTMLElement | null
+    const rect = headerEl?.getBoundingClientRect()
+    setPendingComment({
+      nodeId: node.id,
+      range: null,
+      anchorKind: 'node',
+      text: '',
+      anchorRect: rect ? { top: rect.top, bottom: rect.bottom, left: rect.left, right: rect.right } : { top: 100, bottom: 130, left: 100, right: 300 },
     })
   }
 
@@ -397,27 +412,20 @@ export function EssayWorkspace({ essayId, onBack }: { essayId: string; onBack: (
     // margin view finds *this* comment's own anchor in the DOM afterward,
     // rather than just the nearest one.
     const commentId = id()
-    try {
-      const mark = document.createElement('mark')
-      mark.className = 'comment-anchor'
-      mark.dataset.commentId = commentId
-      const contents = pendingComment.range.extractContents()
-      mark.appendChild(contents)
-      pendingComment.range.insertNode(mark)
-      await persistActiveNode(node)
-    } catch {
-      /* fall back to just recording the comment without an inline mark */
+    if (pendingComment.anchorKind === 'text' && pendingComment.range) {
+      try {
+        const mark = document.createElement('mark')
+        mark.className = 'comment-anchor'
+        mark.dataset.commentId = commentId
+        const contents = pendingComment.range.extractContents()
+        mark.appendChild(contents)
+        pendingComment.range.insertNode(mark)
+        await persistActiveNode(node)
+      } catch {
+        /* fall back to just recording the comment without an inline mark */
+      }
     }
-    // Comment mode already froze this section into a version before the
-    // widget opened, but wrapping the anchor text in a <mark> just now
-    // changed the draft again — fold that straight back into the same
-    // version's own content rather than leaving it "dirty," so it isn't
-    // mistaken for unsaved prose that needs *another* freeze (and a fresh
-    // version) the next time a comment gets added here. A comment's anchor
-    // mark is metadata about where the comment points, not a new revision.
-    const head = headVersion(node)
-    head.content = node.draftContent
-    await addComment(node, head.id, pendingComment.text, body, commentId)
+    await addComment(node, { anchorKind: pendingComment.anchorKind, anchorText: pendingComment.text, body, commentId })
     setPendingComment(null)
     reload()
   }
@@ -545,6 +553,21 @@ export function EssayWorkspace({ essayId, onBack }: { essayId: string; onBack: (
                 </button>
               </>
             )}
+            {/* Unlike every button below, this one works whether or not
+                comment mode is on — comment mode is no longer the only way
+                to add a comment (see `beginComment`'s own doc comment). */}
+            <button
+              className="btn btn-sm icon-btn-toolbar"
+              title="Add a comment on the current selection, or on the whole section if nothing's selected"
+              onMouseDown={(e) => {
+                e.preventDefault()
+                captureRange()
+              }}
+              onClick={beginComment}
+            >
+              <Icon name="comment" />
+            </button>
+            <span className="toolbar-divider" />
             {/* Comment mode is meant to read close to a print view — nearly
                 every text-editing affordance below only applies to a live
                 draft, so they're hidden rather than just disabled while
@@ -722,7 +745,7 @@ export function EssayWorkspace({ essayId, onBack }: { essayId: string; onBack: (
           className="comment-widget"
           style={commentWidgetStyle(pendingComment.anchorRect)}
         >
-          <p className="comment-widget-quote">“{pendingComment.text}”</p>
+          <p className="comment-widget-quote">{pendingComment.anchorKind === 'text' ? `“${pendingComment.text}”` : 'Comment on this whole section'}</p>
           <CommentComposer onCancel={() => setPendingComment(null)} onSubmit={submitComment} />
         </div>
       )}
