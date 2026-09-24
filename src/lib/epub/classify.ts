@@ -14,8 +14,10 @@
  * - `'layout'` mode keeps each run's real position and font size, which is
  *   most of what makes any of this possible: a running header/footer lives
  *   in a predictable band at the top/bottom of every page, a footnote is
- *   reliably *smaller* than body text, and a section heading is reliably
- *   *larger*. `classifyLayoutPages` uses all three.
+ *   reliably *smaller* than body text, a section heading is often *larger*,
+ *   and one set in the *same* size as body text is often instead *centered*
+ *   rather than flush with the body's usual left margin. `classifyLayoutPages`
+ *   uses all of this.
  * - `'plain'` mode has thrown all of that away — every page is bare
  *   `<p>`/`<br>` HTML with no position or size information at all — so
  *   `classifyPlainPages` can only lean on repetition (a running
@@ -26,6 +28,15 @@
  *   detection in particular is far less reliable without a font-size cue to
  *   confirm it, but still better than treating the whole document as one
  *   undifferentiated stream.
+ *
+ * None of this is guaranteed to be right, so `detectEdgeGroups` (below) and
+ * `classifyPages`'s own `override` parameter exist specifically so a caller
+ * (see `EpubExportDialog.tsx`) can ask a person to confirm or correct the
+ * one decision that's both cheap to show and disproportionately consequential
+ * if wrong — "is this repeating line actually a running header/footer?" —
+ * before committing to it, rather than silently trusting a repetition
+ * threshold that has no way to know it's looking at, say, a real (if
+ * repetitive) piece of body content instead.
  */
 import { htmlToPlainText } from '../textExtraction'
 import { isLayoutHtml, parseLayoutPage, type LayoutLine } from './layoutParser'
@@ -52,47 +63,140 @@ const EDGE_BAND_FRACTION = 0.12
  * as a real bug, not a hypothetical. Checking every page instead costs a
  * few extra cheap regex tests but only has to find *one* real text page
  * to route correctly.
+ *
+ * `override` lets a caller override the automatic running-header/footer
+ * detection with a person's own confirmed decision — see `EdgeOverride`'s
+ * own doc comment and `detectEdgeGroups` below, which is what a calibration
+ * UI uses to show that decision in the first place.
  */
-export function classifyPages(pageHtml: string[]): DocBlock[] {
+export function classifyPages(pageHtml: string[], override?: EdgeOverride): DocBlock[] {
   const nonEmpty = pageHtml.filter((h) => h && h.trim())
   if (nonEmpty.length === 0) return []
-  return nonEmpty.some(isLayoutHtml) ? classifyLayoutPages(pageHtml) : classifyPlainPages(pageHtml)
+  return nonEmpty.some(isLayoutHtml) ? classifyLayoutPages(pageHtml, override) : classifyPlainPages(pageHtml, override)
 }
 
 // ---- shared: repetition-based running header/footer detection -----------
+
+/**
+ * One distinct repeating running-header/footer candidate — every page whose
+ * own top/bottom-band line normalizes (see `normalizeForRepetition`) to the
+ * same text is one group. Returned by `detectEdgeGroups` for a calibration
+ * UI to show a person, and consumed back via `EdgeOverride` to tell
+ * `classifyPages` which groups to actually treat as running header/footer
+ * text, overriding the automatic repetition-threshold guess this module
+ * would otherwise make on its own.
+ */
+export interface EdgeGroup {
+  /** Stable id for this group (the normalized text) — what `EdgeOverride` keys on. */
+  key: string
+  edge: 'header' | 'footer'
+  /** One real, non-normalized example of the text, to show a person deciding whether to keep or strip it. */
+  sampleText: string
+  /** Which pages (1-based) this text was found repeating on. */
+  pages: number[]
+  totalPages: number
+  /** Whether the automatic repetition threshold would treat this as a running header/footer to strip on its own — the default a calibration UI should show pre-selected. */
+  suggested: boolean
+}
+
+/**
+ * Runs just the position/repetition detection half of classification —
+ * cheap enough to call before committing to a full classification pass —
+ * so a caller can show every candidate running header/footer this document
+ * has (not just the ones that happened to clear the automatic threshold)
+ * and let a person confirm or correct the guess before it's baked into the
+ * final EPUB. Empty groups (nothing repeats, or too few pages to tell) come
+ * back as empty arrays rather than an error — nothing for a calibration UI
+ * to show just means there was nothing ambiguous to ask about.
+ */
+export function detectEdgeGroups(pageHtml: string[]): { header: EdgeGroup[]; footer: EdgeGroup[] } {
+  const nonEmpty = pageHtml.filter((h) => h && h.trim())
+  if (nonEmpty.length === 0) return { header: [], footer: [] }
+  const totalPages = pageHtml.length
+  const { top, bottom } = nonEmpty.some(isLayoutHtml)
+    ? layoutTopBottomCandidates(pageHtml.map((html, i) => ({ page: i + 1, ...parseLayoutPage(html) })))
+    : plainTopBottomCandidates(pageHtml.map((html, i) => parsePlainPage(html, i + 1)))
+  return {
+    header: buildEdgeGroups(top, totalPages, 'header'),
+    footer: buildEdgeGroups(bottom, totalPages, 'footer'),
+  }
+}
+
+/** A caller's confirmed decision about which `EdgeGroup`s (by their `key`) to actually strip as running header/footer text — replaces the automatic threshold-based guess entirely (not merged with it) the moment either field is provided at all, so a person rejecting *every* candidate is expressible (an empty `Set`), not indistinguishable from "no opinion." Either field left `undefined` falls back to the automatic guess for that edge alone. */
+export interface EdgeOverride {
+  header?: Set<string>
+  footer?: Set<string>
+}
 
 function normalizeForRepetition(text: string): string {
   return text.trim().toLowerCase().replace(/\d+/g, '#')
 }
 
-/** Given one representative candidate line per page per edge (top/bottom),
- * decides which candidates are actually a *running* header/footer rather
- * than ordinary page content that happens to sit near an edge — repeated
- * (after digits are folded to a placeholder, so a page number counts as
- * "repeating" against itself) on a large enough fraction of pages. Returns
- * the set of page numbers where the top/bottom candidate should be
- * excluded from the body. Requires a minimum page count: a 1-2 page
- * document doesn't have enough samples for "repeats across pages" to mean
- * anything, so nothing gets stripped rather than risk a false positive on
- * genuine content. */
-function repeatedEdgePages(candidates: { page: number; text: string }[], totalPages: number): Set<number> {
-  const excluded = new Set<number>()
-  if (totalPages < MIN_PAGES_FOR_EDGE_DETECTION || candidates.length === 0) return excluded
-  const groups = new Map<string, number[]>()
+function groupCandidates(candidates: { page: number; text: string }[]): Map<string, { pages: number[]; sampleText: string }> {
+  const groups = new Map<string, { pages: number[]; sampleText: string }>()
   for (const c of candidates) {
     const key = normalizeForRepetition(c.text)
     if (!key) continue
-    if (!groups.has(key)) groups.set(key, [])
-    groups.get(key)!.push(c.page)
+    if (!groups.has(key)) groups.set(key, { pages: [], sampleText: c.text })
+    groups.get(key)!.pages.push(c.page)
   }
+  return groups
+}
+
+/** Requires a minimum page count: a 1-2 page document doesn't have enough samples for "repeats across pages" to mean anything, so nothing gets suggested rather than risk a false positive on genuine content. */
+function suggestedGroupKeys(groups: Map<string, { pages: number[] }>, totalPages: number): Set<string> {
+  const out = new Set<string>()
+  if (totalPages < MIN_PAGES_FOR_EDGE_DETECTION) return out
   const threshold = Math.max(3, Math.ceil(totalPages * 0.4))
-  for (const pages of groups.values()) {
-    if (pages.length >= threshold) pages.forEach((p) => excluded.add(p))
+  for (const [key, g] of groups) {
+    if (g.pages.length >= threshold) out.add(key)
+  }
+  return out
+}
+
+function buildEdgeGroups(candidates: { page: number; text: string }[], totalPages: number, edge: 'header' | 'footer'): EdgeGroup[] {
+  const groups = groupCandidates(candidates)
+  const suggested = suggestedGroupKeys(groups, totalPages)
+  return Array.from(groups.entries())
+    .map(([key, g]) => ({ key, edge, sampleText: g.sampleText, pages: g.pages, totalPages, suggested: suggested.has(key) }))
+    .sort((a, b) => b.pages.length - a.pages.length)
+}
+
+/** Given one representative candidate line per page per edge (top/bottom),
+ * decides which pages' candidate should actually be excluded from the body
+ * as a running header/footer — either from `overrideKeys` (a person's own
+ * confirmed decision, see `EdgeOverride`) or, absent that, the same
+ * automatic repetition-threshold guess `suggestedGroupKeys` computes. */
+function resolveEdgeExclusions(candidates: { page: number; text: string }[], totalPages: number, overrideKeys: Set<string> | undefined): Set<number> {
+  const groups = groupCandidates(candidates)
+  const keys = overrideKeys ?? suggestedGroupKeys(groups, totalPages)
+  const excluded = new Set<number>()
+  for (const [key, g] of groups) {
+    if (keys.has(key)) g.pages.forEach((p) => excluded.add(p))
   }
   return excluded
 }
 
 // ---- layout-mode classifier -----------------------------------------------
+
+/** One representative candidate line per page per edge — since a genuine running head/foot is a single line, and taking every line that happens to fall in the band would risk sweeping in the page's real opening/closing content on a page with a tall header. */
+function layoutTopBottomCandidates(pages: { page: number; pageHeight: number; lines: LayoutLine[] }[]): {
+  top: { page: number; text: string }[]
+  bottom: { page: number; text: string }[]
+} {
+  const top: { page: number; text: string }[] = []
+  const bottom: { page: number; text: string }[] = []
+  for (const p of pages) {
+    if (p.pageHeight <= 0) continue
+    const topBand = p.pageHeight * EDGE_BAND_FRACTION
+    const bottomBand = p.pageHeight * (1 - EDGE_BAND_FRACTION)
+    const t = p.lines.find((l) => l.y <= topBand)
+    if (t) top.push({ page: p.page, text: t.text })
+    const b = [...p.lines].reverse().find((l) => l.y >= bottomBand)
+    if (b) bottom.push({ page: p.page, text: b.text })
+  }
+  return { top, bottom }
+}
 
 interface ParagraphUnit {
   lines: LayoutLine[]
@@ -153,6 +257,48 @@ function estimateBodyFontSize(allLines: LayoutLine[]): number {
   return best
 }
 
+/** Same idea as `estimateBodyFontSize`, but for a line's own left edge — the
+ * document's usual left margin, weighted by character count so the bulk of
+ * ordinary body text sets it rather than a handful of short indented or
+ * centered lines. Used by `isCentered` to recognize a heading set in the
+ * *same* size as body text but visually offset toward the page's own
+ * horizontal center, a convention font-size alone can't catch. */
+function estimateBodyLeftX(allLines: LayoutLine[]): number {
+  if (allLines.length === 0) return 0
+  const weights = new Map<number, number>()
+  for (const line of allLines) {
+    const bucket = Math.round(line.x)
+    weights.set(bucket, (weights.get(bucket) ?? 0) + Math.max(1, line.text.length))
+  }
+  let best = allLines[0].x
+  let bestWeight = -1
+  for (const [x, weight] of weights) {
+    if (weight > bestWeight) {
+      bestWeight = weight
+      best = x
+    }
+  }
+  return best
+}
+
+/** True when `line` sits well clear of the document's usual left margin
+ * *and* its own estimated horizontal center lands close to the page's —
+ * the shape a centered section title takes, as opposed to a paragraph that
+ * simply happens to be indented (offset from the margin, but not centered)
+ * or body text flush with the margin (not offset at all). No real per-run
+ * width is tracked this far downstream, so the line's own width is
+ * approximated from its character count and font size — plenty precise
+ * for telling "roughly centered" apart from "flush left," which is all
+ * this needs to decide. */
+function isCentered(line: LayoutLine, pageWidth: number, bodyLeftX: number): boolean {
+  if (pageWidth <= 0) return false
+  const estimatedWidth = line.text.length * line.height * 0.5
+  const center = line.x + estimatedWidth / 2
+  const pageCenter = pageWidth / 2
+  const offsetFromMargin = line.x - bodyLeftX
+  return offsetFromMargin > pageWidth * 0.06 && Math.abs(center - pageCenter) < pageWidth * 0.12
+}
+
 function looksAllCaps(text: string): boolean {
   return /[A-Z]/.test(text) && text === text.toUpperCase()
 }
@@ -174,10 +320,16 @@ function splitFootnoteBlock(lines: LayoutLine[], bodyFontSize: number): { body: 
   return { body: lines.slice(0, cut), footnoteLines: lines.slice(cut) }
 }
 
+/** Splits a page's trailing small-font block into individual footnotes.
+ * Starts a new one on an explicit marker (`FOOTNOTE_MARKER_RE`) same as
+ * before, but *also* on an ordinary paragraph gap (`line.newParagraph`) —
+ * plenty of real documents set each footnote off with a blank line but no
+ * repeated-in-text digit/symbol at all, and without this, several
+ * unmarked footnotes on the same page used to merge into one run-on note. */
 function footnotesFromBlockLines(lines: LayoutLine[]): string[] {
   const notes: string[] = []
   for (const line of lines) {
-    if (FOOTNOTE_MARKER_RE.test(line.text) || notes.length === 0) {
+    if (notes.length === 0 || FOOTNOTE_MARKER_RE.test(line.text) || line.newParagraph) {
       notes.push(line.text)
     } else {
       notes[notes.length - 1] += ' ' + line.text
@@ -186,31 +338,18 @@ function footnotesFromBlockLines(lines: LayoutLine[]): string[] {
   return notes.map((n) => n.trim()).filter(Boolean)
 }
 
-function classifyLayoutPages(pageHtml: string[]): DocBlock[] {
+function classifyLayoutPages(pageHtml: string[], override?: EdgeOverride): DocBlock[] {
   const pages = pageHtml.map((html, i) => ({ page: i + 1, ...parseLayoutPage(html) }))
   const allLines = pages.flatMap((p) => p.lines)
   if (allLines.length === 0) return []
   const bodyFontSize = estimateBodyFontSize(allLines)
+  const bodyLeftX = estimateBodyLeftX(allLines)
+  const pageWidth = pages.find((p) => p.pageWidth > 0)?.pageWidth ?? 0
 
-  // Running headers/footers: one representative candidate per page per edge
-  // — the first line inside the top band, the last line inside the bottom
-  // band — since a genuine running head/foot is a single line, and taking
-  // every line that happens to fall in the band would risk sweeping in the
-  // page's real opening/closing content on a page with a tall header.
-  const topCandidates: { page: number; text: string }[] = []
-  const bottomCandidates: { page: number; text: string }[] = []
-  for (const p of pages) {
-    if (p.pageHeight <= 0) continue
-    const topBand = p.pageHeight * EDGE_BAND_FRACTION
-    const bottomBand = p.pageHeight * (1 - EDGE_BAND_FRACTION)
-    const top = p.lines.find((l) => l.y <= topBand)
-    if (top) topCandidates.push({ page: p.page, text: top.text })
-    const bottom = [...p.lines].reverse().find((l) => l.y >= bottomBand)
-    if (bottom) bottomCandidates.push({ page: p.page, text: bottom.text })
-  }
   const totalPages = pages.length
-  const headerPages = repeatedEdgePages(topCandidates, totalPages)
-  const footerPages = repeatedEdgePages(bottomCandidates, totalPages)
+  const { top: topCandidates, bottom: bottomCandidates } = layoutTopBottomCandidates(pages)
+  const headerPages = resolveEdgeExclusions(topCandidates, totalPages, override?.header)
+  const footerPages = resolveEdgeExclusions(bottomCandidates, totalPages, override?.footer)
   const headerText = new Map(topCandidates.map((c) => [c.page, c.text]))
   const footerText = new Map(bottomCandidates.map((c) => [c.page, c.text]))
 
@@ -224,14 +363,21 @@ function classifyLayoutPages(pageHtml: string[]): DocBlock[] {
     const idx = largeSizes.findIndex((s) => Math.abs(s - Math.round(size)) <= 1)
     return Math.min(3, idx === -1 ? largeSizes.length + 1 : idx + 1)
   }
+  function fallbackHeadingLevel(): number {
+    return largeSizes.length > 0 ? Math.min(3, largeSizes.length + 1) : 1
+  }
 
   function classifyUnit(unit: ParagraphUnit, text: string): { type: BlockType; level?: number } {
     const singleLine = unit.lines.length === 1
     if (singleLine && unit.height > bodyFontSize * 1.15) {
       return { type: 'heading', level: levelForSize(unit.height) }
     }
-    if (singleLine && text.length <= 80 && !/[,;]$/.test(text) && looksAllCaps(text)) {
-      return { type: 'heading', level: largeSizes.length > 0 ? Math.min(3, largeSizes.length + 1) : 1 }
+    const shortIsolatedLine = singleLine && text.length <= 80 && !/[,;]$/.test(text)
+    if (shortIsolatedLine && looksAllCaps(text)) {
+      return { type: 'heading', level: fallbackHeadingLevel() }
+    }
+    if (shortIsolatedLine && isCentered(unit.lines[0], pageWidth, bodyLeftX)) {
+      return { type: 'heading', level: fallbackHeadingLevel() }
     }
     return { type: 'paragraph' }
   }
@@ -351,6 +497,18 @@ function parsePlainPage(html: string, page: number): PlainLine[] {
   return out
 }
 
+/** Same "one representative candidate line per page per edge" idea as `layoutTopBottomCandidates`, applied to plain-mode text: the page's own first/last extracted line, since there's no position data to pick a real edge band from. */
+function plainTopBottomCandidates(pages: PlainLine[][]): { top: { page: number; text: string }[]; bottom: { page: number; text: string }[] } {
+  const top: { page: number; text: string }[] = []
+  const bottom: { page: number; text: string }[] = []
+  pages.forEach((lines, i) => {
+    if (lines.length === 0) return
+    top.push({ page: i + 1, text: lines[0].text })
+    bottom.push({ page: i + 1, text: lines[lines.length - 1].text })
+  })
+  return { top, bottom }
+}
+
 /**
  * Weaker sibling of `classifyLayoutPages` for a source extracted with the
  * default `'plain'` mode, which keeps reading-order paragraphs but throws
@@ -363,19 +521,13 @@ function parsePlainPage(html: string, page: number): PlainLine[] {
  * false negatives (an un-detected heading rendered as an ordinary
  * paragraph) are expected and are the honest failure mode here, not a bug.
  */
-function classifyPlainPages(pageHtml: string[]): DocBlock[] {
+function classifyPlainPages(pageHtml: string[], override?: EdgeOverride): DocBlock[] {
   const pages = pageHtml.map((html, i) => parsePlainPage(html, i + 1))
   const totalPages = pages.length
 
-  const topCandidates: { page: number; text: string }[] = []
-  const bottomCandidates: { page: number; text: string }[] = []
-  pages.forEach((lines, i) => {
-    if (lines.length === 0) return
-    topCandidates.push({ page: i + 1, text: lines[0].text })
-    bottomCandidates.push({ page: i + 1, text: lines[lines.length - 1].text })
-  })
-  const headerPages = repeatedEdgePages(topCandidates, totalPages)
-  const footerPages = repeatedEdgePages(bottomCandidates, totalPages)
+  const { top: topCandidates, bottom: bottomCandidates } = plainTopBottomCandidates(pages)
+  const headerPages = resolveEdgeExclusions(topCandidates, totalPages, override?.header)
+  const footerPages = resolveEdgeExclusions(bottomCandidates, totalPages, override?.footer)
   const headerText = new Map(topCandidates.map((c) => [c.page, c.text]))
   const footerText = new Map(bottomCandidates.map((c) => [c.page, c.text]))
 
@@ -417,9 +569,13 @@ function classifyPlainPages(pageHtml: string[]): DocBlock[] {
       }
     }
 
+    // Same "a new footnote starts at a marker *or* an ordinary paragraph
+    // gap" rule as the layout classifier's `footnotesFromBlockLines` —
+    // `l.lineIndexInParagraph === 0` is plain mode's equivalent of a
+    // paragraph boundary.
     const notes: string[] = []
     for (const l of footnoteLines) {
-      if (FOOTNOTE_MARKER_RE.test(l.text) || notes.length === 0) notes.push(l.text)
+      if (notes.length === 0 || FOOTNOTE_MARKER_RE.test(l.text) || l.lineIndexInParagraph === 0) notes.push(l.text)
       else notes[notes.length - 1] += ' ' + l.text
     }
     for (const note of notes) {

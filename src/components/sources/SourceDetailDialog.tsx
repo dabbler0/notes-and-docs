@@ -4,7 +4,7 @@ import { PdfViewer } from './PdfViewer'
 import { TextViewer } from './TextViewer'
 import { displayTitle, formatBibtex, parseBibtex } from '../../lib/bibtex'
 import { downloadBlob, filenameFor } from '../../lib/download'
-import { epubFilenameFor, generateEpub } from '../../lib/epub'
+import { EpubExportDialog } from './EpubExportDialog'
 import { loadPdf } from '../../lib/pdf'
 import { extractPageHtml, htmlToPlainText, type ExtractionMode } from '../../lib/textExtraction'
 import { formatBytes } from '../../lib/format'
@@ -36,6 +36,7 @@ export function SourceDetailDialog({
   const [bibtexError, setBibtexError] = useState('')
   const [pdfBusy, setPdfBusy] = useState(false)
   const [pdfStatus, setPdfStatus] = useState('')
+  const [showEpubDialog, setShowEpubDialog] = useState(false)
   const [pendingQuote, setPendingQuote] = useState('')
   const [quoteAnnotation, setQuoteAnnotation] = useState('')
   // A source with no viewer (no PDF, no extracted text) has no "current
@@ -142,28 +143,6 @@ export function SourceDetailDialog({
     downloadBlob(blob, source.pdfFileName || `${filenameFor(displayTitle(source.bibtex))}.pdf`)
   }
 
-  /**
-   * Experimental: turns this source's extracted `pageHtml` into a sectioned
-   * EPUB (see `lib/epub/`) — heading-detected chapters an e-reader's own
-   * table of contents can jump between, with running headers/footers/page
-   * numbers stripped and footnotes set apart from body text, all guessed
-   * from position and font size (best on a `'layout'`-mode extraction;
-   * meaningfully weaker on `'plain'`-mode text, which has no font-size or
-   * position data to work from at all — see `lib/epub/classify.ts`). Direct
-   * download only for now, not wired into sync or anywhere else a
-   * generated file would need to be kept around.
-   */
-  async function handleDownloadEpub() {
-    setPdfBusy(true)
-    setPdfStatus('Building EPUB…')
-    try {
-      const blob = await generateEpub(source)
-      downloadBlob(blob, epubFilenameFor(source))
-    } finally {
-      setPdfBusy(false)
-      setPdfStatus('')
-    }
-  }
 
   async function handleRemovePdf() {
     if (!confirm('Remove the attached PDF? The BibTeX entry and comment are kept.')) return
@@ -353,7 +332,8 @@ export function SourceDetailDialog({
   }
 
   return (
-    <Modal onClose={handleClose} wide>
+    <>
+      <Modal onClose={handleClose} wide>
       <h2>{source.bibtex.fields.title || source.bibtex.key}</h2>
       <div className="tab-row">
         <button className={`btn btn-sm${tab === 'bibtex' ? ' btn-primary' : ' btn-ghost'}`} onClick={() => setTab('bibtex')}>
@@ -526,8 +506,8 @@ export function SourceDetailDialog({
                   type="button"
                   className="btn-link-muted"
                   disabled={pdfBusy || !!ocrPreview}
-                  onClick={handleDownloadEpub}
-                  title="Experimental: best-effort-guesses headings, footnotes, and running headers/footers from the extracted text and builds a sectioned EPUB you can skip around in on an e-reader. Works best on text extracted with the experimental layout mode; plain-mode text has no font size or position to guess from, so detection is weaker."
+                  onClick={() => setShowEpubDialog(true)}
+                  title="Experimental: best-effort-guesses headings, footnotes, and running headers/footers from the extracted text and builds a sectioned EPUB you can skip around in on an e-reader — with a review step to confirm or correct the guesses first. Works best on text extracted with the experimental layout mode; plain-mode text has no font size or position to guess from, so detection is weaker."
                 >
                   Download as EPUB (experimental)
                 </button>
@@ -619,6 +599,8 @@ export function SourceDetailDialog({
           Close
         </button>
       </div>
-    </Modal>
+      </Modal>
+      {showEpubDialog && <EpubExportDialog source={source} onClose={() => setShowEpubDialog(false)} />}
+    </>
   )
 }

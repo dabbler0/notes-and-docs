@@ -1,22 +1,15 @@
 /**
- * The experimental "download as EPUB" feature's single entry point: turns a
- * source's already-extracted `pageHtml` into a downloadable, sectioned
- * EPUB, best-effort-classified by `classify.ts` and assembled by
- * `buildEpub.ts`. See both of those for what this can and can't reliably
- * detect — this file is purely the glue between a `Source` and a `Blob`.
+ * The experimental "download as EPUB" feature's small shared bit: the
+ * filename a generated EPUB downloads under. Building the file itself goes
+ * through `EpubExportDialog.tsx`, which calls `classify.ts`/`buildEpub.ts`
+ * directly rather than through a one-shot helper here — the whole point of
+ * that dialog is to let a person confirm or correct the classification
+ * (running headers/footers, headings, footnotes) before it's baked into the
+ * download, which a single `source -> Blob` call couldn't offer a hook for.
  */
-import { displayAuthors, displayTitle } from '../bibtex'
+import { displayTitle } from '../bibtex'
 import { filenameFor } from '../download'
 import type { Source } from '../../models/types'
-import { buildEpub } from './buildEpub'
-import { classifyPages } from './classify'
-
-export async function generateEpub(source: Source): Promise<Blob> {
-  const blocks = classifyPages(source.pageHtml)
-  const title = displayTitle(source.bibtex)
-  const author = displayAuthors(source.bibtex) || undefined
-  return buildEpub({ title, author }, blocks)
-}
 
 export function epubFilenameFor(source: Source): string {
   return `${filenameFor(displayTitle(source.bibtex))}.epub`

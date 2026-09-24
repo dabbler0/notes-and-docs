@@ -67,7 +67,14 @@ describe('parseLayoutPage', () => {
   })
 
   it('returns no lines for empty or whitespace-only pages', () => {
-    expect(parseLayoutPage('')).toEqual({ pageHeight: 0, lines: [] })
+    expect(parseLayoutPage('')).toEqual({ pageHeight: 0, pageWidth: 0, lines: [] })
     expect(parseLayoutPage(page(400, 600, '')).lines).toEqual([])
+  })
+
+  it('reads the page width off the outer wrapping div, and each line\'s x off its first run', () => {
+    const html = page(400, 600, `${span('Hello', 25, 20, 12)}&nbsp;${span('world', 60, 20, 12)}`)
+    const { pageWidth, lines } = parseLayoutPage(html)
+    expect(pageWidth).toBe(400)
+    expect(lines[0].x).toBe(25)
   })
 })

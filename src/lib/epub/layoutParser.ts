@@ -21,6 +21,8 @@
 export interface LayoutLine {
   /** Top of the line's own bounding box, in the page's own coordinate space (same units as `pageHeight`). */
   y: number
+  /** Left edge of the line's first run, in the page's own coordinate space (same units as `pageWidth`) — lets `classify.ts` notice a line that's centered rather than flush with the body's usual left margin, a heading convention font-size alone can't catch (a centered title set in the same size as body text). */
+  x: number
   /** The line's dominant font size — the tallest run on it, in case of a mixed-size line (rare, but a stray superscript shouldn't set the whole line's height). */
   height: number
   text: string
@@ -30,6 +32,7 @@ export interface LayoutLine {
 
 export interface ParsedLayoutPage {
   pageHeight: number
+  pageWidth: number
   lines: LayoutLine[]
 }
 
@@ -51,14 +54,16 @@ function styleNum(style: string, prop: string): number | null {
 }
 
 export function parseLayoutPage(html: string): ParsedLayoutPage {
-  if (!html) return { pageHeight: 0, lines: [] }
+  if (!html) return { pageHeight: 0, pageWidth: 0, lines: [] }
   const doc = new DOMParser().parseFromString(html, 'text/html')
   const outer = doc.body.firstElementChild
-  if (!outer) return { pageHeight: 0, lines: [] }
-  const pageHeight = styleNum(outer.getAttribute('style') || '', 'height') ?? 0
+  if (!outer) return { pageHeight: 0, pageWidth: 0, lines: [] }
+  const outerStyle = outer.getAttribute('style') || ''
+  const pageHeight = styleNum(outerStyle, 'height') ?? 0
+  const pageWidth = styleNum(outerStyle, 'width') ?? 0
 
   const lines: LayoutLine[] = []
-  let current: { text: string; y: number; height: number }[] | null = null
+  let current: { text: string; x: number; y: number; height: number }[] | null = null
   let currentIsNewParagraph = true
   let brStreak = 0
 
@@ -70,7 +75,7 @@ export function parseLayoutPage(html: string): ParsedLayoutPage {
         .replace(/ /g, ' ')
         .replace(/[ \t]+/g, ' ')
         .trim()
-      if (text) lines.push({ y: current[0].y, height: Math.max(...current.map((r) => r.height)), text, newParagraph: currentIsNewParagraph })
+      if (text) lines.push({ y: current[0].y, x: current[0].x, height: Math.max(...current.map((r) => r.height)), text, newParagraph: currentIsNewParagraph })
     }
     current = null
   }
@@ -88,7 +93,7 @@ export function parseLayoutPage(html: string): ParsedLayoutPage {
       if (el.tagName === 'SPAN') {
         startLineIfNeeded()
         const style = el.getAttribute('style') || ''
-        current!.push({ text: el.textContent || '', y: styleNum(style, 'top') ?? 0, height: styleNum(style, 'font-size') ?? 10 })
+        current!.push({ text: el.textContent || '', x: styleNum(style, 'left') ?? 0, y: styleNum(style, 'top') ?? 0, height: styleNum(style, 'font-size') ?? 10 })
         brStreak = 0
       } else if (el.tagName === 'BR') {
         finishLine()
@@ -100,11 +105,11 @@ export function parseLayoutPage(html: string): ParsedLayoutPage {
       // leaves between two runs on the same line.
       startLineIfNeeded()
       const last = current![current!.length - 1]
-      current!.push({ text: node.textContent || '', y: last?.y ?? 0, height: last?.height ?? 10 })
+      current!.push({ text: node.textContent || '', x: last?.x ?? 0, y: last?.y ?? 0, height: last?.height ?? 10 })
       brStreak = 0
     }
   }
   finishLine()
 
-  return { pageHeight, lines }
+  return { pageHeight, pageWidth, lines }
 }
