@@ -2145,3 +2145,97 @@ select {
   background: var(--surface);
   font-weight: 700;
 }
+
+/* --- Reader mode (ReaderMode.tsx) --- */
+
+.reader-mode {
+  position: fixed;
+  inset: 0;
+  z-index: 300;
+  background: #242424;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+}
+
+.reader-page-wrap {
+  position: relative;
+  box-shadow: 0 8px 40px rgba(0, 0, 0, 0.5);
+  background: white;
+}
+
+.reader-text-iframe {
+  border: none;
+  display: block;
+}
+
+/* Present, but never competing for attention: a plain "×" faded almost into
+   the background until you actually mean to reach for it, matching the
+   "the exit control shouldn't be obtrusive" ask directly rather than hiding
+   it entirely (an exit that only appears on hover would be easy to lose in
+   a fullscreen view with no other chrome to hint it's there). */
+.reader-mode-exit {
+  position: fixed;
+  top: 14px;
+  right: 18px;
+  width: 30px;
+  height: 30px;
+  border: none;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.08);
+  color: rgba(255, 255, 255, 0.55);
+  font-size: 18px;
+  line-height: 1;
+  cursor: pointer;
+  opacity: 0.45;
+  transition: opacity 0.15s ease;
+}
+
+.reader-mode-exit:hover {
+  opacity: 1;
+  background: rgba(255, 255, 255, 0.16);
+}
+
+.reader-mode-page-indicator {
+  position: fixed;
+  bottom: 12px;
+  left: 50%;
+  transform: translateX(-50%);
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.4);
+  pointer-events: none;
+  user-select: none;
+}
+
+/* Hidden entirely until a selection exists (see ReaderMode.tsx) — the one
+   piece of chrome besides the exit control this view ever shows, and even
+   then only once there's something to act on. */
+.reader-mode-quote-bar {
+  position: fixed;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  padding: 12px 18px;
+  background: var(--surface);
+  border-top: 1px solid var(--border);
+  box-shadow: 0 -6px 24px rgba(0, 0, 0, 0.35);
+}
+
+.reader-mode-quote-preview {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-style: italic;
+  color: var(--muted);
+}
+
+.reader-mode-quote-annotation {
+  width: 220px;
+  flex-shrink: 0;
+}

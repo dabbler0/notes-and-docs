@@ -2,6 +2,7 @@ import { useMemo, useState } from 'preact/hooks'
 import { Modal } from '../Modal'
 import { PdfViewer } from './PdfViewer'
 import { TextViewer } from './TextViewer'
+import { ReaderMode } from './ReaderMode'
 import { displayTitle, formatBibtex, parseBibtex } from '../../lib/bibtex'
 import { downloadBlob, filenameFor } from '../../lib/download'
 import { EpubExportDialog } from './EpubExportDialog'
@@ -37,6 +38,7 @@ export function SourceDetailDialog({
   const [pdfBusy, setPdfBusy] = useState(false)
   const [pdfStatus, setPdfStatus] = useState('')
   const [showEpubDialog, setShowEpubDialog] = useState(false)
+  const [readerMode, setReaderMode] = useState(false)
   const [pendingQuote, setPendingQuote] = useState('')
   const [quoteAnnotation, setQuoteAnnotation] = useState('')
   // A source with no viewer (no PDF, no extracted text) has no "current
@@ -427,6 +429,16 @@ export function SourceDetailDialog({
                   </button>
                 </div>
               )}
+              {hasViewer && !ocrPreview && (
+                <button
+                  type="button"
+                  className="btn btn-ghost btn-sm"
+                  onClick={() => setReaderMode(true)}
+                  title="Fullscreen, distraction-free reading — pages fit the screen, arrow keys turn pages, and you can still highlight to save a quote"
+                >
+                  Reader mode
+                </button>
+              )}
               <label className="btn btn-ghost btn-sm" style={{ cursor: pdfBusy || ocrPreview ? 'default' : 'pointer' }}>
                 {source.pdfBlobId ? 'Replace' : 'Add PDF'}
                 <input
@@ -601,6 +613,15 @@ export function SourceDetailDialog({
       </div>
       </Modal>
       {showEpubDialog && <EpubExportDialog source={source} onClose={() => setShowEpubDialog(false)} />}
+      {readerMode && (
+        <ReaderMode
+          source={displaySource}
+          page={page}
+          onPageChange={setPage}
+          mode={displaySource.pdfBlobId && viewMode === 'pdf' ? 'pdf' : 'text'}
+          onClose={() => setReaderMode(false)}
+        />
+      )}
     </>
   )
 }

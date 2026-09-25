@@ -52,7 +52,9 @@ mark.text-search-hit-active { background: rgba(255, 152, 0, 0.85); }
 const IFRAME_CSP =
   "default-src 'none'; img-src data:; style-src 'unsafe-inline'; script-src 'none'; base-uri 'none'; form-action 'none';"
 
-function buildSrcDoc(sanitizedHtml: string): string {
+/** Exported so `ReaderMode.tsx` can build the same sandboxed document for its
+ * own, differently-sized iframe rather than duplicating the stylesheet/CSP. */
+export function buildSrcDoc(sanitizedHtml: string): string {
   return `<!DOCTYPE html><html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="${IFRAME_CSP}"><style>${IFRAME_STYLE}</style></head><body>${sanitizedHtml}</body></html>`
 }
 
