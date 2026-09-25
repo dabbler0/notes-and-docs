@@ -5,7 +5,7 @@ import { addQuoteToBank } from '../../models/quoteBankRepo'
 import { loadPdf, renderPageToCanvas, type PdfDoc } from '../../lib/pdf'
 import { reconstructSelectedText, type SelectableTextItem } from '../../lib/pdfSelection'
 import { sanitizePageHtml } from '../../lib/sanitizeHtml'
-import { buildSrcDoc } from './TextViewer'
+import { buildSrcDoc, measureContentBox } from './TextViewer'
 import type { Source } from '../../models/types'
 
 /**
@@ -239,12 +239,22 @@ function ReaderPdfPage({
   )
 }
 
-/** The paginated-HTML half of reader mode. Since a text page has no fixed
- * "page size" the way a PDF does, it's first rendered at a comfortable
- * natural reading width to measure how tall it actually comes out, then the
- * whole iframe is scaled down (via CSS `transform: scale`, not by shrinking
- * its content) just enough that both dimensions fit the screen — the same
- * "zoom out until it all fits" a PDF reader does for an oversized page. */
+// Only used to give the iframe *something* concrete to render into before
+// its content is measured — since layout-mode's positioned spans/images and
+// plain-mode's unwrapped (`white-space: pre`) paragraphs are both indifferent
+// to the container's own width, this never actually affects where anything
+// ends up, only how much of it briefly renders off to the side while hidden.
+const INITIAL_RENDER_WIDTH = 800
+
+/** The paginated-HTML half of reader mode. A page is first rendered at some
+ * arbitrary width so its real content can be measured (via
+ * `measureContentBox`, not the page's own possibly much larger declared
+ * size — see that function's doc comment for why a layout-mode page needs
+ * this), then the iframe is resized down to exactly that content's own
+ * bounding box — so there's no leftover blank margin to the right of or
+ * below the actual text — and the whole thing scaled (via CSS `transform:
+ * scale`) just enough to fit the screen, the same "zoom out until it all
+ * fits" a PDF reader does for an oversized page. */
 function ReaderTextPage({
   source,
   page,
@@ -260,20 +270,19 @@ function ReaderTextPage({
   const numPages = pageHtml.length
   const clamped = Math.min(Math.max(1, page), Math.max(1, numPages))
   const iframeRef = useRef<HTMLIFrameElement>(null)
-  const [naturalHeight, setNaturalHeight] = useState(0)
-  const NATURAL_WIDTH = 680
+  const [contentBox, setContentBox] = useState<{ width: number; height: number } | null>(null)
 
   useEffect(() => {
     const iframe = iframeRef.current
     if (!iframe) return
     const html = pageHtml[clamped - 1]
     if (!html) return
-    setNaturalHeight(0)
+    setContentBox(null)
     const sanitized = sanitizePageHtml(html)
     iframe.onload = () => {
       const doc = iframe.contentDocument
       if (!doc) return
-      setNaturalHeight(doc.documentElement.scrollHeight)
+      setContentBox(measureContentBox(doc))
       if (onSelectionChange) {
         doc.addEventListener('mouseup', () => {
           const sel = doc.getSelection()
@@ -288,18 +297,20 @@ function ReaderTextPage({
 
   if (numPages === 0) return <p style={{ color: '#ccc' }}>No extracted text available for this source.</p>
 
+  const naturalWidth = contentBox?.width || INITIAL_RENDER_WIDTH
+  const naturalHeight = contentBox?.height ?? 0
   const availW = Math.max(50, containerSize.width - 56)
   const availH = Math.max(50, containerSize.height - 56)
-  const scale = naturalHeight > 0 && containerSize.width > 0 ? Math.min(availW / NATURAL_WIDTH, availH / naturalHeight, 2) : 1
+  const scale = naturalHeight > 0 && containerSize.width > 0 ? Math.min(availW / naturalWidth, availH / naturalHeight, 2) : 1
 
   return (
-    <div className="reader-page-wrap" style={{ width: NATURAL_WIDTH * scale, height: naturalHeight > 0 ? naturalHeight * scale : undefined, visibility: naturalHeight > 0 ? 'visible' : 'hidden' }}>
+    <div className="reader-page-wrap" style={{ width: naturalWidth * scale, height: naturalHeight > 0 ? naturalHeight * scale : undefined, visibility: contentBox ? 'visible' : 'hidden' }}>
       <iframe
         className="reader-text-iframe"
         ref={iframeRef}
         sandbox="allow-same-origin"
         title="Extracted page text"
-        style={{ width: NATURAL_WIDTH, height: naturalHeight || 1200, transform: `scale(${scale})`, transformOrigin: 'top left' }}
+        style={{ width: contentBox ? naturalWidth : INITIAL_RENDER_WIDTH, height: naturalHeight || 1200, transform: `scale(${scale})`, transformOrigin: 'top left' }}
       />
     </div>
   )

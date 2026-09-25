@@ -59,6 +59,52 @@ export function buildSrcDoc(sanitizedHtml: string): string {
 }
 
 /**
+ * Finds where a page's real content actually ends, as opposed to where its
+ * markup says it ends. `extractLayoutPageHtml` (see that function's own doc
+ * comment) always wraps a page in one outer `<div>` sized to the *original
+ * PDF page's* full width/height, with every run of text and every image
+ * individually absolutely-positioned inside it — a page that isn't fully
+ * "inked" (a short page, a narrow column, a mostly-blank title page) still
+ * gets that same full-page-sized box, so measuring the box itself (its
+ * `scrollWidth`/`scrollHeight`, or its own declared `width`/`height`) just
+ * hands back the original page's dimensions regardless of how little of it
+ * actually has anything on it. This instead measures the *individually
+ * positioned children* the extractor actually placed — the rightmost edge
+ * and bottommost edge any span or image really reaches — so a caller fitting
+ * a page to the screen (`ReaderMode.tsx`) or capping its displayed height
+ * (`TextViewer`'s own iframe-height effect below) sizes around the text
+ * that's actually there instead of a fixed page-sized rectangle around it.
+ *
+ * `'plain'`-mode pages (no such wrapper — just `<p>` tags straight in
+ * `body`) don't have this problem in the first place, since a paragraph's
+ * own box already only ever spans its own content — but the same
+ * child-by-child measurement still works for them (each `<p>` is one of
+ * `body`'s own children), so this needs no separate code path for that case.
+ */
+export function measureContentBox(doc: Document): { width: number; height: number } {
+  const body = doc.body
+  if (!body) return { width: 0, height: 0 }
+  const bodyStyle = doc.defaultView?.getComputedStyle(body)
+  const paddingRight = bodyStyle ? parseFloat(bodyStyle.paddingRight) || 0 : 0
+  const paddingBottom = bodyStyle ? parseFloat(bodyStyle.paddingBottom) || 0 : 0
+
+  const onlyChild = body.children.length === 1 ? (body.firstElementChild as HTMLElement) : null
+  const isLayoutWrapper = !!onlyChild && onlyChild.tagName === 'DIV' && onlyChild.style.position === 'relative'
+  const targets = isLayoutWrapper ? Array.from(onlyChild!.children) : Array.from(body.children)
+
+  let maxRight = 0
+  let maxBottom = 0
+  for (const el of targets) {
+    const rect = (el as HTMLElement).getBoundingClientRect()
+    if (rect.width === 0 && rect.height === 0) continue
+    maxRight = Math.max(maxRight, rect.right)
+    maxBottom = Math.max(maxBottom, rect.bottom)
+  }
+  if (maxRight === 0 && maxBottom === 0) return { width: body.scrollWidth, height: body.scrollHeight }
+  return { width: Math.ceil(maxRight + paddingRight), height: Math.ceil(maxBottom + paddingBottom) }
+}
+
+/**
  * Reads a source's already-extracted `pageHtml` — real HTML, not plain
  * text (see `lib/textExtraction.ts`) — page by page, no PDF byte required,
  * so this is what a text-only source (see `convertSourceToTextOnly` in
@@ -159,9 +205,13 @@ export function TextViewer({
       // — capped the same way `.text-viewer-page`'s old `max-height: 70vh` +
       // `overflow: auto` capped a too-tall page, except now it's the
       // iframe's own document that scrolls internally past the cap rather
-      // than the outer element.
+      // than the outer element. Measured via `measureContentBox` rather than
+      // `doc.documentElement.scrollHeight` directly — the latter reports a
+      // layout-mode page's full original page height even when the actual
+      // extracted text only fills part of it (see that function's own doc
+      // comment), which left a tall blank gap under a short page's text.
       const maxHeight = window.innerHeight * 0.7
-      iframe.style.height = `${Math.min(doc.documentElement.scrollHeight, maxHeight)}px`
+      iframe.style.height = `${Math.min(measureContentBox(doc).height, maxHeight)}px`
 
       if (onSelectionChange) {
         doc.addEventListener('mouseup', () => {
