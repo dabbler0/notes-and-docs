@@ -45,8 +45,23 @@ export function ReaderMode({
   const containerRef = useRef<HTMLDivElement>(null)
   const [containerSize, setContainerSize] = useState({ width: 0, height: 0 })
   const [pendingQuote, setPendingQuote] = useState('')
+  // Which page a pending quote's selection actually came from — not
+  // necessarily `page` once a two-page spread is showing, since a selection
+  // can just as easily come from the right-hand page as the current/left one.
+  const [pendingQuotePage, setPendingQuotePage] = useState(0)
   const [quoteAnnotation, setQuoteAnnotation] = useState('')
   const [savingQuote, setSavingQuote] = useState(false)
+  const [twoPage, setTwoPage] = useState(false)
+  const [pageInput, setPageInput] = useState(String(page))
+  // Every extractor fills in one `pageHtml` entry per PDF page (see
+  // `extractPageHtml`), so this is a reliable page count for *either* mode,
+  // not just the text one — already relied on the same way elsewhere (e.g.
+  // `PdfViewer`'s own search bar indexes into it by page).
+  const numPages = source.pageHtml?.length ?? 0
+
+  useEffect(() => {
+    setPageInput(String(page))
+  }, [page])
 
   useEffect(() => {
     const el = containerRef.current
@@ -58,54 +73,125 @@ export function ReaderMode({
     return () => ro.disconnect()
   }, [])
 
-  // Arrow/Page keys turn the page; Escape exits — the same keys most PDF
-  // readers and e-book apps already use, so this needs no on-screen legend.
-  // Clearing a leftover selection/pending quote on page turn matches how
-  // dragging to a new page in the ordinary viewers already behaves (a
-  // selection tied to a page you've left doesn't make sense to keep around).
+  function clearSelection() {
+    setPendingQuote('')
+    setPendingQuotePage(0)
+  }
+
+  function goToPage(target: number) {
+    const clamped = numPages > 0 ? Math.min(Math.max(1, target), numPages) : Math.max(1, target)
+    clearSelection()
+    onPageChange(clamped)
+  }
+
+  // Arrow/Page keys turn the page (by two at a time in a two-page spread —
+  // the same "flip to the next spread" a book gives you); Escape exits —
+  // the same keys most PDF readers and e-book apps already use, so this
+  // needs no on-screen legend. Read through a ref (kept current by the
+  // effect below) rather than closed over directly, so the exact same
+  // function can be handed to `ReaderTextPage` to attach *inside* its
+  // sandboxed iframe's own document (see that component) without needing
+  // to re-attach it — and the parent-window listener re-bind — on every
+  // page turn or mode change.
+  const keyHandlerRef = useRef<(e: KeyboardEvent) => void>(() => {})
   useEffect(() => {
-    function onKey(e: KeyboardEvent) {
+    keyHandlerRef.current = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
         onClose()
       } else if (e.key === 'ArrowRight' || e.key === 'ArrowDown' || e.key === 'PageDown' || e.key === ' ') {
         e.preventDefault()
-        setPendingQuote('')
-        onPageChange(page + 1)
+        goToPage(page + (twoPage ? 2 : 1))
       } else if (e.key === 'ArrowLeft' || e.key === 'ArrowUp' || e.key === 'PageUp') {
         e.preventDefault()
-        setPendingQuote('')
-        onPageChange(Math.max(1, page - 1))
+        goToPage(page - (twoPage ? 2 : 1))
       }
     }
+  })
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => keyHandlerRef.current(e)
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [page, onPageChange, onClose])
+  }, [])
+  // Stable across the component's whole lifetime (empty dep array) so
+  // `ReaderTextPage` only ever has to attach it once per iframe load rather
+  // than on every keystroke/page turn — it always calls through to whatever
+  // `keyHandlerRef.current` currently is regardless.
+  const handleFrameKeyDown = useMemo(() => (e: KeyboardEvent) => keyHandlerRef.current(e), [])
+
+  function handleSelectionFrom(sourcePage: number) {
+    return (text: string) => {
+      setPendingQuote(text)
+      setPendingQuotePage(sourcePage)
+    }
+  }
 
   async function handleSaveQuote() {
     if (!pendingQuote.trim()) return
     setSavingQuote(true)
     try {
-      await addQuoteToBank(source.id, page, pendingQuote.trim(), quoteAnnotation.trim())
-      setPendingQuote('')
+      await addQuoteToBank(source.id, pendingQuotePage || page, pendingQuote.trim(), quoteAnnotation.trim())
+      clearSelection()
       setQuoteAnnotation('')
     } finally {
       setSavingQuote(false)
     }
   }
 
+  function submitPageInput() {
+    const n = parseInt(pageInput, 10)
+    if (Number.isFinite(n)) goToPage(n)
+    else setPageInput(String(page))
+  }
+
+  // Two pages side by side share the same available height but split the
+  // width (minus the visual gap between them — see `.reader-page-area-two`)
+  // — each `Reader*Page` still does its own independent fit-to-screen scale
+  // calculation, just against this halved budget instead of the full one.
+  const pageAreaSize = twoPage ? { width: Math.max(50, (containerSize.width - 24) / 2), height: containerSize.height } : containerSize
+  const secondPage = page + 1
+  const showSecondPage = twoPage && (numPages === 0 || secondPage <= numPages)
+
   return (
     <div className="reader-mode" ref={containerRef}>
-      {mode === 'pdf' ? (
-        <ReaderPdfPage source={source} page={page} containerSize={containerSize} onSelectionChange={setPendingQuote} />
-      ) : (
-        <ReaderTextPage source={source} page={page} containerSize={containerSize} onSelectionChange={setPendingQuote} />
-      )}
+      <div className={`reader-page-area${twoPage ? ' reader-page-area-two' : ''}`}>
+        {mode === 'pdf' ? (
+          <ReaderPdfPage source={source} page={page} containerSize={pageAreaSize} onSelectionChange={handleSelectionFrom(page)} />
+        ) : (
+          <ReaderTextPage source={source} page={page} containerSize={pageAreaSize} onSelectionChange={handleSelectionFrom(page)} onFrameKeyDown={handleFrameKeyDown} />
+        )}
+        {showSecondPage &&
+          (mode === 'pdf' ? (
+            <ReaderPdfPage source={source} page={secondPage} containerSize={pageAreaSize} onSelectionChange={handleSelectionFrom(secondPage)} />
+          ) : (
+            <ReaderTextPage source={source} page={secondPage} containerSize={pageAreaSize} onSelectionChange={handleSelectionFrom(secondPage)} onFrameKeyDown={handleFrameKeyDown} />
+          ))}
+      </div>
 
       <button className="reader-mode-exit" onClick={onClose} title="Exit reader mode (Esc)" aria-label="Exit reader mode">
         ×
       </button>
 
-      <div className="reader-mode-page-indicator">page {page}</div>
+      <div className="reader-mode-page-bar">
+        <button className="reader-mode-page-bar-btn" onClick={() => setTwoPage((t) => !t)} title={twoPage ? 'Switch to single-page view' : 'Switch to two-page spread'}>
+          {twoPage ? '◧ 1pg' : '◫ 2pg'}
+        </button>
+        <span>{twoPage && showSecondPage ? 'Pages' : 'Page'}</span>
+        <input
+          className="reader-mode-page-bar-input"
+          value={pageInput}
+          onInput={(e) => setPageInput((e.target as HTMLInputElement).value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') {
+              ;(e.target as HTMLInputElement).blur()
+              submitPageInput()
+            }
+          }}
+          onBlur={submitPageInput}
+          title="Jump to page"
+        />
+        {twoPage && showSecondPage && <span>–{secondPage}</span>}
+        {numPages > 0 && <span>of {numPages}</span>}
+      </div>
 
       {pendingQuote.trim() && (
         <div className="reader-mode-quote-bar">
@@ -119,7 +205,7 @@ export function ReaderMode({
           <button className="btn btn-primary btn-sm" disabled={savingQuote} onClick={handleSaveQuote}>
             {savingQuote ? 'Saving…' : '+ Add to quote bank'}
           </button>
-          <button className="btn btn-ghost btn-sm" onClick={() => setPendingQuote('')}>
+          <button className="btn btn-ghost btn-sm" onClick={clearSelection}>
             Dismiss
           </button>
         </div>
@@ -261,11 +347,13 @@ function ReaderTextPage({
   page,
   containerSize,
   onSelectionChange,
+  onFrameKeyDown,
 }: {
   source: Source
   page: number
   containerSize: { width: number; height: number }
   onSelectionChange: (text: string) => void
+  onFrameKeyDown?: (e: KeyboardEvent) => void
 }) {
   const pageHtml = source.pageHtml ?? []
   const numPages = pageHtml.length
@@ -296,10 +384,21 @@ function ReaderTextPage({
           if (text.trim()) onSelectionChange(text)
         })
       }
+      // A sandboxed `srcdoc` iframe (no `allow-scripts`) can't run any script
+      // of its own, but `allow-same-origin` still lets *this* (the parent,
+      // unsandboxed) script reach across and attach a listener directly on
+      // its `contentDocument` — the same access this already relies on for
+      // the `mouseup` listener just above. Without this, a keydown that
+      // lands while focus is inside the iframe (which happens the moment you
+      // click into it to select text) fires on the iframe's own document,
+      // never reaching the parent `window` listener `ReaderMode` sets up —
+      // arrow-key paging would silently stop working the instant you tried
+      // to highlight something to quote.
+      if (onFrameKeyDown) doc.addEventListener('keydown', onFrameKeyDown)
     }
     iframe.srcdoc = buildSrcDoc(sanitized)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [clamped, pageHtml, onSelectionChange])
+  }, [clamped, pageHtml, onSelectionChange, onFrameKeyDown])
 
   if (numPages === 0) return <p style={{ color: '#ccc' }}>No extracted text available for this source.</p>
 

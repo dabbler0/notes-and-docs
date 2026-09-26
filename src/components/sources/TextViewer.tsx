@@ -145,7 +145,18 @@ export function measureContentBox(doc: Document, opts?: { footerCutoffY?: number
     maxBottom = Math.max(maxBottom, rect.bottom)
   }
   if (maxRight === 0 && maxBottom === 0) return { width: body.scrollWidth, height: body.scrollHeight }
-  return { width: Math.ceil(maxRight + paddingRight), height: Math.ceil(maxBottom + paddingBottom) }
+  // The `+1` beyond `Math.ceil` is deliberate slack, not a rounding
+  // shortcut: this measurement is taken while the iframe is rendered at
+  // `INITIAL_RENDER_WIDTH` (see `ReaderMode.tsx`), then the iframe is
+  // resized to exactly this returned box — a *different* width, which can
+  // shift where the browser lands sub-pixel font/glyph positions on the
+  // second layout pass just enough to overflow a box sized to the first
+  // pass's measurement by a fraction of a pixel. Since an iframe shows a
+  // (barely visible, but real) native scrollbar the instant its content
+  // overflows by any amount at all, rounding up alone isn't quite enough
+  // slack — confirmed directly as the cause of a hairline scrollbar
+  // appearing on an otherwise exactly-fitted page.
+  return { width: Math.ceil(maxRight + paddingRight) + 1, height: Math.ceil(maxBottom + paddingBottom) + 1 }
 }
 
 /**
