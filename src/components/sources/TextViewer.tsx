@@ -91,7 +91,28 @@ export function measureContentBox(doc: Document, opts?: { footerCutoffY?: number
 
   const onlyChild = body.children.length === 1 ? (body.firstElementChild as HTMLElement) : null
   const isLayoutWrapper = !!onlyChild && onlyChild.tagName === 'DIV' && onlyChild.style.position === 'relative'
-  let targets = (isLayoutWrapper ? Array.from(onlyChild!.children) : Array.from(body.children)) as HTMLElement[]
+  let targets = (
+    isLayoutWrapper
+      ? // The wrapper's children aren't *only* the individually-positioned
+        // spans/images doing the real work here — `extractLayoutPageHtml`
+        // also interleaves plain `<br>` elements between them as invisible
+        // separators, purely so a native text selection reads back the
+        // right whitespace (see that function's own doc comment). A `<br>`
+        // carries no `position: absolute` of its own, so it stays in normal
+        // document flow inside the wrapper — and since it's the *only*
+        // in-flow content there (everything else was pulled out via
+        // `position: absolute`), each one stacks a full line-height below
+        // the last, one after another, for no visual reason at all. A
+        // hundred-plus of them (an ordinary amount for a text-dense page)
+        // adds thousands of phantom pixels to `getBoundingClientRect()`
+        // that have nothing to do with where any real text or image
+        // actually sits — confirmed directly as the cause of a page
+        // measuring several times taller than its own declared height.
+        // Filtering to only the elements the extractor actually positioned
+        // leaves just the real content.
+        Array.from(onlyChild!.children).filter((el) => (el as HTMLElement).style.position === 'absolute')
+      : Array.from(body.children)
+  ) as HTMLElement[]
 
   // A detected running footer/page-number (see `detectAutoFooterCutoffs`)
   // sits at the very bottom of the page's own *declared* height on every
