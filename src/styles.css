@@ -2175,6 +2175,13 @@ select {
   position: relative;
   box-shadow: 0 8px 40px rgba(0, 0, 0, 0.5);
   background: white;
+  /* Belt-and-braces alongside the scaled iframe's own overflow:hidden (see
+     `buildSrcDoc`'s `suppressScrollbars` option): this wrapper's own size is
+     computed from the same floating-point numbers as the iframe's scaled
+     size, so the two should always agree exactly, but there's no reason to
+     let a rounding surprise here show up as a scrollbar on the wrapper
+     itself when it costs nothing to just clip it silently instead. */
+  overflow: hidden;
 }
 
 .reader-text-iframe {

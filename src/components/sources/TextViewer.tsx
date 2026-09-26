@@ -53,10 +53,33 @@ mark.text-search-hit-active { background: rgba(255, 152, 0, 0.85); }
 const IFRAME_CSP =
   "default-src 'none'; img-src data:; style-src 'unsafe-inline'; script-src 'none'; base-uri 'none'; form-action 'none';"
 
-/** Exported so `ReaderMode.tsx` can build the same sandboxed document for its
- * own, differently-sized iframe rather than duplicating the stylesheet/CSP. */
-export function buildSrcDoc(sanitizedHtml: string): string {
-  return `<!DOCTYPE html><html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="${IFRAME_CSP}"><style>${IFRAME_STYLE}</style></head><body>${sanitizedHtml}</body></html>`
+/**
+ * Exported so `ReaderMode.tsx` can build the same sandboxed document for its
+ * own, differently-sized iframe rather than duplicating the stylesheet/CSP.
+ *
+ * `suppressScrollbars` is `ReaderMode`'s own option, not this component's: it
+ * sizes its iframe to exactly `measureContentBox`'s own measurement (see that
+ * function's doc comment on its own deliberate `+1` slack) so the page never
+ * needs to scroll at all — but a browser's sub-pixel layout snapping isn't
+ * perfectly guaranteed deterministic across two separate layout passes at two
+ * different widths (the measurement pass, then the final one at the
+ * resized-to-fit width), and on some pages that leaves a residual overflow of
+ * a pixel or so even after that slack — enough for a native iframe scrollbar
+ * to appear (confirmed directly: a real scanned-book page still showed a
+ * hairline scrollbar with the slack alone), even though nothing meaningful is
+ * actually being cut off. Setting `overflow: hidden` on the *inside*
+ * document's `html`/`body` — the only place that reliably suppresses an
+ * iframe's native scrollbars; the outer `<iframe>` element's own CSS
+ * `overflow` property has no effect on it at all — makes that leftover sliver
+ * silently invisible instead of showing a scrollbar for it. `TextViewer`'s
+ * own iframe never passes this: there, a page taller than the height cap is
+ * *meant* to scroll internally (see its own height-setting effect's doc
+ * comment), so suppressing overflow there would hide real content instead of
+ * a rounding artifact.
+ */
+export function buildSrcDoc(sanitizedHtml: string, opts?: { suppressScrollbars?: boolean }): string {
+  const extraStyle = opts?.suppressScrollbars ? 'html,body{overflow:hidden;}' : ''
+  return `<!DOCTYPE html><html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="${IFRAME_CSP}"><style>${IFRAME_STYLE}${extraStyle}</style></head><body>${sanitizedHtml}</body></html>`
 }
 
 /**

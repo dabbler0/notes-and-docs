@@ -396,7 +396,7 @@ function ReaderTextPage({
       // to highlight something to quote.
       if (onFrameKeyDown) doc.addEventListener('keydown', onFrameKeyDown)
     }
-    iframe.srcdoc = buildSrcDoc(sanitized)
+    iframe.srcdoc = buildSrcDoc(sanitized, { suppressScrollbars: true })
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [clamped, pageHtml, onSelectionChange, onFrameKeyDown])
 
