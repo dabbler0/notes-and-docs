@@ -4,7 +4,6 @@ import { getSourcePdfBlob } from '../../models/sourcesRepo'
 import { addQuoteToBank } from '../../models/quoteBankRepo'
 import { loadPdf, renderPageToCanvas, type PdfDoc } from '../../lib/pdf'
 import { reconstructSelectedText, type SelectableTextItem } from '../../lib/pdfSelection'
-import { detectAutoFooterCutoffs } from '../../lib/epub/classify'
 import { sanitizePageHtml } from '../../lib/sanitizeHtml'
 import { buildSrcDoc, measureContentBox } from './TextViewer'
 import type { Source } from '../../models/types'
@@ -334,14 +333,12 @@ function ReaderPdfPage({
 const INITIAL_RENDER_WIDTH = 800
 
 /** The paginated-HTML half of reader mode. A page is first rendered at some
- * arbitrary width so its real content can be measured (via
- * `measureContentBox`, not the page's own possibly much larger declared
- * size — see that function's doc comment for why a layout-mode page needs
- * this), then the iframe is resized down to exactly that content's own
- * bounding box — so there's no leftover blank margin to the right of or
- * below the actual text — and the whole thing scaled (via CSS `transform:
- * scale`) just enough to fit the screen, the same "zoom out until it all
- * fits" a PDF reader does for an oversized page. */
+ * arbitrary width so its real, intended size can be read off it (via
+ * `measureContentBox` — for a layout-mode page, that's the original PDF
+ * page's own dimensions; see that function's doc comment), then the iframe
+ * is resized to exactly that size and the whole thing scaled (via CSS
+ * `transform: scale`) just enough to fit the screen — the same "zoom out
+ * until it all fits" a PDF reader does for an oversized page. */
 function ReaderTextPage({
   source,
   page,
@@ -360,11 +357,6 @@ function ReaderTextPage({
   const clamped = Math.min(Math.max(1, page), Math.max(1, numPages))
   const iframeRef = useRef<HTMLIFrameElement>(null)
   const [contentBox, setContentBox] = useState<{ width: number; height: number } | null>(null)
-  // See `measureContentBox`'s doc comment on `footerCutoffY` — a running
-  // footer/page-number sits hard against the bottom of every page's own full
-  // declared height, which is exactly the oversized rectangle this whole
-  // "measure the real content" approach exists to avoid fitting around.
-  const footerCutoffs = useMemo(() => detectAutoFooterCutoffs(pageHtml), [pageHtml])
 
   useEffect(() => {
     const iframe = iframeRef.current
@@ -376,7 +368,7 @@ function ReaderTextPage({
     iframe.onload = () => {
       const doc = iframe.contentDocument
       if (!doc) return
-      setContentBox(measureContentBox(doc, { footerCutoffY: footerCutoffs.get(clamped) }))
+      setContentBox(measureContentBox(doc))
       if (onSelectionChange) {
         doc.addEventListener('mouseup', () => {
           const sel = doc.getSelection()

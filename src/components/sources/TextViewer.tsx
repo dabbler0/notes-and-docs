@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useRef } from 'preact/hooks'
 import { buildSearchRegex } from '../../lib/pdf'
-import { detectAutoFooterCutoffs } from '../../lib/epub/classify'
 import { sanitizePageHtml } from '../../lib/sanitizeHtml'
 import { htmlToPlainText } from '../../lib/textExtraction'
 import { usePageSearch } from '../../lib/usePageSearch'
@@ -57,25 +56,17 @@ const IFRAME_CSP =
  * Exported so `ReaderMode.tsx` can build the same sandboxed document for its
  * own, differently-sized iframe rather than duplicating the stylesheet/CSP.
  *
- * `suppressScrollbars` is `ReaderMode`'s own option, not this component's: it
- * sizes its iframe to exactly `measureContentBox`'s own measurement (see that
- * function's doc comment on its own deliberate `+1` slack) so the page never
- * needs to scroll at all — but a browser's sub-pixel layout snapping isn't
- * perfectly guaranteed deterministic across two separate layout passes at two
- * different widths (the measurement pass, then the final one at the
- * resized-to-fit width), and on some pages that leaves a residual overflow of
- * a pixel or so even after that slack — enough for a native iframe scrollbar
- * to appear (confirmed directly: a real scanned-book page still showed a
- * hairline scrollbar with the slack alone), even though nothing meaningful is
- * actually being cut off. Setting `overflow: hidden` on the *inside*
- * document's `html`/`body` — the only place that reliably suppresses an
- * iframe's native scrollbars; the outer `<iframe>` element's own CSS
- * `overflow` property has no effect on it at all — makes that leftover sliver
- * silently invisible instead of showing a scrollbar for it. `TextViewer`'s
- * own iframe never passes this: there, a page taller than the height cap is
- * *meant* to scroll internally (see its own height-setting effect's doc
- * comment), so suppressing overflow there would hide real content instead of
- * a rounding artifact.
+ * `suppressScrollbars` is `ReaderMode`'s own option, not this component's —
+ * belt-and-braces alongside `measureContentBox` sizing the iframe to exactly
+ * the page's own real dimensions: setting `overflow: hidden` on the *inside*
+ * document's `html`/`body` (the only place that reliably suppresses an
+ * iframe's native scrollbars — the outer `<iframe>` element's own CSS
+ * `overflow` property has no effect on it at all) means even a stray
+ * fraction-of-a-pixel mismatch stays silently invisible instead of showing a
+ * scrollbar for it. `TextViewer`'s own iframe never passes this: there, a
+ * page taller than the height cap is *meant* to scroll internally (see its
+ * own height-setting effect's doc comment), so suppressing overflow there
+ * would hide real content instead of a rounding artifact.
  */
 export function buildSrcDoc(sanitizedHtml: string, opts?: { suppressScrollbars?: boolean }): string {
   const extraStyle = opts?.suppressScrollbars ? 'html,body{overflow:hidden;}' : ''
@@ -83,103 +74,46 @@ export function buildSrcDoc(sanitizedHtml: string, opts?: { suppressScrollbars?:
 }
 
 /**
- * Finds where a page's real content actually ends, as opposed to where its
- * markup says it ends. `extractLayoutPageHtml` (see that function's own doc
- * comment) always wraps a page in one outer `<div>` sized to the *original
- * PDF page's* full width/height, with every run of text and every image
- * individually absolutely-positioned inside it — a page that isn't fully
- * "inked" (a short page, a narrow column, a mostly-blank title page) still
- * gets that same full-page-sized box, so measuring the box itself (its
- * `scrollWidth`/`scrollHeight`, or its own declared `width`/`height`) just
- * hands back the original page's dimensions regardless of how little of it
- * actually has anything on it. This instead measures the *individually
- * positioned children* the extractor actually placed — the rightmost edge
- * and bottommost edge any span or image really reaches — so a caller fitting
- * a page to the screen (`ReaderMode.tsx`) or capping its displayed height
- * (`TextViewer`'s own iframe-height effect below) sizes around the text
- * that's actually there instead of a fixed page-sized rectangle around it.
+ * A page's real, intended size — what a caller fitting it to the screen
+ * (`ReaderMode.tsx`) or capping its displayed height (`TextViewer`'s own
+ * iframe-height effect below) should treat as "the whole page."
  *
- * `'plain'`-mode pages (no such wrapper — just `<p>` tags straight in
- * `body`) don't have this problem in the first place, since a paragraph's
- * own box already only ever spans its own content — but the same
- * child-by-child measurement still works for them (each `<p>` is one of
- * `body`'s own children), so this needs no separate code path for that case.
+ * For a layout-mode page, that's simply the outer wrapper `<div>`'s own
+ * declared `width`/`height` — `extractLayoutPageHtml` writes those to match
+ * the *original PDF page's own dimensions* exactly, so trusting them is both
+ * simpler and truer to the source than trying to re-derive a "real content"
+ * box by scanning the page's individual runs: a real PDF reader doesn't crop
+ * a page down to its own ink just because a page happens to be sparse, and
+ * neither should this. (An earlier version of this function did exactly that
+ * scan — over every run *and* the plain `<br>` separators
+ * `extractLayoutPageHtml` interleaves between them for text-selection
+ * whitespace, which have no `position: absolute` of their own and so stack
+ * up in normal document flow for no visual reason at all — and it measured a
+ * real page at nearly 4x its actual height as a result. Reading the
+ * wrapper's own already-correct declared size sidesteps that whole class of
+ * bug rather than working around it.)
+ *
+ * `'plain'`-mode pages have no such wrapper — just `<p>` tags straight in
+ * `body`, reflowing normally — so there's no separate "declared size" to
+ * read at all; `body`'s own natural `scrollWidth`/`scrollHeight` already is
+ * the page's real size for that case.
  */
-export function measureContentBox(doc: Document, opts?: { footerCutoffY?: number }): { width: number; height: number } {
+export function measureContentBox(doc: Document): { width: number; height: number } {
   const body = doc.body
   if (!body) return { width: 0, height: 0 }
-  const bodyStyle = doc.defaultView?.getComputedStyle(body)
-  const paddingRight = bodyStyle ? parseFloat(bodyStyle.paddingRight) || 0 : 0
-  const paddingBottom = bodyStyle ? parseFloat(bodyStyle.paddingBottom) || 0 : 0
-
   const onlyChild = body.children.length === 1 ? (body.firstElementChild as HTMLElement) : null
   const isLayoutWrapper = !!onlyChild && onlyChild.tagName === 'DIV' && onlyChild.style.position === 'relative'
-  let targets = (
-    isLayoutWrapper
-      ? // The wrapper's children aren't *only* the individually-positioned
-        // spans/images doing the real work here — `extractLayoutPageHtml`
-        // also interleaves plain `<br>` elements between them as invisible
-        // separators, purely so a native text selection reads back the
-        // right whitespace (see that function's own doc comment). A `<br>`
-        // carries no `position: absolute` of its own, so it stays in normal
-        // document flow inside the wrapper — and since it's the *only*
-        // in-flow content there (everything else was pulled out via
-        // `position: absolute`), each one stacks a full line-height below
-        // the last, one after another, for no visual reason at all. A
-        // hundred-plus of them (an ordinary amount for a text-dense page)
-        // adds thousands of phantom pixels to `getBoundingClientRect()`
-        // that have nothing to do with where any real text or image
-        // actually sits — confirmed directly as the cause of a page
-        // measuring several times taller than its own declared height.
-        // Filtering to only the elements the extractor actually positioned
-        // leaves just the real content.
-        Array.from(onlyChild!.children).filter((el) => (el as HTMLElement).style.position === 'absolute')
-      : Array.from(body.children)
-  ) as HTMLElement[]
-
-  // A detected running footer/page-number (see `detectAutoFooterCutoffs`)
-  // sits at the very bottom of the page's own *declared* height on every
-  // page it appears on, real content or not — leaving it in would defeat
-  // the whole point of measuring the actual content instead of the page's
-  // full size, since it alone would keep dragging that measurement back
-  // down toward the page's true bottom margin. `el.style.top` is compared
-  // directly against `footerCutoffY` (rather than `getBoundingClientRect`,
-  // used below only for the elements that remain) because both are already
-  // in the same page-pixel coordinate space the layout extractor wrote —
-  // no unit conversion needed, and this stays correct even under a CSS
-  // transform applied to the iframe from outside (`ReaderMode.tsx`), which
-  // `getBoundingClientRect` inside the iframe's own document never sees
-  // anyway, but which makes computing an equivalent cutoff back out of
-  // screen coordinates needlessly roundabout.
-  if (isLayoutWrapper && opts?.footerCutoffY != null) {
-    const cutoff = opts.footerCutoffY
-    targets = targets.filter((el) => {
-      const top = parseFloat(el.style.top)
-      return Number.isNaN(top) || top < cutoff
-    })
+  if (isLayoutWrapper) {
+    const wrapperWidth = parseFloat(onlyChild!.style.width)
+    const wrapperHeight = parseFloat(onlyChild!.style.height)
+    if (wrapperWidth > 0 && wrapperHeight > 0) {
+      const bodyStyle = doc.defaultView?.getComputedStyle(body)
+      const paddingX = bodyStyle ? (parseFloat(bodyStyle.paddingLeft) || 0) + (parseFloat(bodyStyle.paddingRight) || 0) : 0
+      const paddingY = bodyStyle ? (parseFloat(bodyStyle.paddingTop) || 0) + (parseFloat(bodyStyle.paddingBottom) || 0) : 0
+      return { width: Math.ceil(wrapperWidth + paddingX), height: Math.ceil(wrapperHeight + paddingY) }
+    }
   }
-
-  let maxRight = 0
-  let maxBottom = 0
-  for (const el of targets) {
-    const rect = el.getBoundingClientRect()
-    if (rect.width === 0 && rect.height === 0) continue
-    maxRight = Math.max(maxRight, rect.right)
-    maxBottom = Math.max(maxBottom, rect.bottom)
-  }
-  if (maxRight === 0 && maxBottom === 0) return { width: body.scrollWidth, height: body.scrollHeight }
-  // The `+1` beyond `Math.ceil` is deliberate slack, not a rounding
-  // shortcut: this measurement is taken while the iframe is rendered at
-  // `INITIAL_RENDER_WIDTH` (see `ReaderMode.tsx`), then the iframe is
-  // resized to exactly this returned box — a *different* width, which can
-  // shift where the browser lands sub-pixel font/glyph positions on the
-  // second layout pass just enough to overflow a box sized to the first
-  // pass's measurement by a fraction of a pixel. Since an iframe shows a
-  // (barely visible, but real) native scrollbar the instant its content
-  // overflows by any amount at all, rounding up alone isn't quite enough
-  // slack — confirmed directly as the cause of a hairline scrollbar
-  // appearing on an otherwise exactly-fitted page.
-  return { width: Math.ceil(maxRight + paddingRight) + 1, height: Math.ceil(maxBottom + paddingBottom) + 1 }
+  return { width: body.scrollWidth, height: body.scrollHeight }
 }
 
 /**
@@ -249,11 +183,6 @@ export function TextViewer({
   const search = usePageSearch(plainPageTexts, clamped, onPageChange)
   const { searchQuery, activeMatch } = search
   const iframeRef = useRef<HTMLIFrameElement>(null)
-  // See `measureContentBox`'s own doc comment on `footerCutoffY` — computed
-  // once per `pageHtml` (a no-op scan for a document with no repeating
-  // running footer, or one extracted in plain mode) rather than freshly on
-  // every page turn.
-  const footerCutoffs = useMemo(() => detectAutoFooterCutoffs(pageHtml), [pageHtml])
 
   useEffect(() => {
     search.reset()
@@ -288,13 +217,13 @@ export function TextViewer({
       // — capped the same way `.text-viewer-page`'s old `max-height: 70vh` +
       // `overflow: auto` capped a too-tall page, except now it's the
       // iframe's own document that scrolls internally past the cap rather
-      // than the outer element. Measured via `measureContentBox` rather than
-      // `doc.documentElement.scrollHeight` directly — the latter reports a
-      // layout-mode page's full original page height even when the actual
-      // extracted text only fills part of it (see that function's own doc
-      // comment), which left a tall blank gap under a short page's text.
+      // than the outer element. Measured via `measureContentBox` (the page's
+      // real, intended size — see that function's own doc comment) rather
+      // than `doc.documentElement.scrollHeight` directly, which for a
+      // layout-mode page would also include the phantom height of its
+      // interleaved `<br>` separators stacking up in normal flow.
       const maxHeight = window.innerHeight * 0.7
-      iframe.style.height = `${Math.min(measureContentBox(doc, { footerCutoffY: footerCutoffs.get(clamped) }).height, maxHeight)}px`
+      iframe.style.height = `${Math.min(measureContentBox(doc).height, maxHeight)}px`
 
       if (onSelectionChange) {
         doc.addEventListener('mouseup', () => {
