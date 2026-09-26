@@ -177,6 +177,38 @@ function resolveEdgeExclusions(candidates: { page: number; text: string }[], tot
   return excluded
 }
 
+/**
+ * For layout-mode pages, the per-page Y coordinate (in the same page-pixel
+ * space every extracted line/run's own `top` style is written in) at or
+ * below which a *running* footer/page-number sits — the same "does this
+ * line repeat across enough pages to actually be one" repetition threshold
+ * `classifyPages` itself uses (no calibration override, since this is for a
+ * display concern, not the EPUB build), exposed so a caller that just wants
+ * to fit a page to its real content — `measureContentBox` below, used by
+ * both `TextViewer` and `ReaderMode.tsx` — can leave a detected running
+ * footer out of that fit instead of letting it stretch the fit all the way
+ * down to wherever that footer happens to sit near the page's true bottom
+ * margin, even on a page whose real content stops far above it. A page with
+ * no detected footer (or a document that isn't layout-mode at all) is
+ * simply absent from the returned map.
+ */
+export function detectAutoFooterCutoffs(pageHtml: string[]): Map<number, number> {
+  const nonEmpty = pageHtml.filter((h) => h && h.trim())
+  if (nonEmpty.length === 0 || !nonEmpty.some(isLayoutHtml)) return new Map()
+  const pages = pageHtml.map((html, i) => ({ page: i + 1, ...parseLayoutPage(html) }))
+  const { bottom } = layoutTopBottomCandidates(pages)
+  const groups = groupCandidates(bottom)
+  const suggested = suggestedGroupKeys(groups, pages.length)
+  const cutoffs = new Map<number, number>()
+  for (const p of pages) {
+    if (p.pageHeight <= 0) continue
+    const bottomBand = p.pageHeight * (1 - EDGE_BAND_FRACTION)
+    const line = [...p.lines].reverse().find((l) => l.y >= bottomBand)
+    if (line && suggested.has(normalizeForRepetition(line.text))) cutoffs.set(p.page, line.y)
+  }
+  return cutoffs
+}
+
 // ---- layout-mode classifier -----------------------------------------------
 
 /** One representative candidate line per page per edge — since a genuine running head/foot is a single line, and taking every line that happens to fall in the band would risk sweeping in the page's real opening/closing content on a page with a tall header. */

@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef } from 'preact/hooks'
 import { buildSearchRegex } from '../../lib/pdf'
+import { detectAutoFooterCutoffs } from '../../lib/epub/classify'
 import { sanitizePageHtml } from '../../lib/sanitizeHtml'
 import { htmlToPlainText } from '../../lib/textExtraction'
 import { usePageSearch } from '../../lib/usePageSearch'
@@ -81,7 +82,7 @@ export function buildSrcDoc(sanitizedHtml: string): string {
  * child-by-child measurement still works for them (each `<p>` is one of
  * `body`'s own children), so this needs no separate code path for that case.
  */
-export function measureContentBox(doc: Document): { width: number; height: number } {
+export function measureContentBox(doc: Document, opts?: { footerCutoffY?: number }): { width: number; height: number } {
   const body = doc.body
   if (!body) return { width: 0, height: 0 }
   const bodyStyle = doc.defaultView?.getComputedStyle(body)
@@ -90,12 +91,34 @@ export function measureContentBox(doc: Document): { width: number; height: numbe
 
   const onlyChild = body.children.length === 1 ? (body.firstElementChild as HTMLElement) : null
   const isLayoutWrapper = !!onlyChild && onlyChild.tagName === 'DIV' && onlyChild.style.position === 'relative'
-  const targets = isLayoutWrapper ? Array.from(onlyChild!.children) : Array.from(body.children)
+  let targets = (isLayoutWrapper ? Array.from(onlyChild!.children) : Array.from(body.children)) as HTMLElement[]
+
+  // A detected running footer/page-number (see `detectAutoFooterCutoffs`)
+  // sits at the very bottom of the page's own *declared* height on every
+  // page it appears on, real content or not — leaving it in would defeat
+  // the whole point of measuring the actual content instead of the page's
+  // full size, since it alone would keep dragging that measurement back
+  // down toward the page's true bottom margin. `el.style.top` is compared
+  // directly against `footerCutoffY` (rather than `getBoundingClientRect`,
+  // used below only for the elements that remain) because both are already
+  // in the same page-pixel coordinate space the layout extractor wrote —
+  // no unit conversion needed, and this stays correct even under a CSS
+  // transform applied to the iframe from outside (`ReaderMode.tsx`), which
+  // `getBoundingClientRect` inside the iframe's own document never sees
+  // anyway, but which makes computing an equivalent cutoff back out of
+  // screen coordinates needlessly roundabout.
+  if (isLayoutWrapper && opts?.footerCutoffY != null) {
+    const cutoff = opts.footerCutoffY
+    targets = targets.filter((el) => {
+      const top = parseFloat(el.style.top)
+      return Number.isNaN(top) || top < cutoff
+    })
+  }
 
   let maxRight = 0
   let maxBottom = 0
   for (const el of targets) {
-    const rect = (el as HTMLElement).getBoundingClientRect()
+    const rect = el.getBoundingClientRect()
     if (rect.width === 0 && rect.height === 0) continue
     maxRight = Math.max(maxRight, rect.right)
     maxBottom = Math.max(maxBottom, rect.bottom)
@@ -171,6 +194,11 @@ export function TextViewer({
   const search = usePageSearch(plainPageTexts, clamped, onPageChange)
   const { searchQuery, activeMatch } = search
   const iframeRef = useRef<HTMLIFrameElement>(null)
+  // See `measureContentBox`'s own doc comment on `footerCutoffY` — computed
+  // once per `pageHtml` (a no-op scan for a document with no repeating
+  // running footer, or one extracted in plain mode) rather than freshly on
+  // every page turn.
+  const footerCutoffs = useMemo(() => detectAutoFooterCutoffs(pageHtml), [pageHtml])
 
   useEffect(() => {
     search.reset()
@@ -211,7 +239,7 @@ export function TextViewer({
       // extracted text only fills part of it (see that function's own doc
       // comment), which left a tall blank gap under a short page's text.
       const maxHeight = window.innerHeight * 0.7
-      iframe.style.height = `${Math.min(measureContentBox(doc).height, maxHeight)}px`
+      iframe.style.height = `${Math.min(measureContentBox(doc, { footerCutoffY: footerCutoffs.get(clamped) }).height, maxHeight)}px`
 
       if (onSelectionChange) {
         doc.addEventListener('mouseup', () => {

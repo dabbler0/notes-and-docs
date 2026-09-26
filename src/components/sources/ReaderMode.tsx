@@ -1,9 +1,10 @@
-import { useEffect, useRef, useState } from 'preact/hooks'
+import { useEffect, useMemo, useRef, useState } from 'preact/hooks'
 import * as pdfjsLib from 'pdfjs-dist'
 import { getSourcePdfBlob } from '../../models/sourcesRepo'
 import { addQuoteToBank } from '../../models/quoteBankRepo'
 import { loadPdf, renderPageToCanvas, type PdfDoc } from '../../lib/pdf'
 import { reconstructSelectedText, type SelectableTextItem } from '../../lib/pdfSelection'
+import { detectAutoFooterCutoffs } from '../../lib/epub/classify'
 import { sanitizePageHtml } from '../../lib/sanitizeHtml'
 import { buildSrcDoc, measureContentBox } from './TextViewer'
 import type { Source } from '../../models/types'
@@ -271,6 +272,11 @@ function ReaderTextPage({
   const clamped = Math.min(Math.max(1, page), Math.max(1, numPages))
   const iframeRef = useRef<HTMLIFrameElement>(null)
   const [contentBox, setContentBox] = useState<{ width: number; height: number } | null>(null)
+  // See `measureContentBox`'s doc comment on `footerCutoffY` — a running
+  // footer/page-number sits hard against the bottom of every page's own full
+  // declared height, which is exactly the oversized rectangle this whole
+  // "measure the real content" approach exists to avoid fitting around.
+  const footerCutoffs = useMemo(() => detectAutoFooterCutoffs(pageHtml), [pageHtml])
 
   useEffect(() => {
     const iframe = iframeRef.current
@@ -282,7 +288,7 @@ function ReaderTextPage({
     iframe.onload = () => {
       const doc = iframe.contentDocument
       if (!doc) return
-      setContentBox(measureContentBox(doc))
+      setContentBox(measureContentBox(doc, { footerCutoffY: footerCutoffs.get(clamped) }))
       if (onSelectionChange) {
         doc.addEventListener('mouseup', () => {
           const sel = doc.getSelection()
