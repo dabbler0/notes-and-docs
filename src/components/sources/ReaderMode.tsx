@@ -2,11 +2,14 @@ import { useEffect, useMemo, useRef, useState } from 'preact/hooks'
 import * as pdfjsLib from 'pdfjs-dist'
 import { getSourcePdfBlob } from '../../models/sourcesRepo'
 import { addQuoteToBank } from '../../models/quoteBankRepo'
+import { addBookmark, bookmarkDisplayLabel, deleteBookmark, listBookmarksForSource } from '../../models/bookmarkRepo'
 import { loadPdf, renderPageToCanvas, type PdfDoc } from '../../lib/pdf'
 import { reconstructSelectedText, type SelectableTextItem } from '../../lib/pdfSelection'
 import { sanitizePageHtml } from '../../lib/sanitizeHtml'
-import { buildSrcDoc, measureContentBox } from './TextViewer'
-import type { Source } from '../../models/types'
+import { htmlToPlainText } from '../../lib/textExtraction'
+import { usePageSearch, type PageSearchState } from '../../lib/usePageSearch'
+import { applySearchHighlights, buildSrcDoc, measureContentBox } from './TextViewer'
+import type { Bookmark, Source } from '../../models/types'
 
 /**
  * A fullscreen, distraction-free way to read a source: the page (a real PDF
@@ -52,15 +55,64 @@ export function ReaderMode({
   const [savingQuote, setSavingQuote] = useState(false)
   const [twoPage, setTwoPage] = useState(false)
   const [pageInput, setPageInput] = useState(String(page))
+  const [searchOpen, setSearchOpen] = useState(false)
+  const [bookmarks, setBookmarks] = useState<Bookmark[]>([])
+  const [bookmarksOpen, setBookmarksOpen] = useState(false)
+  const [bookmarkLabel, setBookmarkLabel] = useState('')
+  const searchInputRef = useRef<HTMLInputElement>(null)
   // Every extractor fills in one `pageHtml` entry per PDF page (see
   // `extractPageHtml`), so this is a reliable page count for *either* mode,
   // not just the text one — already relied on the same way elsewhere (e.g.
   // `PdfViewer`'s own search bar indexes into it by page).
   const numPages = source.pageHtml?.length ?? 0
 
+  // The same "search within a paginated document" behavior `PdfViewer`/
+  // `TextViewer` each keep their own copy of — one shared instance here
+  // rather than one per `Reader*Page` (unlike those two, this component can
+  // show *two* pages at once in a spread), fed the same plain-text corpus
+  // regardless of which mode is currently showing, since search has to keep
+  // working across a mode switch and this is cheap to keep around either way.
+  const plainPageTexts = useMemo(() => (source.pageHtml ?? []).map(htmlToPlainText), [source.pageHtml])
+  const search = usePageSearch(plainPageTexts, page, onPageChange)
+
   useEffect(() => {
     setPageInput(String(page))
   }, [page])
+
+  function refreshBookmarks() {
+    listBookmarksForSource(source.id).then(setBookmarks)
+  }
+
+  useEffect(() => {
+    refreshBookmarks()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [source.id])
+
+  useEffect(() => {
+    if (searchOpen) searchInputRef.current?.focus()
+  }, [searchOpen])
+
+  function closeSearch() {
+    setSearchOpen(false)
+    search.reset()
+  }
+
+  const currentBookmark = bookmarks.find((b) => b.page === page)
+
+  async function toggleBookmarkThisPage() {
+    if (currentBookmark) {
+      await deleteBookmark(currentBookmark.id)
+    } else {
+      await addBookmark(source.id, page, bookmarkLabel.trim())
+      setBookmarkLabel('')
+    }
+    refreshBookmarks()
+  }
+
+  async function handleRemoveBookmark(bookmarkId: string) {
+    await deleteBookmark(bookmarkId)
+    refreshBookmarks()
+  }
 
   useEffect(() => {
     const el = containerRef.current
@@ -96,7 +148,15 @@ export function ReaderMode({
   useEffect(() => {
     keyHandlerRef.current = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
-        onClose()
+        // Escape backs out one layer of chrome at a time — closing search
+        // or the bookmarks list first, rather than exiting reader mode out
+        // from under someone who just wanted to dismiss the search box.
+        if (searchOpen) closeSearch()
+        else if (bookmarksOpen) setBookmarksOpen(false)
+        else onClose()
+      } else if (e.key === '/' && !searchOpen) {
+        e.preventDefault()
+        setSearchOpen(true)
       } else if (e.key === 'ArrowRight' || e.key === 'ArrowDown' || e.key === 'PageDown' || e.key === ' ') {
         e.preventDefault()
         goToPage(page + (twoPage ? 2 : 1))
@@ -154,21 +214,112 @@ export function ReaderMode({
     <div className="reader-mode" ref={containerRef}>
       <div className={`reader-page-area${twoPage ? ' reader-page-area-two' : ''}`}>
         {mode === 'pdf' ? (
-          <ReaderPdfPage source={source} page={page} containerSize={pageAreaSize} onSelectionChange={handleSelectionFrom(page)} />
+          <ReaderPdfPage source={source} page={page} containerSize={pageAreaSize} onSelectionChange={handleSelectionFrom(page)} search={search} />
         ) : (
-          <ReaderTextPage source={source} page={page} containerSize={pageAreaSize} onSelectionChange={handleSelectionFrom(page)} onFrameKeyDown={handleFrameKeyDown} />
+          <ReaderTextPage source={source} page={page} containerSize={pageAreaSize} onSelectionChange={handleSelectionFrom(page)} onFrameKeyDown={handleFrameKeyDown} search={search} />
         )}
         {showSecondPage &&
           (mode === 'pdf' ? (
-            <ReaderPdfPage source={source} page={secondPage} containerSize={pageAreaSize} onSelectionChange={handleSelectionFrom(secondPage)} />
+            <ReaderPdfPage source={source} page={secondPage} containerSize={pageAreaSize} onSelectionChange={handleSelectionFrom(secondPage)} search={search} />
           ) : (
-            <ReaderTextPage source={source} page={secondPage} containerSize={pageAreaSize} onSelectionChange={handleSelectionFrom(secondPage)} onFrameKeyDown={handleFrameKeyDown} />
+            <ReaderTextPage source={source} page={secondPage} containerSize={pageAreaSize} onSelectionChange={handleSelectionFrom(secondPage)} onFrameKeyDown={handleFrameKeyDown} search={search} />
           ))}
       </div>
 
       <button className="reader-mode-exit" onClick={onClose} title="Exit reader mode (Esc)" aria-label="Exit reader mode">
         ×
       </button>
+
+      <div className="reader-mode-search">
+        {searchOpen ? (
+          <div className="reader-mode-search-bar">
+            <input
+              ref={searchInputRef}
+              className="reader-mode-search-input"
+              placeholder="Search this source…"
+              value={search.searchQuery}
+              onInput={(e) => search.setSearchQuery((e.target as HTMLInputElement).value)}
+              onKeyDown={(e) => {
+                e.stopPropagation()
+                if (e.key === 'Enter') {
+                  e.preventDefault()
+                  search.jumpToMatch(search.matchIndex + (e.shiftKey ? -1 : 1))
+                } else if (e.key === 'Escape') {
+                  e.preventDefault()
+                  closeSearch()
+                }
+              }}
+            />
+            {search.searchQuery.trim() && (
+              <span className="reader-mode-search-count">{search.matches.length === 0 ? 'No matches' : `${search.matchIndex + 1} of ${search.matches.length}`}</span>
+            )}
+            <button className="reader-mode-page-bar-btn" disabled={search.matches.length === 0} onClick={() => search.jumpToMatch(search.matchIndex - 1)} title="Previous match (Shift+Enter)">
+              ↑
+            </button>
+            <button className="reader-mode-page-bar-btn" disabled={search.matches.length === 0} onClick={() => search.jumpToMatch(search.matchIndex + 1)} title="Next match (Enter)">
+              ↓
+            </button>
+            <button className="reader-mode-page-bar-btn" onClick={closeSearch} title="Close search (Esc)">
+              ×
+            </button>
+          </div>
+        ) : (
+          <button className="reader-mode-search-toggle" onClick={() => setSearchOpen(true)} title="Search this source (/)" aria-label="Search">
+            🔍
+          </button>
+        )}
+      </div>
+
+      <div className="reader-mode-bookmark-corner">
+        {bookmarksOpen && (
+          <div className="reader-mode-bookmarks-panel">
+            <div className="reader-mode-bookmark-add">
+              <button className="btn btn-sm btn-ghost" onClick={toggleBookmarkThisPage}>
+                {currentBookmark ? '★ Remove bookmark' : '☆ Bookmark this page'}
+              </button>
+              {!currentBookmark && (
+                <input
+                  className="reader-mode-bookmark-label-input"
+                  placeholder="Label (optional)"
+                  value={bookmarkLabel}
+                  onInput={(e) => setBookmarkLabel((e.target as HTMLInputElement).value)}
+                  onKeyDown={(e) => {
+                    e.stopPropagation()
+                    if (e.key === 'Enter') {
+                      e.preventDefault()
+                      toggleBookmarkThisPage()
+                    }
+                  }}
+                />
+              )}
+            </div>
+            {bookmarks.length === 0 ? (
+              <p className="reader-mode-bookmarks-empty">No bookmarks yet.</p>
+            ) : (
+              <ul className="reader-mode-bookmarks-list">
+                {bookmarks.map((b) => (
+                  <li key={b.id} className={b.page === page ? 'reader-mode-bookmark-current' : ''}>
+                    <button className="reader-mode-bookmark-jump" onClick={() => goToPage(b.page)}>
+                      {bookmarkDisplayLabel(b)}
+                    </button>
+                    <button className="reader-mode-bookmark-remove" onClick={() => handleRemoveBookmark(b.id)} title="Remove bookmark" aria-label="Remove bookmark">
+                      ×
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+        )}
+        <button
+          className="reader-mode-bookmark-toggle"
+          onClick={() => setBookmarksOpen((o) => !o)}
+          title="Bookmarks"
+          aria-label="Bookmarks"
+        >
+          {currentBookmark ? '★' : '🔖'}
+        </button>
+      </div>
 
       <div className="reader-mode-page-bar">
         <button className="reader-mode-page-bar-btn" onClick={() => setTwoPage((t) => !t)} title={twoPage ? 'Switch to single-page view' : 'Switch to two-page spread'}>
@@ -180,6 +331,7 @@ export function ReaderMode({
           value={pageInput}
           onInput={(e) => setPageInput((e.target as HTMLInputElement).value)}
           onKeyDown={(e) => {
+            e.stopPropagation()
             if (e.key === 'Enter') {
               ;(e.target as HTMLInputElement).blur()
               submitPageInput()
@@ -200,6 +352,7 @@ export function ReaderMode({
             placeholder="Annotation (optional)"
             value={quoteAnnotation}
             onInput={(e) => setQuoteAnnotation((e.target as HTMLInputElement).value)}
+            onKeyDown={(e) => e.stopPropagation()}
           />
           <button className="btn btn-primary btn-sm" disabled={savingQuote} onClick={handleSaveQuote}>
             {savingQuote ? 'Saving…' : '+ Add to quote bank'}
@@ -222,12 +375,15 @@ function ReaderPdfPage({
   page,
   containerSize,
   onSelectionChange,
+  search,
 }: {
   source: Source
   page: number
   containerSize: { width: number; height: number }
   onSelectionChange: (text: string) => void
+  search: PageSearchState
 }) {
+  const { searchQuery, activeMatch } = search
   const [doc, setDoc] = useState<PdfDoc | null>(null)
   const [error, setError] = useState<string | null>(null)
   const canvasRef = useRef<HTMLCanvasElement>(null)
@@ -278,6 +434,13 @@ function ReaderPdfPage({
       layer.style.width = `${width}px`
       layer.style.height = `${height}px`
       layer.innerHTML = ''
+      const query = searchQuery.trim().toLowerCase()
+      const isActivePage = !!activeMatch && activeMatch.page === clamped
+      // Same per-item highlighting `PdfViewer` does — every occurrence of
+      // the query gets marked on whichever page(s) it's actually on (both
+      // sides of a two-page spread can show hits at once), with the one
+      // overall active match picked out in a brighter color.
+      let matchesSoFarOnPage = 0
       const pageItems: SelectableTextItem[] = []
       for (const item of content.items as any[]) {
         if (!('str' in item) || !item.str) continue
@@ -287,7 +450,23 @@ function ReaderPdfPage({
         const span = document.createElement('span')
         span.dataset.itemIndex = String(pageItems.length)
         pageItems.push({ str: item.str, transform: item.transform })
-        span.textContent = item.str
+        if (query) {
+          const lower = item.str.toLowerCase()
+          let cursor = 0
+          let idx: number
+          while ((idx = lower.indexOf(query, cursor)) !== -1) {
+            if (idx > cursor) span.appendChild(document.createTextNode(item.str.slice(cursor, idx)))
+            const mark = document.createElement('mark')
+            mark.className = 'pdf-search-hit' + (isActivePage && matchesSoFarOnPage === activeMatch!.indexInPage ? ' pdf-search-hit-active' : '')
+            mark.textContent = item.str.slice(idx, idx + query.length)
+            span.appendChild(mark)
+            matchesSoFarOnPage++
+            cursor = idx + query.length
+          }
+          if (cursor < item.str.length) span.appendChild(document.createTextNode(item.str.slice(cursor)))
+        } else {
+          span.textContent = item.str
+        }
         span.style.left = `${tx[4]}px`
         span.style.top = `${tx[5] - fontHeight}px`
         span.style.fontSize = `${fontHeight}px`
@@ -297,11 +476,12 @@ function ReaderPdfPage({
         layer.appendChild(span)
       }
       pageItemsRef.current = pageItems
+      layer.querySelector('.pdf-search-hit-active')?.scrollIntoView({ block: 'center', behavior: 'smooth' })
     })()
     return () => {
       cancelled = true
     }
-  }, [doc, page, containerSize.width, containerSize.height])
+  }, [doc, page, containerSize.width, containerSize.height, searchQuery, activeMatch])
 
   useEffect(() => {
     const handler = () => {
@@ -345,19 +525,29 @@ function ReaderTextPage({
   containerSize,
   onSelectionChange,
   onFrameKeyDown,
+  search,
 }: {
   source: Source
   page: number
   containerSize: { width: number; height: number }
   onSelectionChange: (text: string) => void
   onFrameKeyDown?: (e: KeyboardEvent) => void
+  search: PageSearchState
 }) {
+  const { searchQuery, activeMatch } = search
   const pageHtml = source.pageHtml ?? []
   const numPages = pageHtml.length
   const clamped = Math.min(Math.max(1, page), Math.max(1, numPages))
   const iframeRef = useRef<HTMLIFrameElement>(null)
   const [contentBox, setContentBox] = useState<{ width: number; height: number } | null>(null)
 
+  // Rebuilds the page's sandboxed document fresh on every relevant change,
+  // including a search query/active-match change — the same "always start
+  // from the untouched, freshly re-sanitized HTML rather than incrementally
+  // patching an existing document" approach `TextViewer`'s own equivalent
+  // effect uses (see its own doc comment), so switching pages, typing a
+  // query, or stepping to the next match never compounds stale marks from a
+  // previous pass.
   useEffect(() => {
     const iframe = iframeRef.current
     if (!iframe) return
@@ -365,9 +555,13 @@ function ReaderTextPage({
     if (!html) return
     setContentBox(null)
     const sanitized = sanitizePageHtml(html)
+    const activeIndexOnPage = activeMatch && activeMatch.page === clamped ? activeMatch.indexInPage : null
+
     iframe.onload = () => {
       const doc = iframe.contentDocument
       if (!doc) return
+      applySearchHighlights(doc, doc.body, searchQuery.trim(), activeIndexOnPage)
+      doc.querySelector('.text-search-hit-active')?.scrollIntoView({ block: 'center', behavior: 'smooth' })
       setContentBox(measureContentBox(doc))
       if (onSelectionChange) {
         doc.addEventListener('mouseup', () => {
@@ -390,7 +584,7 @@ function ReaderTextPage({
     }
     iframe.srcdoc = buildSrcDoc(sanitized, { suppressScrollbars: true })
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [clamped, pageHtml, onSelectionChange, onFrameKeyDown])
+  }, [clamped, pageHtml, searchQuery, activeMatch, onSelectionChange, onFrameKeyDown])
 
   if (numPages === 0) return <p style={{ color: '#ccc' }}>No extracted text available for this source.</p>
 

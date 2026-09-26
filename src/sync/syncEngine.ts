@@ -113,6 +113,7 @@ const SENSITIVE_FIELDS: Record<SyncedCollection, string[]> = {
   sources: ['bibtex', 'comment', 'pdfFileName', 'pageHtmlCompressed', 'pageHtml', 'pageTexts'],
   quotes: ['quoteText', 'annotation', 'page'],
   graveyard: ['html', 'nodeTitle'],
+  bookmarks: ['label', 'page'],
 }
 
 const CURSORS_KEY = 'marginal.sync.cursors.v1'
@@ -183,6 +184,7 @@ export interface SyncCounts {
   sources: number
   quotes: number
   graveyard: number
+  bookmarks: number
   blobs: number
 }
 
@@ -289,6 +291,8 @@ export function describeLocalDoc(collectionName: SyncedCollection, localDoc: Loc
     identify = (localDoc.quoteText as string)?.slice(0, 60)
   } else if (collectionName === 'graveyard') {
     identify = localDoc.nodeTitle as string
+  } else if (collectionName === 'bookmarks') {
+    identify = (localDoc.label as string) || undefined
   }
   return { identify: identify || undefined, fields }
 }
@@ -501,8 +505,8 @@ async function runSyncPassNow(onProgress?: (message: string) => void): Promise<S
   const cursors = loadCursors()
   const passStartedAt = Date.now()
   const result: SyncResult = {
-    pushed: { essays: 0, nodes: 0, sources: 0, quotes: 0, graveyard: 0, blobs: 0 },
-    pulled: { essays: 0, nodes: 0, sources: 0, quotes: 0, graveyard: 0, blobs: 0 },
+    pushed: { essays: 0, nodes: 0, sources: 0, quotes: 0, graveyard: 0, bookmarks: 0, blobs: 0 },
+    pulled: { essays: 0, nodes: 0, sources: 0, quotes: 0, graveyard: 0, bookmarks: 0, blobs: 0 },
   }
 
   for (const col of SYNCED_COLLECTIONS) {

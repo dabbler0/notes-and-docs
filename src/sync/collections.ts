@@ -7,7 +7,7 @@
  */
 
 /** Every top-level collection under `accounts/{uid}/...` that holds real user data — `wipeRemoteAccountData` (account reset) and `migrateAccountEncryption` (below) both need this same list, and used to each hardcode their own slightly-stale copy. */
-export const SYNCED_COLLECTIONS = ['essays', 'nodes', 'sources', 'quotes', 'graveyard'] as const
+export const SYNCED_COLLECTIONS = ['essays', 'nodes', 'sources', 'quotes', 'graveyard', 'bookmarks'] as const
 export type SyncedCollection = (typeof SYNCED_COLLECTIONS)[number]
 
 /**

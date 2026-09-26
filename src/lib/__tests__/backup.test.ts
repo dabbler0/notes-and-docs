@@ -14,6 +14,7 @@ import JSZip from 'jszip'
 import { exportBackup, restoreBackup, type BackupManifest } from '../backup'
 import { addQuoteToBank, listQuoteBank } from '../../models/quoteBankRepo'
 import { addToGraveyard, listGraveyard } from '../../models/graveyardRepo'
+import { addBookmark, listBookmarksForSource } from '../../models/bookmarkRepo'
 import type { Essay, EssayNode, Source } from '../../models/types'
 
 interface FakeStorageModule {
@@ -72,6 +73,7 @@ describe('restoring a pre-quote-bank/graveyard backup', () => {
     expect(result.sources).toBe(1)
     expect(result.quotes).toBe(0)
     expect(result.graveyard).toBe(0)
+    expect(result.bookmarks).toBe(0)
     expect(await listQuoteBank()).toEqual([])
     expect(await listGraveyard('essay-1')).toEqual([])
   })
@@ -110,9 +112,10 @@ describe('restoring a pre-quote-bank/graveyard backup', () => {
 })
 
 describe('exportBackup output includes the new collections', () => {
-  it('round-trips quotes and graveyard fragments through export + restore', async () => {
+  it('round-trips quotes, graveyard fragments, and bookmarks through export + restore', async () => {
     await addQuoteToBank('source-1', 2, 'round-tripped quote', 'kept for a reason')
     await addToGraveyard('essay-2', 'node-2', 'Some section', '<p>round-tripped fragment</p>')
+    await addBookmark('source-1', 5, 'round-tripped bookmark')
 
     const zipBlob = await exportBackup()
 
@@ -125,11 +128,15 @@ describe('exportBackup output includes the new collections', () => {
     const result = await restoreBackup(zipBlob, { mode: 'replace' })
     expect(result.quotes).toBe(1)
     expect(result.graveyard).toBe(1)
+    expect(result.bookmarks).toBe(1)
 
     const quotes = await listQuoteBank()
     const graveyard = await listGraveyard('essay-2')
+    const bookmarks = await listBookmarksForSource('source-1')
     expect(quotes[0].quoteText).toBe('round-tripped quote')
     expect(quotes[0].annotation).toBe('kept for a reason')
     expect(graveyard[0].html).toBe('<p>round-tripped fragment</p>')
+    expect(bookmarks[0].label).toBe('round-tripped bookmark')
+    expect(bookmarks[0].page).toBe(5)
   })
 })

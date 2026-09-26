@@ -98,6 +98,26 @@ export interface QuoteBankEntry {
   deleted?: boolean
 }
 
+/**
+ * A marked page in a source, for jumping back later — the "dog-ear a page"
+ * counterpart to a quote bank entry's "keep this exact passage." Shown both
+ * from a source's own detail view and from `ReaderMode.tsx`, since both are
+ * just different ways of browsing the same `pageHtml`/PDF pages. Unlike a
+ * `QuoteBankEntry`, there's no text captured at all — just the page and an
+ * optional label — since the point is purely navigational, not a citation.
+ */
+export interface Bookmark {
+  id: string
+  sourceId: string
+  page: number
+  /** Optional free-text label ("start of chapter 3") — falls back to "Page N" wherever this is displayed if left blank. */
+  label: string
+  createdAt: number
+  updatedAt: number
+  /** Tombstone — see the note on Source.deleted. */
+  deleted?: boolean
+}
+
 // ---- Essays / drafts -----------------------------------------------------
 
 /**

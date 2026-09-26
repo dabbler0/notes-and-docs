@@ -270,8 +270,11 @@ export function TextViewer({
  * HTML) is still found and counted by `findPdfMatches`' own whole-page-text
  * scan, just not highlighted here, the same known limitation `PdfViewer`'s
  * own per-item highlighting already has.
+ *
+ * Exported so `ReaderMode.tsx` can reuse it for its own, differently-sized
+ * text iframe rather than reimplementing the same DOM-mutation logic.
  */
-function applySearchHighlights(doc: Document, container: HTMLElement, query: string, activeIndexOnPage: number | null) {
+export function applySearchHighlights(doc: Document, container: HTMLElement, query: string, activeIndexOnPage: number | null) {
   const regex = buildSearchRegex(query)
   if (!regex) return
   const walker = doc.createTreeWalker(container, NodeFilter.SHOW_TEXT)

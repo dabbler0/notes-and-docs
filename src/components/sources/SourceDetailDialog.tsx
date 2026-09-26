@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'preact/hooks'
+import { useEffect, useMemo, useState } from 'preact/hooks'
 import { Modal } from '../Modal'
 import { PdfViewer } from './PdfViewer'
 import { TextViewer } from './TextViewer'
@@ -13,7 +13,8 @@ import { describeOcrError, looksLikeScannedPdf, ocrImage, ocrPdf, reOcrPdf } fro
 import { useSourceStorageBytes } from '../../lib/useSourceStorageBytes'
 import { commitOcrPreview, convertSourceToTextOnly, deleteSource, discardOcrPreview, getSourcePdfBlob, removeSourcePdf, setSourcePdf, stageOcrPreview, updateSource } from '../../models/sourcesRepo'
 import { addQuoteToBank } from '../../models/quoteBankRepo'
-import type { Source } from '../../models/types'
+import { addBookmark, bookmarkDisplayLabel, deleteBookmark, listBookmarksForSource } from '../../models/bookmarkRepo'
+import type { Bookmark, Source } from '../../models/types'
 
 export function SourceDetailDialog({
   source,
@@ -59,6 +60,8 @@ export function SourceDetailDialog({
   // this instead of the source's own saved PDF, via a throwaway
   // Source-shaped object pointing at the staged blob (see previewSource).
   const [ocrPreview, setOcrPreview] = useState<{ blobId: string; fileName: string; pageHtml: string[] } | null>(null)
+  const [bookmarks, setBookmarks] = useState<Bookmark[]>([])
+  const [bookmarkLabel, setBookmarkLabel] = useState('')
   const storageBytes = useSourceStorageBytes(source)
   // `looksLikeScannedPdf` parses every page's HTML (a DOMParser pass each,
   // via `htmlToPlainText`) to decide if this PDF has no real text layer —
@@ -302,6 +305,32 @@ export function SourceDetailDialog({
     } finally {
       setSavingQuote(false)
     }
+  }
+
+  function refreshBookmarks() {
+    listBookmarksForSource(source.id).then(setBookmarks)
+  }
+
+  useEffect(() => {
+    refreshBookmarks()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [source.id])
+
+  const currentPageBookmark = bookmarks.find((b) => b.page === page)
+
+  async function handleToggleBookmark() {
+    if (currentPageBookmark) {
+      await deleteBookmark(currentPageBookmark.id)
+    } else {
+      await addBookmark(source.id, page, bookmarkLabel.trim())
+      setBookmarkLabel('')
+    }
+    refreshBookmarks()
+  }
+
+  async function handleRemoveBookmark(bookmarkId: string) {
+    await deleteBookmark(bookmarkId)
+    refreshBookmarks()
   }
 
   /**
@@ -559,6 +588,39 @@ export function SourceDetailDialog({
             )
           ) : (
             <p className="muted">No PDF attached — this source is BibTeX + comment only. You can still add a quote by typing it in, or attach an image below to OCR it.</p>
+          )}
+          {hasViewer && (
+            <div className="field bookmark-field" style={{ marginTop: 10 }}>
+              <div className="field-header-row">
+                <label style={{ marginBottom: 0 }}>Bookmarks</label>
+                <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                  <input
+                    className="bookmark-label-input"
+                    placeholder="Label (optional)"
+                    value={bookmarkLabel}
+                    disabled={!!currentPageBookmark}
+                    onInput={(e) => setBookmarkLabel((e.target as HTMLInputElement).value)}
+                  />
+                  <button type="button" className="btn btn-ghost btn-sm" onClick={handleToggleBookmark}>
+                    {currentPageBookmark ? '★ Remove bookmark' : '☆ Bookmark this page'}
+                  </button>
+                </div>
+              </div>
+              {bookmarks.length > 0 && (
+                <ul className="bookmark-list">
+                  {bookmarks.map((b) => (
+                    <li key={b.id} className={b.page === page ? 'bookmark-list-current' : ''}>
+                      <button type="button" className="bookmark-list-jump" onClick={() => setPage(b.page)}>
+                        {bookmarkDisplayLabel(b)}
+                      </button>
+                      <button type="button" className="bookmark-list-remove" onClick={() => handleRemoveBookmark(b.id)} title="Remove bookmark" aria-label="Remove bookmark">
+                        ×
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
           )}
           <div className="field" style={{ marginTop: 12 }}>
             <label>Add to quote bank</label>

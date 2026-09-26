@@ -2160,6 +2160,15 @@ select {
 }
 
 .reader-page-area {
+  position: relative;
+  /* Explicit, rather than left to plain DOM order, because a transformed
+     iframe (the text-page path's own fit-to-screen `transform: scale`) can
+     otherwise paint above later, unrelated fixed-position siblings in some
+     browsers regardless of where it sits in the document — confirmed
+     directly as the cause of the corner controls below becoming
+     unclickable wherever the page happened to be big enough to sit under
+     them. */
+  z-index: 1;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -2196,6 +2205,7 @@ select {
    a fullscreen view with no other chrome to hint it's there). */
 .reader-mode-exit {
   position: fixed;
+  z-index: 2;
   top: 14px;
   right: 18px;
   width: 30px;
@@ -2222,6 +2232,7 @@ select {
    pill that only really asserts itself once you're actually pointed at it. */
 .reader-mode-page-bar {
   position: fixed;
+  z-index: 2;
   bottom: 12px;
   left: 50%;
   transform: translateX(-50%);
@@ -2277,11 +2288,190 @@ select {
   margin: 0;
 }
 
-/* Hidden entirely until a selection exists (see ReaderMode.tsx) — the one
-   piece of chrome besides the exit control this view ever shows, and even
-   then only once there's something to act on. */
+/* Mirrors the exit button's own corner (top-right) diagonally — collapsed to
+   a bare icon by default, same low-opacity-until-touched register as the
+   rest of this view's chrome. */
+.reader-mode-search {
+  position: fixed;
+  z-index: 2;
+  top: 14px;
+  left: 18px;
+}
+
+.reader-mode-search-toggle {
+  width: 30px;
+  height: 30px;
+  border: none;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.08);
+  font-size: 14px;
+  cursor: pointer;
+  opacity: 0.45;
+  transition: opacity 0.15s ease;
+}
+
+.reader-mode-search-toggle:hover {
+  opacity: 1;
+  background: rgba(255, 255, 255, 0.16);
+}
+
+.reader-mode-search-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 8px;
+  border-radius: 999px;
+  background: rgba(20, 20, 20, 0.92);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+}
+
+.reader-mode-search-input {
+  width: 200px;
+  padding: 3px 8px;
+  font-size: 13px;
+  color: #fff;
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 999px;
+}
+
+.reader-mode-search-count {
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.55);
+  white-space: nowrap;
+}
+
+/* Bottom-right, but raised clear of the quote-saving bar's own height (see
+   `.reader-mode-quote-bar` below) so the two don't stack on top of each
+   other on the rare occasion both are open at once. */
+.reader-mode-bookmark-corner {
+  position: fixed;
+  z-index: 2;
+  bottom: 70px;
+  right: 18px;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 8px;
+}
+
+.reader-mode-bookmark-toggle {
+  width: 30px;
+  height: 30px;
+  border: none;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.08);
+  font-size: 14px;
+  cursor: pointer;
+  opacity: 0.45;
+  transition: opacity 0.15s ease;
+}
+
+.reader-mode-bookmark-toggle:hover {
+  opacity: 1;
+  background: rgba(255, 255, 255, 0.16);
+}
+
+.reader-mode-bookmarks-panel {
+  width: 240px;
+  max-height: 320px;
+  display: flex;
+  flex-direction: column;
+  padding: 10px;
+  border-radius: 10px;
+  background: rgba(20, 20, 20, 0.95);
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.45);
+  color: rgba(255, 255, 255, 0.85);
+}
+
+.reader-mode-bookmark-add {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding-bottom: 8px;
+  margin-bottom: 8px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.15);
+}
+
+.reader-mode-bookmark-label-input {
+  font-size: 12px;
+  padding: 4px 6px;
+  color: #fff;
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 6px;
+}
+
+.reader-mode-bookmarks-empty {
+  margin: 4px 0;
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.5);
+}
+
+.reader-mode-bookmarks-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.reader-mode-bookmarks-list li {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  border-radius: 6px;
+}
+
+.reader-mode-bookmarks-list li.reader-mode-bookmark-current {
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.reader-mode-bookmark-jump {
+  flex: 1;
+  min-width: 0;
+  text-align: left;
+  padding: 5px 6px;
+  border: none;
+  background: transparent;
+  color: inherit;
+  font-size: 13px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+  border-radius: 6px;
+}
+
+.reader-mode-bookmark-jump:hover {
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.reader-mode-bookmark-remove {
+  flex-shrink: 0;
+  width: 22px;
+  height: 22px;
+  border: none;
+  background: transparent;
+  color: rgba(255, 255, 255, 0.5);
+  cursor: pointer;
+  border-radius: 50%;
+}
+
+.reader-mode-bookmark-remove:hover {
+  background: rgba(255, 255, 255, 0.15);
+  color: #fff;
+}
+
+/* Hidden entirely until a selection exists (see ReaderMode.tsx) — unlike the
+   exit/search/bookmarks controls (always present, just faded until touched),
+   this one has nothing to show at all until there's actually a highlight to
+   act on. */
 .reader-mode-quote-bar {
   position: fixed;
+  z-index: 2;
   bottom: 0;
   left: 0;
   right: 0;
@@ -2307,4 +2497,74 @@ select {
 .reader-mode-quote-annotation {
   width: 220px;
   flex-shrink: 0;
+}
+
+/* --- Bookmarks in the ordinary (non-reader-mode) source detail view --- */
+
+.bookmark-field .field-header-row {
+  margin-bottom: 6px;
+}
+
+.bookmark-label-input {
+  width: 160px;
+  padding: 4px 8px;
+  font-size: 12.5px;
+}
+
+.bookmark-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  max-height: 140px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.bookmark-list li {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  border-radius: var(--radius-sm);
+}
+
+.bookmark-list li.bookmark-list-current {
+  background: var(--surface-2);
+}
+
+.bookmark-list-jump {
+  flex: 1;
+  min-width: 0;
+  text-align: left;
+  padding: 5px 8px;
+  border: none;
+  background: transparent;
+  color: var(--ink);
+  font-size: 13px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+  border-radius: var(--radius-sm);
+}
+
+.bookmark-list-jump:hover {
+  background: var(--surface-2);
+}
+
+.bookmark-list-remove {
+  flex-shrink: 0;
+  width: 22px;
+  height: 22px;
+  border: none;
+  background: transparent;
+  color: var(--ink-dim);
+  cursor: pointer;
+  border-radius: 50%;
+}
+
+.bookmark-list-remove:hover {
+  background: var(--surface-2);
+  color: var(--ink);
 }
