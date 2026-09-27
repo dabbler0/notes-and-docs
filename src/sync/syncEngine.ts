@@ -71,6 +71,37 @@ import { backend } from '../storage'
 import { notifySyncApplied } from './syncEvents'
 import type { Source } from '../models/types'
 
+// How long a single Firestore round trip gets before this gives up on it —
+// long enough that a genuinely slow connection still succeeds, short enough
+// that a request stuck behind a bad mobile network or a backgrounded tab's
+// throttled timers turns into a clear, actionable error within a reasonable
+// wait instead of a sync pass that just silently stops moving forever with
+// no way to tell "still working" from "will never finish." See
+// `firestoreDb()`'s own doc comment for the more direct mobile-specific fix
+// this is deliberately paired with (long-polling auto-detection) — this
+// timeout is the backstop for whatever that doesn't catch, not a substitute
+// for it.
+const NETWORK_TIMEOUT_MS = 25_000
+
+/** Races `promise` against a timer, rejecting with a message that names what
+ * was actually being waited on — `err instanceof Error` still holds, so this
+ * is indistinguishable from a real Firestore error everywhere it's caught. */
+function withTimeout<T>(promise: Promise<T>, what: string): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(`Timed out waiting for ${what} — check your connection and try again.`)), NETWORK_TIMEOUT_MS)
+    promise.then(
+      (v) => {
+        clearTimeout(timer)
+        resolve(v)
+      },
+      (e) => {
+        clearTimeout(timer)
+        reject(e)
+      },
+    )
+  })
+}
+
 /**
  * Which fields of each collection's docs are the sensitive payload that
  * gets encrypted, vs. left as plaintext metadata. The policy (see
@@ -233,7 +264,7 @@ export async function writeChunkedDocs(db: Firestore, entries: { ref: ReturnType
   for (let i = 0; i < entries.length; i += MAX_BATCH_WRITES) {
     const batch = writeBatch(db)
     for (const { ref, data } of entries.slice(i, i + MAX_BATCH_WRITES)) batch.set(ref, data)
-    await batch.commit()
+    await withTimeout(batch.commit(), 'a batch of writes')
   }
 }
 
@@ -412,13 +443,14 @@ async function decodeFromRemote(remote: Record<string, unknown>, cryptoKey: Cryp
  */
 async function migrateAccountEncryption(db: Firestore, uid: string, cryptoKey: CryptoKey, onProgress?: (message: string) => void): Promise<void> {
   for (const col of SYNCED_COLLECTIONS) {
-    onProgress?.(`Upgrading ${col} to the current encryption policy…`)
-    const snap = await getDocs(collection(db, 'accounts', uid, col))
-    for (const docSnap of snap.docs) {
+    onProgress?.(`Checking ${col} for encryption upgrades…`)
+    const snap = await withTimeout(getDocs(collection(db, 'accounts', uid, col)), `${col} to check for encryption upgrades`)
+    for (const [i, docSnap] of snap.docs.entries()) {
+      onProgress?.(`Upgrading ${col} to the current encryption policy… (${i + 1} of ${snap.docs.length})`)
       const decoded = await decodeFromRemote(docSnap.data(), cryptoKey, docSnap.ref)
       const reencoded = await encodeForRemote(col, decoded, cryptoKey, db, docSnap.ref)
       try {
-        await setDoc(docSnap.ref, reencoded)
+        await withTimeout(setDoc(docSnap.ref, reencoded), `${col}/${docSnap.id} to upload`)
       } catch (err) {
         // Same reasoning as the main push loop's own try/catch: this runs
         // unconditionally over every remote doc regardless of whether it's
@@ -518,7 +550,8 @@ async function runSyncPassNow(onProgress?: (message: string) => void): Promise<S
     // (compressed extracted-PDF-text payload included) on every single
     // pass, even when nothing had changed.
     const dirty = await backend.docs.listSince<LocalDoc>(col, cursors.pushedAt)
-    for (const localDoc of dirty) {
+    for (const [i, localDoc] of dirty.entries()) {
+      onProgress?.(`Pushing ${col}… (${i + 1} of ${dirty.length})`)
       const remoteRef = doc(db, 'accounts', uid, col, localDoc.id)
       // "Dirty since I last pushed" only tells us this device has a
       // change to send — it says nothing about whether the *remote* copy
@@ -532,12 +565,12 @@ async function runSyncPassNow(onProgress?: (message: string) => void): Promise<S
       // rest of this module is built around. One extra read per dirty doc
       // makes push symmetric with pull's own check below: skip if what's
       // already there is newer than what this device is about to send.
-      const remoteSnap = await getDoc(remoteRef)
+      const remoteSnap = await withTimeout(getDoc(remoteRef), `${col}/${localDoc.id} to check before pushing`)
       const remoteUpdatedAt = remoteSnap.exists() ? ((remoteSnap.data()?.updatedAt as number) ?? 0) : 0
       if (remoteUpdatedAt >= (localDoc.updatedAt ?? 0)) continue
       const remoteDoc = await encodeForRemote(col, localDoc, cryptoKey, db, remoteRef)
       try {
-        await setDoc(remoteRef, remoteDoc)
+        await withTimeout(setDoc(remoteRef, remoteDoc), `${col}/${localDoc.id} to upload`)
       } catch (err) {
         // A raw Firestore rejection on its own only ever says what's wrong
         // in the abstract ("Property _enc contains an invalid nested
@@ -575,10 +608,11 @@ async function runSyncPassNow(onProgress?: (message: string) => void): Promise<S
   // data.
   let maxSeenRemoteUpdatedAt = cursors.pulledAt
   for (const col of SYNCED_COLLECTIONS) {
-    onProgress?.(`Pulling remote ${col}…`)
+    onProgress?.(`Checking remote ${col} for changes…`)
     const q = query(collection(db, 'accounts', uid, col), where('updatedAt', '>', cursors.pulledAt))
-    const snap = await getDocs(q)
-    for (const docSnap of snap.docs) {
+    const snap = await withTimeout(getDocs(q), `remote ${col}`)
+    for (const [i, docSnap] of snap.docs.entries()) {
+      onProgress?.(`Pulling ${col}… (${i + 1} of ${snap.docs.length})`)
       const remote = docSnap.data()
       const remoteUpdatedAt = (remote.updatedAt as number) ?? 0
       if (remoteUpdatedAt > maxSeenRemoteUpdatedAt) maxSeenRemoteUpdatedAt = remoteUpdatedAt
@@ -593,37 +627,44 @@ async function runSyncPassNow(onProgress?: (message: string) => void): Promise<S
   // PDFs — chunked through Firestore, see the note above.
   const pushedBlobIds = loadPushedBlobIds()
   const sources = await backend.docs.list<Source>('sources')
-  for (const source of sources) {
-    if (!source.pdfBlobId || pushedBlobIds.has(source.pdfBlobId)) continue
-    const blob = await backend.blobs.get(source.pdfBlobId)
+  const toUpload = sources.filter((s) => s.pdfBlobId && !pushedBlobIds.has(s.pdfBlobId))
+  for (const [i, source] of toUpload.entries()) {
+    const blob = await backend.blobs.get(source.pdfBlobId!)
     if (!blob) continue
-    onProgress?.(`Uploading ${source.pdfFileName || 'a PDF'}…`)
+    onProgress?.(`Uploading ${source.pdfFileName || 'a PDF'}… (${i + 1} of ${toUpload.length})`)
     const bytes = await blob.arrayBuffer()
     const { iv, cipher } = await encryptBytes(cryptoKey, bytes)
     const chunks = splitIntoChunks(bufToB64(cipher), FIRESTORE_STRING_CHUNK_SIZE)
-    const blobDocRef = doc(db, 'accounts', uid, 'blobs', source.pdfBlobId)
+    const blobDocRef = doc(db, 'accounts', uid, 'blobs', source.pdfBlobId!)
     await writeChunkedDocs(db, [
       { ref: blobDocRef, data: { iv, totalChunks: chunks.length, updatedAt: Date.now() } },
       ...chunks.map((data, i) => ({ ref: doc(blobDocRef, 'chunks', String(i)), data: { data } })),
     ])
-    pushedBlobIds.add(source.pdfBlobId)
+    pushedBlobIds.add(source.pdfBlobId!)
     result.pushed.blobs++
   }
   savePushedBlobIds(pushedBlobIds)
 
+  const toDownload: Source[] = []
   for (const source of sources) {
     if (!source.pdfBlobId || source.deleted) continue
     if (await backend.blobs.has(source.pdfBlobId)) continue
-    onProgress?.(`Downloading ${source.pdfFileName || 'a PDF'}…`)
+    toDownload.push(source)
+  }
+  for (const [i, source] of toDownload.entries()) {
+    onProgress?.(`Downloading ${source.pdfFileName || 'a PDF'}… (${i + 1} of ${toDownload.length})`)
     try {
-      const blobDocRef = doc(db, 'accounts', uid, 'blobs', source.pdfBlobId)
-      const manifestSnap = await getDoc(blobDocRef)
+      const blobDocRef = doc(db, 'accounts', uid, 'blobs', source.pdfBlobId!)
+      const manifestSnap = await withTimeout(getDoc(blobDocRef), `${source.pdfFileName || 'a PDF'}'s manifest`)
       if (!manifestSnap.exists()) continue
       const { iv, totalChunks } = manifestSnap.data() as { iv: string; totalChunks: number }
-      const chunkSnaps = await Promise.all(Array.from({ length: totalChunks }, (_, i) => getDoc(doc(blobDocRef, 'chunks', String(i)))))
+      const chunkSnaps = await withTimeout(
+        Promise.all(Array.from({ length: totalChunks }, (_, i) => getDoc(doc(blobDocRef, 'chunks', String(i))))),
+        `${source.pdfFileName || 'a PDF'} (${totalChunks} chunks)`,
+      )
       const base64 = chunkSnaps.map((snap) => (snap.data()?.data as string) ?? '').join('')
       const plain = await decryptBytes(cryptoKey, iv, b64ToBuf(base64))
-      await backend.blobs.put(source.pdfBlobId, new Blob([plain], { type: 'application/pdf' }))
+      await backend.blobs.put(source.pdfBlobId!, new Blob([plain], { type: 'application/pdf' }))
       result.pulled.blobs++
     } catch {
       // Not uploaded from anywhere yet, or a transient network error —

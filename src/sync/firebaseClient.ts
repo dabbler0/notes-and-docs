@@ -1,5 +1,5 @@
 import { initializeApp, getApps, type FirebaseApp } from 'firebase/app'
-import { connectFirestoreEmulator, getFirestore, type Firestore } from 'firebase/firestore'
+import { connectFirestoreEmulator, initializeFirestore, type Firestore } from 'firebase/firestore'
 import { connectAuthEmulator, getAuth, GoogleAuthProvider, onAuthStateChanged, signInWithCredential, signInWithPopup, signOut, type Auth, type User } from 'firebase/auth'
 import { getFirebaseConfig } from './firebaseConfig'
 
@@ -55,7 +55,21 @@ function parseEmulatorParam(): { host: string; firestorePort: number; authPort: 
 export function firestoreDb(): Firestore {
   ensureApp()
   if (!dbInstance) {
-    dbInstance = getFirestore(app!)
+    // Firestore's default transport is a streaming WebChannel connection —
+    // some mobile carrier networks, corporate/mobile proxies, and browsers
+    // running under heavy background-throttling (exactly the conditions a
+    // phone syncs under) can silently fail to establish or maintain that
+    // stream without ever surfacing an error, which looks from here like a
+    // sync pass that's simply stopped moving, with no indication that
+    // anything went wrong (as opposed to a slow-but-live document read).
+    // `experimentalAutoDetectLongPolling` has the SDK detect exactly that
+    // case and transparently fall back to plain long-polling HTTP requests
+    // instead — Firebase's own documented fix for "Firestore works on
+    // desktop but hangs on mobile," and a no-op (auto-detection just
+    // confirms streaming already works) on a connection that didn't need it.
+    // Has to be set via `initializeFirestore` at creation time — there's no
+    // way to change a `Firestore` instance's transport after the fact.
+    dbInstance = initializeFirestore(app!, { experimentalAutoDetectLongPolling: true })
     const emu = parseEmulatorParam()
     if (emu) connectFirestoreEmulator(dbInstance, emu.host, emu.firestorePort)
   }

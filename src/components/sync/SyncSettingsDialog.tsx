@@ -522,8 +522,25 @@ function AccountPanel({ uid, onKeyForgotten }: { uid: string; onKeyForgotten: ()
   const [autoSync, setAutoSync] = useState(isAutoSyncEnabled())
   const [showQr, setShowQr] = useState(false)
   const [qrDataUrl, setQrDataUrl] = useState('')
+  // A running pass can genuinely sit on the same progress message for a
+  // while (a single large PDF chunk-uploading, say), which without this
+  // looks identical to a pass that's actually stopped moving — there was no
+  // way to tell "still working, just on a slow step" from "hung" beyond
+  // squinting at whether the message text happened to change. A ticking
+  // elapsed-time counter answers that regardless of how granular any given
+  // step's own messages are.
+  const [elapsedSec, setElapsedSec] = useState(0)
+  const syncStartRef = useRef(0)
+
+  useEffect(() => {
+    if (status.kind !== 'running') return
+    const timer = setInterval(() => setElapsedSec(Math.round((Date.now() - syncStartRef.current) / 1000)), 1000)
+    return () => clearInterval(timer)
+  }, [status.kind])
 
   async function handleSync() {
+    syncStartRef.current = Date.now()
+    setElapsedSec(0)
     setStatus({ kind: 'running', message: 'Starting…' })
     try {
       const result: SyncResult = await syncNow((message) => setStatus({ kind: 'running', message }))
@@ -621,7 +638,12 @@ function AccountPanel({ uid, onKeyForgotten }: { uid: string; onKeyForgotten: ()
         </label>
       </div>
 
-      {status.kind !== 'idle' && <p className={status.kind === 'error' ? 'error-text' : 'muted'}>{status.message}</p>}
+      {status.kind !== 'idle' && (
+        <p className={status.kind === 'error' ? 'error-text' : 'muted'}>
+          {status.message}
+          {status.kind === 'running' && elapsedSec > 0 && ` (${elapsedSec}s)`}
+        </p>
+      )}
 
       <p className="sync-reset-toggle">
         <button className="btn-link-muted" disabled={status.kind === 'running'} onClick={handleForceResync}>

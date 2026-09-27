@@ -59,6 +59,15 @@ export function getFirestore(): FakeDb {
   return { __isFakeDb: true }
 }
 
+/** Stand-in for the real `initializeFirestore` — `firebaseClient.ts` calls
+ * this instead of `getFirestore` to set transport options (long-polling
+ * auto-detection) real Firestore needs but this fake has no transport layer
+ * to apply them to; accepting and ignoring the settings keeps the call site
+ * identical between test and production. */
+export function initializeFirestore(): FakeDb {
+  return { __isFakeDb: true }
+}
+
 export function connectFirestoreEmulator(): void {
   /* no-op */
 }
