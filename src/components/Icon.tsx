@@ -8,7 +8,7 @@
  * `build:onefile`), so anything pulled in at runtime is a non-starter —
  * this costs nothing to inline and never has a loading flash.
  */
-export type IconName = 'cite' | 'quote' | 'quote-inline' | 'link' | 'subsection' | 'footnote' | 'comment' | 'graveyard' | 'export' | 'import' | 'backup' | 'sync' | 'bold' | 'italic' | 'underline' | 'list-ul' | 'list-ol'
+export type IconName = 'cite' | 'quote' | 'quote-inline' | 'link' | 'subsection' | 'footnote' | 'comment' | 'graveyard' | 'export' | 'import' | 'backup' | 'sync' | 'bold' | 'italic' | 'underline' | 'list-ul' | 'list-ol' | 'clear-format'
 
 const STROKE = { fill: 'none', stroke: 'currentColor', strokeWidth: 2, strokeLinecap: 'round' as const, strokeLinejoin: 'round' as const }
 
@@ -165,6 +165,20 @@ export function Icon({ name, size = 18, className }: { name: IconName; size?: nu
           <circle cx="4.5" cy="6" r="1.2" fill="currentColor" stroke="none" />
           <circle cx="4.5" cy="12" r="1.2" fill="currentColor" stroke="none" />
           <circle cx="4.5" cy="18" r="1.2" fill="currentColor" stroke="none" />
+        </svg>
+      )
+    case 'clear-format':
+      // A plain "T" (for "text") with a diagonal strike through it — the
+      // same shorthand Google Docs/Word use for "Clear formatting," distinct
+      // enough from 'bold'/'italic'/'underline' (all of which draw a glyph
+      // that stays intact) that it reads as "undo/remove" rather than
+      // "apply" at a glance.
+      return (
+        <svg {...props} {...STROKE}>
+          <text x="10" y="16" fontSize="15" fontFamily="Georgia, 'Times New Roman', serif" fontWeight="700" textAnchor="middle" fill="currentColor" stroke="none" strokeWidth="0">
+            T
+          </text>
+          <line x1="4" y1="20" x2="20" y2="6" />
         </svg>
       )
     case 'list-ol': {

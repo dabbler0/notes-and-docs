@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'preact/hooks'
 import { addFootnote, createChildNode, addComment, getEssay, getNode, loadNodeMap, moveNode, saveEssay, saveNode } from '../../models/essaysRepo'
 import { addToGraveyard } from '../../models/graveyardRepo'
 import { citationHtml, displayTitle } from '../../lib/bibtex'
-import { extractAroundRange, insertHtmlAtRange } from '../../lib/selection'
+import { extractAroundRange, insertHtmlAtRange, stripInlineFormatting } from '../../lib/selection'
 import { escapeAttr, escapeHtml } from '../../lib/html'
 import { id } from '../../lib/id'
 import { buildParentMap, isPlaceholderTitle, placeholderTitle } from '../../lib/treeNumbering'
@@ -180,6 +180,38 @@ export function EssayWorkspace({ essayId, onBack }: { essayId: string; onBack: (
   function exec(cmd: string) {
     activeEditorEl.current?.focus()
     document.execCommand(cmd)
+  }
+
+  /**
+   * Resets the current selection back to the editor's own default look —
+   * bold/italic/underline plus whatever font/size/color a paste happened to
+   * bring with it (from Word, Google Docs, or a styled web page; pasting
+   * here never strips a source's own formatting on the way in). Like
+   * `exec()` above, this is a direct edit to the live, uncontrolled
+   * contentEditable DOM rather than anything going through Preact state —
+   * `document.execCommand('removeFormat')` handles the ordinary cases
+   * (bold/italic/underline/lists), but its own handling of inline `style`
+   * attributes specifically is inconsistent across browsers, so
+   * `stripInlineFormatting` does a second, explicit pass over exactly the
+   * font/size/color kind of formatting a paste leaves behind — see that
+   * function's own doc comment. `exec()`'s sibling toolbar buttons never
+   * need to call `persistActiveNode` themselves because `execCommand` fires
+   * a real `input` event that the section's own `onInput` handler already
+   * saves from — `stripInlineFormatting`'s own DOM mutation doesn't, so this
+   * dispatches one manually to route through that exact same save path
+   * rather than introducing a second, divergent one.
+   */
+  function clearFormatting() {
+    const el = activeEditorEl.current
+    if (!el) return
+    el.focus()
+    const sel = document.getSelection()
+    if (!sel || sel.rangeCount === 0 || sel.isCollapsed || !el.contains(sel.getRangeAt(0).commonAncestorContainer)) return
+    document.execCommand('removeFormat')
+    const sel2 = document.getSelection()
+    if (!sel2 || sel2.rangeCount === 0 || !el.contains(sel2.getRangeAt(0).commonAncestorContainer)) return
+    stripInlineFormatting(sel2.getRangeAt(0))
+    el.dispatchEvent(new InputEvent('input', { bubbles: true }))
   }
 
   async function insertCitation(source: Source) {
@@ -595,6 +627,15 @@ export function EssayWorkspace({ essayId, onBack }: { essayId: string; onBack: (
                 <button className="btn btn-sm icon-btn-toolbar" title="Underline" onMouseDown={(e) => e.preventDefault()} onClick={() => exec('underline')}>
                   <Icon name="underline" />
                 </button>
+                <button
+                  className="btn btn-sm icon-btn-toolbar"
+                  title="Clear formatting — reset the selection to the editor's default font, size, and style (handy after pasting from somewhere else)"
+                  onMouseDown={(e) => e.preventDefault()}
+                  onClick={clearFormatting}
+                >
+                  <Icon name="clear-format" />
+                </button>
+                <span className="toolbar-divider" />
                 <button className="btn btn-sm icon-btn-toolbar" title="Bulleted list" onMouseDown={(e) => e.preventDefault()} onClick={() => exec('insertUnorderedList')}>
                   <Icon name="list-ul" />
                 </button>
