@@ -244,27 +244,58 @@ const FIRESTORE_STRING_CHUNK_SIZE = 700_000
 // means this can actually get hit, not just a defensive nicety.
 const MAX_BATCH_WRITES = 500
 
+// How many ~700,000-character chunks (see FIRESTORE_STRING_CHUNK_SIZE) get
+// bundled into one atomic commit. This is *not* sized against Firestore's
+// 500-operation batch ceiling above (that's a correctness limit — go past
+// it and the SDK rejects the batch outright); it's sized for how much data
+// one commit can safely move over a slow or unreliable connection. Batching
+// only exists in the first place to keep the SDK's own concurrent-writes
+// flow-control happy (see this function's own doc comment) — nothing about
+// that goal needs each batch to be *large*, and a large one is actively
+// worse for exactly the connections most likely to need this code to be
+// resilient at all: a batch of, say, 40 chunks is ~28MB in one atomic
+// HTTP request, which a real mobile connection can easily fail to complete
+// within any reasonable timeout even when it's perfectly capable of moving
+// the same 28MB in several smaller pieces — confirmed directly as the cause
+// of a real "Timed out waiting for a batch of writes" failure on mobile,
+// pushing a source with a large layout-mode-extracted (image-embedding)
+// PDF payload, that didn't reproduce on a faster desktop connection. 6
+// chunks (~4.2MB) is small enough to finish comfortably inside
+// NETWORK_TIMEOUT_MS even on a poor connection, while still batching enough
+// to keep the total round-trip count reasonable for a normal one.
+const CHUNK_COMMIT_BATCH_SIZE = 6
+
 /**
- * Writes every `{ref, data}` pair as a sequence of `WriteBatch`s (≤500
- * operations each, committed one at a time) rather than as one giant
- * `Promise.all` of independent `setDoc()` calls — confirmed directly as
- * the cause of a real "Write stream exhausted maximum allowed queued
- * writes" error: that's the Firestore client SDK's own flow-control limit
- * on how many mutations can be in flight on one write stream at once, not
- * a Spark (free) plan quota (those are daily read/write *counts*, and fail
- * with a distinctly different, quota-specific error) — genuinely a matter
- * of how this code paces its own writes, not a plan limitation. Firing
- * `N` chunk writes via `Promise.all` sends all `N` as independent
- * mutations at once; batching a few hundred at a time into one atomic
- * commit each, awaited in sequence, both respects the batch-size cap and
- * keeps the number of writes actually in flight at any moment bounded by
- * a single batch's worth rather than a whole PDF's.
+ * Writes every `{ref, data}` pair as a sequence of `WriteBatch`s (at most
+ * `CHUNK_COMMIT_BATCH_SIZE` operations each, committed one at a time) rather
+ * than as one giant `Promise.all` of independent `setDoc()` calls —
+ * confirmed directly as the cause of a real "Write stream exhausted maximum
+ * allowed queued writes" error: that's the Firestore client SDK's own
+ * flow-control limit on how many mutations can be in flight on one write
+ * stream at once, not a Spark (free) plan quota (those are daily read/write
+ * *counts*, and fail with a distinctly different, quota-specific error) —
+ * genuinely a matter of how this code paces its own writes, not a plan
+ * limitation. Firing `N` chunk writes via `Promise.all` sends all `N` as
+ * independent mutations at once; batching a handful at a time into one
+ * atomic commit each, awaited in sequence, both respects the SDK's
+ * flow-control and keeps each individual network operation small enough to
+ * actually finish on a slow connection (see `CHUNK_COMMIT_BATCH_SIZE`'s own
+ * doc comment for why that's a smaller number than it might look like it
+ * needs to be). `onProgress` fires after each batch commits, so a caller
+ * pushing a large multi-chunk payload can show real movement instead of one
+ * static message for however long the whole multi-megabyte transfer takes.
  */
-export async function writeChunkedDocs(db: Firestore, entries: { ref: ReturnType<typeof doc>; data: Record<string, unknown> }[]): Promise<void> {
-  for (let i = 0; i < entries.length; i += MAX_BATCH_WRITES) {
+export async function writeChunkedDocs(
+  db: Firestore,
+  entries: { ref: ReturnType<typeof doc>; data: Record<string, unknown> }[],
+  onProgress?: (done: number, total: number) => void,
+): Promise<void> {
+  const batchSize = Math.min(CHUNK_COMMIT_BATCH_SIZE, MAX_BATCH_WRITES)
+  for (let i = 0; i < entries.length; i += batchSize) {
     const batch = writeBatch(db)
-    for (const { ref, data } of entries.slice(i, i + MAX_BATCH_WRITES)) batch.set(ref, data)
-    await withTimeout(batch.commit(), 'a batch of writes')
+    for (const { ref, data } of entries.slice(i, i + batchSize)) batch.set(ref, data)
+    await withTimeout(batch.commit(), `part ${Math.floor(i / batchSize) + 1} of ${Math.ceil(entries.length / batchSize)}`)
+    onProgress?.(Math.min(i + batchSize, entries.length), entries.length)
   }
 }
 
@@ -365,7 +396,14 @@ function isChunkedEncPointer(value: unknown): value is ChunkedEncPointer {
   return !!value && typeof value === 'object' && (value as ChunkedEncPointer).chunked === true
 }
 
-async function encodeForRemote(collectionName: SyncedCollection, localDoc: LocalDoc, cryptoKey: CryptoKey, db: Firestore, docRef: ReturnType<typeof doc>): Promise<Record<string, unknown>> {
+async function encodeForRemote(
+  collectionName: SyncedCollection,
+  localDoc: LocalDoc,
+  cryptoKey: CryptoKey,
+  db: Firestore,
+  docRef: ReturnType<typeof doc>,
+  onChunkProgress?: (done: number, total: number) => void,
+): Promise<Record<string, unknown>> {
   const sensitiveFields = SENSITIVE_FIELDS[collectionName]
   const metadata: Record<string, unknown> = {}
   const payload: Record<string, unknown> = {}
@@ -398,6 +436,7 @@ async function encodeForRemote(collectionName: SyncedCollection, localDoc: Local
       await writeChunkedDocs(
         db,
         chunks.map((data, i) => ({ ref: doc(docRef, 'encChunks', String(i)), data: { data } })),
+        onChunkProgress,
       )
       const pointer: ChunkedEncPointer = { iv: enc.iv, chunked: true, totalChunks: chunks.length }
       metadata._enc = pointer
@@ -448,7 +487,9 @@ async function migrateAccountEncryption(db: Firestore, uid: string, cryptoKey: C
     for (const [i, docSnap] of snap.docs.entries()) {
       onProgress?.(`Upgrading ${col} to the current encryption policy… (${i + 1} of ${snap.docs.length})`)
       const decoded = await decodeFromRemote(docSnap.data(), cryptoKey, docSnap.ref)
-      const reencoded = await encodeForRemote(col, decoded, cryptoKey, db, docSnap.ref)
+      const reencoded = await encodeForRemote(col, decoded, cryptoKey, db, docSnap.ref, (done, total) =>
+        onProgress?.(`Upgrading ${col} (${i + 1} of ${snap.docs.length})… uploading data (${done} of ${total} pieces)`),
+      )
       try {
         await withTimeout(setDoc(docSnap.ref, reencoded), `${col}/${docSnap.id} to upload`)
       } catch (err) {
@@ -568,7 +609,9 @@ async function runSyncPassNow(onProgress?: (message: string) => void): Promise<S
       const remoteSnap = await withTimeout(getDoc(remoteRef), `${col}/${localDoc.id} to check before pushing`)
       const remoteUpdatedAt = remoteSnap.exists() ? ((remoteSnap.data()?.updatedAt as number) ?? 0) : 0
       if (remoteUpdatedAt >= (localDoc.updatedAt ?? 0)) continue
-      const remoteDoc = await encodeForRemote(col, localDoc, cryptoKey, db, remoteRef)
+      const remoteDoc = await encodeForRemote(col, localDoc, cryptoKey, db, remoteRef, (done, total) =>
+        onProgress?.(`Pushing ${col}… (${i + 1} of ${dirty.length}) — uploading data (${done} of ${total} pieces)`),
+      )
       try {
         await withTimeout(setDoc(remoteRef, remoteDoc), `${col}/${localDoc.id} to upload`)
       } catch (err) {
@@ -636,10 +679,14 @@ async function runSyncPassNow(onProgress?: (message: string) => void): Promise<S
     const { iv, cipher } = await encryptBytes(cryptoKey, bytes)
     const chunks = splitIntoChunks(bufToB64(cipher), FIRESTORE_STRING_CHUNK_SIZE)
     const blobDocRef = doc(db, 'accounts', uid, 'blobs', source.pdfBlobId!)
-    await writeChunkedDocs(db, [
-      { ref: blobDocRef, data: { iv, totalChunks: chunks.length, updatedAt: Date.now() } },
-      ...chunks.map((data, i) => ({ ref: doc(blobDocRef, 'chunks', String(i)), data: { data } })),
-    ])
+    await writeChunkedDocs(
+      db,
+      [
+        { ref: blobDocRef, data: { iv, totalChunks: chunks.length, updatedAt: Date.now() } },
+        ...chunks.map((data, i) => ({ ref: doc(blobDocRef, 'chunks', String(i)), data: { data } })),
+      ],
+      (done, total) => onProgress?.(`Uploading ${source.pdfFileName || 'a PDF'}… (${i + 1} of ${toUpload.length}) — ${done} of ${total} pieces`),
+    )
     pushedBlobIds.add(source.pdfBlobId!)
     result.pushed.blobs++
   }
