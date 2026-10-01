@@ -23,6 +23,7 @@ export function __getFakeCloud(): Map<string, Record<string, unknown>> {
 
 export function __resetFakeCloud(): void {
   __getFakeCloud().clear()
+  getFailNextWriteMatcher().fn = null
 }
 
 interface FakeDb {
@@ -133,6 +134,32 @@ export function query(col: ColRef, ...clauses: WhereClause[]): FakeQuery {
   return { __isFakeQuery: true, col, clauses }
 }
 
+// Lets a test simulate a real-world transient write failure (a timeout, a
+// dropped connection) for exactly one write to a chosen path, without
+// having to fake out the network layer itself — syncEngine.ts's own
+// resilience to this (a failed push/blob-upload no longer aborts the rest
+// of a sync pass — see its module doc comment) is otherwise untestable
+// against this fake, which never fails on its own for anything but the
+// real validation rules it already reproduces (oversized/undefined
+// fields, the write-stream/batch-size caps). Lives in `globalThis`, same as
+// `__getFakeCloud`'s own documents, and for the same reason: a test arms
+// this via a plain static import of this module, but `deviceHarness.ts`'s
+// `vi.resetModules()` (simulating a fresh "device") would otherwise hand
+// the device's own re-imported copy of this file a *different* module
+// instance — and a different, always-null `failNextWriteMatcher` — than
+// the one the test itself armed.
+function getFailNextWriteMatcher(): { fn: ((path: string) => boolean) | null } {
+  const g = globalThis as unknown as { __fakeFirestoreFailNextWrite?: { fn: ((path: string) => boolean) | null } }
+  if (!g.__fakeFirestoreFailNextWrite) g.__fakeFirestoreFailNextWrite = { fn: null }
+  return g.__fakeFirestoreFailNextWrite
+}
+
+/** The next `setDoc`/batch write whose path matches `matcher` throws instead
+ * of succeeding — exactly once; call again to arm another one. */
+export function __failNextWriteTo(matcher: (path: string) => boolean): void {
+  getFailNextWriteMatcher().fn = matcher
+}
+
 // Real Firestore's client SDK caps how many individual write mutations can
 // be in flight on its one write stream at once (around 500) — a genuine
 // production bug (this app once fired hundreds of independent `setDoc()`
@@ -166,6 +193,11 @@ export async function setDoc(ref: DocRef, data: Record<string, unknown>, options
     await Promise.resolve()
     if (inFlightWrites > MAX_CONCURRENT_WRITES) {
       throw new Error('Fake Firestore: Write stream exhausted maximum allowed queued writes.')
+    }
+    const failMatcher = getFailNextWriteMatcher()
+    if (failMatcher.fn && failMatcher.fn(ref.path)) {
+      failMatcher.fn = null
+      throw new Error('Fake Firestore: simulated write failure')
     }
     assertNoUndefined(data, ref.path)
     assertNoOversizedField(data, ref.path)

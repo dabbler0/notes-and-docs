@@ -67,6 +67,7 @@ export interface Device {
 
   createSource(bibtex: BibtexEntry, opts?: { comment?: string; pdfFile?: File; pageHtml?: string[] }): Promise<Source>
   getSource(id: string): Promise<Source | undefined>
+  updateSource(source: Source): Promise<void>
   listSources(): Promise<Source[]>
   getSourcePdfBlob(source: Source): Promise<Blob | undefined>
   removeSourcePdf(source: Source): Promise<void>
@@ -89,6 +90,7 @@ export interface Device {
 
   sync(onProgress?: (message: string) => void): Promise<SyncResult>
   forceFullResync(onProgress?: (message: string) => void): Promise<SyncResult>
+  discardLocalChanges(collections: ('essays' | 'nodes' | 'sources' | 'quotes' | 'graveyard' | 'bookmarks')[]): Promise<void>
 }
 
 export async function newDevice(config = DEFAULT_CONFIG): Promise<Device> {
@@ -165,6 +167,7 @@ export async function newDevice(config = DEFAULT_CONFIG): Promise<Device> {
 
     createSource: (bibtex, opts) => withStorageAsync(() => sourcesRepoMod.createSource(bibtex, opts)),
     getSource: (id) => withStorageAsync(() => sourcesRepoMod.getSource(id)),
+    updateSource: (source) => withStorageAsync(() => sourcesRepoMod.updateSource(source)),
     listSources: () => withStorageAsync(() => sourcesRepoMod.listSources()),
     getSourcePdfBlob: (source) => withStorageAsync(() => sourcesRepoMod.getSourcePdfBlob(source)),
     removeSourcePdf: (source) => withStorageAsync(() => sourcesRepoMod.removeSourcePdf(source)),
@@ -191,6 +194,7 @@ export async function newDevice(config = DEFAULT_CONFIG): Promise<Device> {
         syncEngineMod.resetSyncState()
         return syncEngineMod.runSyncPass(onProgress)
       }),
+    discardLocalChanges: (collections) => withStorageAsync(() => syncEngineMod.discardLocalChanges(collections)),
   }
   return device
 }

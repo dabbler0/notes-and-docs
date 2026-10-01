@@ -61,7 +61,7 @@
  * same reason, a document's own now-unused `encChunks` once its encrypted
  * payload next shrinks back under the inline-field limit).
  */
-import { collection, doc, getDoc, getDocs, query, setDoc, where, writeBatch, type Firestore } from 'firebase/firestore'
+import { collection, doc, getDoc, getDocs, query, setDoc, where, writeBatch, type DocumentData, type Firestore, type QuerySnapshot } from 'firebase/firestore'
 import { currentUser, firestoreDb } from './firebaseClient'
 import { getLocalKey } from './account'
 import { getAccountMeta, markEncryptionVersion, setAccountMeta } from './accountMeta'
@@ -209,6 +209,52 @@ export function resetSyncState(): void {
   localStorage.removeItem(PUSHED_BLOBS_KEY)
 }
 
+/**
+ * The escape hatch for when push itself is what's broken — a local doc
+ * that can't be pushed (too large, or whatever else keeps producing one of
+ * `pushErrors` above every single pass) used to block not just its own
+ * collection's push but the pull and PDF-download phases after it too
+ * (fixed above — a push failure no longer aborts the rest of the pass), but
+ * even with that fix, a doc that genuinely never succeeds still sits there
+ * failing pointlessly on every pass, and *this* device's own edits to it
+ * can never reach any other device. Sometimes the only way forward is to
+ * give up on this device's local edits to a whole collection and just take
+ * whatever's already on the server instead.
+ *
+ * Does two things, matching the two reasons a doc would otherwise keep
+ * coming back as "dirty" or "already up to date, nothing to pull": every
+ * local doc in `collections` has its `updatedAt` reset to 0, so it no
+ * longer looks dirty to the push loop's own `listSince(cursors.pushedAt)`
+ * query and is never attempted again — the edit is gone from this device's
+ * sync state, not just skipped once; and the pull cursor is reset to 0
+ * (same as `resetSyncState`'s own pull side, but global rather than
+ * per-collection, since Firestore has nothing finer than this to reset),
+ * so the very next pass re-pulls every remote doc from scratch and applies
+ * it over the now-undirtied local copy regardless of this device's last
+ * pull watermark. A local doc with no remote counterpart at all (never
+ * successfully synced from here or anywhere else) simply stays as is with
+ * nothing to overwrite it — there's no "discarding" to do for something
+ * the server never had in the first place, it just quietly stops being
+ * retried.
+ *
+ * Deliberately bypasses the essaysRepo/sourcesRepo wrapper functions in
+ * favor of writing straight through `backend.docs`, the same way the pull
+ * loop above does and for the same reason: those wrappers stamp a fresh
+ * `updatedAt` on every call, which is exactly the field this needs to
+ * force down to 0, not bump to "now."
+ */
+export async function discardLocalChanges(collections: SyncedCollection[]): Promise<void> {
+  for (const col of collections) {
+    const docs = await backend.docs.list<LocalDoc>(col)
+    for (const d of docs) {
+      if ((d.updatedAt ?? 0) === 0) continue
+      await backend.docs.put(col, { ...d, updatedAt: 0 })
+    }
+  }
+  const cursors = loadCursors()
+  saveCursors({ ...cursors, pulledAt: 0 })
+}
+
 export interface SyncCounts {
   essays: number
   nodes: number
@@ -258,12 +304,44 @@ const MAX_BATCH_WRITES = 500
 // within any reasonable timeout even when it's perfectly capable of moving
 // the same 28MB in several smaller pieces — confirmed directly as the cause
 // of a real "Timed out waiting for a batch of writes" failure on mobile,
-// pushing a source with a large layout-mode-extracted (image-embedding)
-// PDF payload, that didn't reproduce on a faster desktop connection. 6
-// chunks (~4.2MB) is small enough to finish comfortably inside
-// NETWORK_TIMEOUT_MS even on a poor connection, while still batching enough
-// to keep the total round-trip count reasonable for a normal one.
-const CHUNK_COMMIT_BATCH_SIZE = 6
+// pushing a source with a large layout-extracted (image-embedding) PDF
+// payload, that didn't reproduce on a faster desktop connection. Lowered
+// again from an earlier 6 (~4.2MB) after that same failure kept recurring
+// on a real mobile connection even at that size ("Timed out waiting for
+// part 3 of 3," always on a multi-megabyte PDF upload, never on ordinary
+// document pushes) — 3 chunks (~2.1MB) leaves more headroom for a
+// genuinely bad connection, at the cost of roughly double the round trips
+// for a large payload.
+const CHUNK_COMMIT_BATCH_SIZE = 3
+
+// How many times a single batch commit gets retried (after the first
+// attempt) before `writeChunkedDocs` gives up on it — see this module's own
+// note on `CHUNK_COMMIT_BATCH_SIZE` for the mobile failure this is paired
+// with. A batch timing out at 25s on a poor connection is overwhelmingly a
+// transient hiccup (a momentary signal drop, a carrier network hand-off)
+// rather than a connection that's genuinely down — retrying the same small
+// batch a couple of times, with a short pause to let whatever caused the
+// hiccup pass, recovers from that automatically instead of surfacing an
+// error (and aborting the rest of the sync pass) for what was really just
+// one bad roundtrip. A connection that's actually offline still fails all
+// the way through and reports normally.
+const CHUNK_COMMIT_RETRIES = 2
+const CHUNK_COMMIT_RETRY_DELAY_MS = 2_000
+
+/** Retries `fn` (1-based attempt number passed in, for a caller that wants
+ * to label a retried attempt differently) up to `retries` additional times
+ * after its first failure, pausing `delayMs` between attempts, before
+ * rethrowing whatever the last attempt failed with. */
+async function withRetries<T>(fn: (attempt: number) => Promise<T>, retries: number, delayMs: number): Promise<T> {
+  for (let attempt = 1; ; attempt++) {
+    try {
+      return await fn(attempt)
+    } catch (err) {
+      if (attempt > retries) throw err
+      await new Promise((resolve) => setTimeout(resolve, delayMs))
+    }
+  }
+}
 
 /**
  * Writes every `{ref, data}` pair as a sequence of `WriteBatch`s (at most
@@ -281,9 +359,12 @@ const CHUNK_COMMIT_BATCH_SIZE = 6
  * flow-control and keeps each individual network operation small enough to
  * actually finish on a slow connection (see `CHUNK_COMMIT_BATCH_SIZE`'s own
  * doc comment for why that's a smaller number than it might look like it
- * needs to be). `onProgress` fires after each batch commits, so a caller
- * pushing a large multi-chunk payload can show real movement instead of one
- * static message for however long the whole multi-megabyte transfer takes.
+ * needs to be). Each batch gets a few retries before being reported as a
+ * failure (see `CHUNK_COMMIT_RETRIES`) — a fresh `WriteBatch` per attempt,
+ * since a `WriteBatch` can only ever be committed once. `onProgress` fires
+ * after each batch commits, so a caller pushing a large multi-chunk payload
+ * can show real movement instead of one static message for however long the
+ * whole multi-megabyte transfer takes.
  */
 export async function writeChunkedDocs(
   db: Firestore,
@@ -291,10 +372,20 @@ export async function writeChunkedDocs(
   onProgress?: (done: number, total: number) => void,
 ): Promise<void> {
   const batchSize = Math.min(CHUNK_COMMIT_BATCH_SIZE, MAX_BATCH_WRITES)
+  const totalParts = Math.ceil(entries.length / batchSize)
   for (let i = 0; i < entries.length; i += batchSize) {
-    const batch = writeBatch(db)
-    for (const { ref, data } of entries.slice(i, i + batchSize)) batch.set(ref, data)
-    await withTimeout(batch.commit(), `part ${Math.floor(i / batchSize) + 1} of ${Math.ceil(entries.length / batchSize)}`)
+    const part = Math.floor(i / batchSize) + 1
+    const slice = entries.slice(i, i + batchSize)
+    await withRetries(
+      (attempt) => {
+        const batch = writeBatch(db)
+        for (const { ref, data } of slice) batch.set(ref, data)
+        const label = attempt > 1 ? `part ${part} of ${totalParts} (retry ${attempt - 1})` : `part ${part} of ${totalParts}`
+        return withTimeout(batch.commit(), label)
+      },
+      CHUNK_COMMIT_RETRIES,
+      CHUNK_COMMIT_RETRY_DELAY_MS,
+    )
     onProgress?.(Math.min(i + batchSize, entries.length), entries.length)
   }
 }
@@ -582,6 +673,18 @@ async function runSyncPassNow(onProgress?: (message: string) => void): Promise<S
     pulled: { essays: 0, nodes: 0, sources: 0, quotes: 0, graveyard: 0, bookmarks: 0, blobs: 0 },
   }
 
+  // A failure anywhere in here used to abort the *entire* pass outright —
+  // including the pull and PDF-download sections below, which have nothing
+  // to do with whatever one bad local document failed to push. On a flaky
+  // mobile connection that turned "one source is too large/slow to push
+  // right now" into "this device never receives anything from any other
+  // device either," pass after pass, for as long as that one push kept
+  // failing — indistinguishable from a sync that's simply stopped working.
+  // Collecting failures instead of throwing immediately lets every other
+  // doc, and the pull/download phases entirely, still get a chance; the
+  // collected errors are reported together at the end, once nothing that
+  // *could* succeed has been skipped on their account.
+  const pushErrors: Error[] = []
   for (const col of SYNCED_COLLECTIONS) {
     onProgress?.(`Checking ${col} for local changes…`)
     // listSince() (backed by an index on updatedAt — see localBackend.ts)
@@ -594,26 +697,27 @@ async function runSyncPassNow(onProgress?: (message: string) => void): Promise<S
     for (const [i, localDoc] of dirty.entries()) {
       onProgress?.(`Pushing ${col}… (${i + 1} of ${dirty.length})`)
       const remoteRef = doc(db, 'accounts', uid, col, localDoc.id)
-      // "Dirty since I last pushed" only tells us this device has a
-      // change to send — it says nothing about whether the *remote* copy
-      // has since moved on without this device knowing (e.g. this is this
-      // device's first-ever sync of a doc it's actually had all along, and
-      // some other device already pushed a newer edit in the meantime).
-      // Pushing unconditionally would silently clobber that newer remote
-      // edit with this device's older content the moment its own local
-      // watermark says "dirty," regardless of which edit is actually
-      // newer — a real last-*push*-wins bug, not the last-write-wins the
-      // rest of this module is built around. One extra read per dirty doc
-      // makes push symmetric with pull's own check below: skip if what's
-      // already there is newer than what this device is about to send.
-      const remoteSnap = await withTimeout(getDoc(remoteRef), `${col}/${localDoc.id} to check before pushing`)
-      const remoteUpdatedAt = remoteSnap.exists() ? ((remoteSnap.data()?.updatedAt as number) ?? 0) : 0
-      if (remoteUpdatedAt >= (localDoc.updatedAt ?? 0)) continue
-      const remoteDoc = await encodeForRemote(col, localDoc, cryptoKey, db, remoteRef, (done, total) =>
-        onProgress?.(`Pushing ${col}… (${i + 1} of ${dirty.length}) — uploading data (${done} of ${total} pieces)`),
-      )
       try {
+        // "Dirty since I last pushed" only tells us this device has a
+        // change to send — it says nothing about whether the *remote* copy
+        // has since moved on without this device knowing (e.g. this is this
+        // device's first-ever sync of a doc it's actually had all along, and
+        // some other device already pushed a newer edit in the meantime).
+        // Pushing unconditionally would silently clobber that newer remote
+        // edit with this device's older content the moment its own local
+        // watermark says "dirty," regardless of which edit is actually
+        // newer — a real last-*push*-wins bug, not the last-write-wins the
+        // rest of this module is built around. One extra read per dirty doc
+        // makes push symmetric with pull's own check below: skip if what's
+        // already there is newer than what this device is about to send.
+        const remoteSnap = await withTimeout(getDoc(remoteRef), `${col}/${localDoc.id} to check before pushing`)
+        const remoteUpdatedAt = remoteSnap.exists() ? ((remoteSnap.data()?.updatedAt as number) ?? 0) : 0
+        if (remoteUpdatedAt >= (localDoc.updatedAt ?? 0)) continue
+        const remoteDoc = await encodeForRemote(col, localDoc, cryptoKey, db, remoteRef, (done, total) =>
+          onProgress?.(`Pushing ${col}… (${i + 1} of ${dirty.length}) — uploading data (${done} of ${total} pieces)`),
+        )
         await withTimeout(setDoc(remoteRef, remoteDoc), `${col}/${localDoc.id} to upload`)
+        result.pushed[col]++
       } catch (err) {
         // A raw Firestore rejection on its own only ever says what's wrong
         // in the abstract ("Property _enc contains an invalid nested
@@ -628,9 +732,8 @@ async function runSyncPassNow(onProgress?: (message: string) => void): Promise<S
         // real user text.
         console.error(`Sync push failed for ${col}/${localDoc.id}`, { error: err, doc: describeLocalDoc(col, localDoc) })
         const message = err instanceof Error ? err.message : String(err)
-        throw new Error(`Failed pushing ${col}/${localDoc.id} (${describeLocalDoc(col, localDoc).identify ?? 'see console for details'}): ${message}`, { cause: err })
+        pushErrors.push(new Error(`Failed pushing ${col}/${localDoc.id} (${describeLocalDoc(col, localDoc).identify ?? 'see console for details'}): ${message}`, { cause: err }))
       }
-      result.pushed[col]++
     }
   }
 
@@ -649,21 +752,45 @@ async function runSyncPassNow(onProgress?: (message: string) => void): Promise<S
   // not yet observed can be skipped this way — the cost is occasionally
   // re-querying a slightly wider window than strictly necessary, not lost
   // data.
+  // Same reasoning as the push loop above: a decode/apply failure on one
+  // remote doc (or a listing failure on one collection) must not stop the
+  // rest of the pull, or the blob upload/download phases after it.
   let maxSeenRemoteUpdatedAt = cursors.pulledAt
+  const pullErrors: Error[] = []
   for (const col of SYNCED_COLLECTIONS) {
     onProgress?.(`Checking remote ${col} for changes…`)
-    const q = query(collection(db, 'accounts', uid, col), where('updatedAt', '>', cursors.pulledAt))
-    const snap = await withTimeout(getDocs(q), `remote ${col}`)
+    let snap: QuerySnapshot<DocumentData>
+    try {
+      const q = query(collection(db, 'accounts', uid, col), where('updatedAt', '>', cursors.pulledAt))
+      snap = await withTimeout(getDocs(q), `remote ${col}`)
+    } catch (err) {
+      console.error(`Sync pull failed listing remote ${col}`, err)
+      pullErrors.push(err instanceof Error ? err : new Error(String(err)))
+      continue
+    }
     for (const [i, docSnap] of snap.docs.entries()) {
       onProgress?.(`Pulling ${col}… (${i + 1} of ${snap.docs.length})`)
       const remote = docSnap.data()
       const remoteUpdatedAt = (remote.updatedAt as number) ?? 0
-      if (remoteUpdatedAt > maxSeenRemoteUpdatedAt) maxSeenRemoteUpdatedAt = remoteUpdatedAt
-      const localDoc = await backend.docs.get<LocalDoc>(col, docSnap.id)
-      if (localDoc && (localDoc.updatedAt ?? 0) >= remoteUpdatedAt) continue
-      const decoded = await decodeFromRemote(remote, cryptoKey, docSnap.ref)
-      await backend.docs.put(col, decoded as LocalDoc & { id: string })
-      result.pulled[col]++
+      try {
+        const localDoc = await backend.docs.get<LocalDoc>(col, docSnap.id)
+        if (!(localDoc && (localDoc.updatedAt ?? 0) >= remoteUpdatedAt)) {
+          const decoded = await decodeFromRemote(remote, cryptoKey, docSnap.ref)
+          await backend.docs.put(col, decoded as LocalDoc & { id: string })
+          result.pulled[col]++
+        }
+        // Only advance the high-water mark once this doc has actually been
+        // resolved (applied, or correctly skipped as already superseded
+        // locally) — bumping it unconditionally, before knowing whether
+        // this doc was handled, would let a doc that just threw get silently
+        // skipped forever the next time the cursor excludes it from the
+        // query above, the same bug the comment below this loop already
+        // guards against for an *empty* pass.
+        if (remoteUpdatedAt > maxSeenRemoteUpdatedAt) maxSeenRemoteUpdatedAt = remoteUpdatedAt
+      } catch (err) {
+        console.error(`Sync pull failed for ${col}/${docSnap.id}`, err)
+        pullErrors.push(err instanceof Error ? err : new Error(`Failed pulling ${col}/${docSnap.id}: ${String(err)}`))
+      }
     }
   }
 
@@ -671,24 +798,30 @@ async function runSyncPassNow(onProgress?: (message: string) => void): Promise<S
   const pushedBlobIds = loadPushedBlobIds()
   const sources = await backend.docs.list<Source>('sources')
   const toUpload = sources.filter((s) => s.pdfBlobId && !pushedBlobIds.has(s.pdfBlobId))
+  const blobErrors: Error[] = []
   for (const [i, source] of toUpload.entries()) {
     const blob = await backend.blobs.get(source.pdfBlobId!)
     if (!blob) continue
     onProgress?.(`Uploading ${source.pdfFileName || 'a PDF'}… (${i + 1} of ${toUpload.length})`)
-    const bytes = await blob.arrayBuffer()
-    const { iv, cipher } = await encryptBytes(cryptoKey, bytes)
-    const chunks = splitIntoChunks(bufToB64(cipher), FIRESTORE_STRING_CHUNK_SIZE)
-    const blobDocRef = doc(db, 'accounts', uid, 'blobs', source.pdfBlobId!)
-    await writeChunkedDocs(
-      db,
-      [
-        { ref: blobDocRef, data: { iv, totalChunks: chunks.length, updatedAt: Date.now() } },
-        ...chunks.map((data, i) => ({ ref: doc(blobDocRef, 'chunks', String(i)), data: { data } })),
-      ],
-      (done, total) => onProgress?.(`Uploading ${source.pdfFileName || 'a PDF'}… (${i + 1} of ${toUpload.length}) — ${done} of ${total} pieces`),
-    )
-    pushedBlobIds.add(source.pdfBlobId!)
-    result.pushed.blobs++
+    try {
+      const bytes = await blob.arrayBuffer()
+      const { iv, cipher } = await encryptBytes(cryptoKey, bytes)
+      const chunks = splitIntoChunks(bufToB64(cipher), FIRESTORE_STRING_CHUNK_SIZE)
+      const blobDocRef = doc(db, 'accounts', uid, 'blobs', source.pdfBlobId!)
+      await writeChunkedDocs(
+        db,
+        [
+          { ref: blobDocRef, data: { iv, totalChunks: chunks.length, updatedAt: Date.now() } },
+          ...chunks.map((data, i) => ({ ref: doc(blobDocRef, 'chunks', String(i)), data: { data } })),
+        ],
+        (done, total) => onProgress?.(`Uploading ${source.pdfFileName || 'a PDF'}… (${i + 1} of ${toUpload.length}) — ${done} of ${total} pieces`),
+      )
+      pushedBlobIds.add(source.pdfBlobId!)
+      result.pushed.blobs++
+    } catch (err) {
+      console.error(`Sync blob upload failed for ${source.pdfFileName || source.pdfBlobId}`, err)
+      blobErrors.push(err instanceof Error ? err : new Error(`Failed uploading ${source.pdfFileName || 'a PDF'}: ${String(err)}`))
+    }
   }
   savePushedBlobIds(pushedBlobIds)
 
@@ -720,10 +853,29 @@ async function runSyncPassNow(onProgress?: (message: string) => void): Promise<S
     }
   }
 
-  saveCursors({ pushedAt: passStartedAt, pulledAt: maxSeenRemoteUpdatedAt })
+  // `pulledAt` is always safe to advance to whatever was actually observed
+  // (see the comment above that loop) regardless of errors elsewhere.
+  // `pushedAt`, though, is only safe to advance to this pass's own start
+  // time when every dirty doc was actually resolved one way or
+  // another — advancing it past a doc that failed to push would drop that
+  // doc from every future `listSince(pushedAt)` query (its `updatedAt`
+  // already predates the new cursor), silently abandoning it rather than
+  // retrying it next pass. Leaving the cursor where it was costs a handful
+  // of harmless re-checks (the ones that already succeeded just see their
+  // own remote copy is already current and skip again) in exchange for
+  // never losing track of the one that didn't.
+  saveCursors({ pushedAt: pushErrors.length > 0 ? cursors.pushedAt : passStartedAt, pulledAt: maxSeenRemoteUpdatedAt })
 
   const pulledTotal = Object.values(result.pulled).reduce((a, b) => a + b, 0)
   if (pulledTotal > 0) notifySyncApplied()
+
+  const allErrors = [...pushErrors, ...pullErrors, ...blobErrors]
+  if (allErrors.length > 0) {
+    const pushedTotal = Object.values(result.pushed).reduce((a, b) => a + b, 0)
+    const partialNote = pushedTotal > 0 || pulledTotal > 0 ? ` The rest of this sync pass still completed — ${pushedTotal} pushed, ${pulledTotal} pulled.` : ''
+    const summary = allErrors.length === 1 ? allErrors[0].message : `${allErrors.length} items failed to sync. First error: ${allErrors[0].message}`
+    throw new Error(`${summary}${partialNote}`, { cause: allErrors })
+  }
 
   return result
 }

@@ -9,7 +9,7 @@ import { onAuthChange, signInWithGoogle, signOutOfGoogle } from '../../sync/fire
 import { getAccountMeta, setAccountMeta, wipeRemoteAccountData, type AccountMeta } from '../../sync/accountMeta'
 import { computeKeyFingerprint, importKeyFromBundle, isKeyBundle, type KeyBundle } from '../../lib/crypto'
 import { isAutoSyncEnabled, setAutoSyncEnabled, syncNow } from '../../sync/autoSync'
-import { resetSyncState, type SyncResult } from '../../sync/syncEngine'
+import { discardLocalChanges, resetSyncState, type SyncResult } from '../../sync/syncEngine'
 import { bundleToQrDataUrl } from '../../sync/qr'
 import { downloadBlob } from '../../lib/download'
 
@@ -568,6 +568,32 @@ function AccountPanel({ uid, onKeyForgotten }: { uid: string; onKeyForgotten: ()
     await handleSync()
   }
 
+  /**
+   * For when push itself is what's broken — some local source or essay
+   * edit keeps failing to upload (too large, say, on a bad connection) and
+   * the only way to get moving again is to give up on it: every local doc
+   * in the given collection(s) is marked as no longer dirty, so it stops
+   * being retried, and the pull cursor is reset so the next sync pulls
+   * down whatever the server already has in its place. Local-only content
+   * that never made it to the server to begin with just stays as is —
+   * there's nothing remote to pull down over it.
+   */
+  async function handleDiscardLocalChanges(collections: ('sources' | 'essays')[], label: string) {
+    if (
+      !confirm(
+        `Discard local ${label} changes? Any edits made here that haven't already synced successfully are abandoned — the next sync will pull down whatever's on the server instead, overwriting them. Use this only if uploading is stuck and you just want to get downloads moving again.`,
+      )
+    )
+      return
+    setStatus({ kind: 'running', message: `Discarding local ${label} changes…` })
+    try {
+      await discardLocalChanges(collections.flatMap((c) => (c === 'essays' ? (['essays', 'nodes'] as const) : ([c] as const))))
+      await handleSync()
+    } catch (err) {
+      setStatus({ kind: 'error', message: err instanceof Error ? err.message : String(err) })
+    }
+  }
+
   async function handleShowQr() {
     const bundle = exportBundleFor(uid)
     if (!bundle) return
@@ -650,6 +676,20 @@ function AccountPanel({ uid, onKeyForgotten }: { uid: string; onKeyForgotten: ()
           Not seeing something you expect? Force a full resync
         </button>
       </p>
+
+      <div className="sync-reset-box" style={{ marginTop: 12 }}>
+        <p className="muted" style={{ marginTop: 0 }}>
+          If uploading is stuck (e.g. a source or essay edit keeps failing to sync) and you just want downloads from other devices to keep working, you can give up on this device's own unsynced local changes instead:
+        </p>
+        <div className="sync-row">
+          <button className="btn btn-sm btn-ghost btn-danger" disabled={status.kind === 'running'} onClick={() => handleDiscardLocalChanges(['sources'], 'source')}>
+            Discard local source changes
+          </button>
+          <button className="btn btn-sm btn-ghost btn-danger" disabled={status.kind === 'running'} onClick={() => handleDiscardLocalChanges(['essays'], 'essay')}>
+            Discard local essay changes
+          </button>
+        </div>
+      </div>
     </div>
   )
 }

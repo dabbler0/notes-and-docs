@@ -9,7 +9,7 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { newDevice, newDeviceSignedIn, type Device } from '../../test/deviceHarness'
-import { __resetFakeCloud } from '../../test/fakeFirestore'
+import { __failNextWriteTo, __resetFakeCloud } from '../../test/fakeFirestore'
 import { generateKeyBundle, isKeyBundle } from '../../lib/crypto'
 
 beforeEach(() => {
@@ -570,6 +570,77 @@ describe('quote bank and graveyard sync', () => {
     expect(finalPull.pulled.quotes).toBe(1)
     expect(finalPull.pulled.graveyard).toBe(1)
     expect((await a.listQuotes())[0].quoteText).toBe('a new quote on old data')
+  })
+})
+
+describe('resilience to a broken push (the mobile "timed out" hang)', () => {
+  // Regression coverage for a real complaint: a push that keeps failing
+  // (a slow mobile upload timing out, say) used to abort the *entire* sync
+  // pass — including the pull and blob-download phases that have nothing
+  // to do with it — so every retry hit the same failure and nothing else
+  // ever moved, indistinguishable from sync having simply stopped working.
+  it("a push failure for one source doesn't prevent other collections from pushing, or stop the pull phase from running", async () => {
+    const { a, b } = await pairedDevices()
+
+    // A has something for B to pull...
+    const essay = await a.createEssay('Essay from A')
+    await a.sync()
+
+    // ...while B has a source whose push is about to fail, and an essay of
+    // its own that should still push successfully despite that.
+    const source = await b.createSource({ type: 'article', key: 'x', fields: { title: 'Broken upload' } })
+    const essayFromB = await b.createEssay('Essay from B')
+    __failNextWriteTo((path) => path.includes(`/sources/${source.id}`))
+
+    await expect(b.sync()).rejects.toThrow(/Failed pushing sources/)
+
+    // The broken source aside, B's essay still reached the server...
+    const pulledByA = await a.sync()
+    expect(pulledByA.pulled.essays).toBeGreaterThanOrEqual(1)
+    expect((await a.getEssay(essayFromB.id))?.title).toBe('Essay from B')
+    // ...and B still pulled A's essay in the very same pass that failed to
+    // push its source — the failure didn't block anything downstream of it.
+    expect((await b.getEssay(essay.id))?.title).toBe('Essay from A')
+  })
+
+  it('a doc that failed to push is retried on the next sync, not silently dropped', async () => {
+    const { b } = await pairedDevices()
+    const source = await b.createSource({ type: 'article', key: 'x', fields: { title: 'Retry me' } })
+    __failNextWriteTo((path) => path.includes(`/sources/${source.id}`))
+    await expect(b.sync()).rejects.toThrow()
+
+    // No further failure armed this time — the previously-failed push
+    // should still be considered dirty and go through now.
+    const result = await b.sync()
+    expect(result.pushed.sources).toBe(1)
+  })
+})
+
+describe('discardLocalChanges (the "upload is broken, just let me download" escape hatch)', () => {
+  it('stops retrying a local edit that keeps failing to push, and lets a pull apply the remote copy over it', async () => {
+    const { a, b } = await pairedDevices()
+
+    // A's copy of this source is what should win after B discards its own.
+    const bibtex = { type: 'article', key: 'x', fields: { title: 'From A' } }
+    await a.createSource(bibtex)
+    await a.sync()
+    await b.sync()
+
+    // B edits its own copy, but every attempt to push it fails.
+    const sourceOnB = (await b.listSources())[0]
+    sourceOnB.comment = "B's edit that can never push"
+    await b.updateSource(sourceOnB)
+
+    __failNextWriteTo((path) => path.includes(`/sources/${sourceOnB.id}`))
+    await expect(b.sync()).rejects.toThrow()
+
+    // B gives up on its own local edit...
+    await b.discardLocalChanges(['sources'])
+    // ...and the next ordinary sync pulls A's version down over it, with no
+    // push failure this time (nothing local is dirty anymore).
+    const result = await b.sync()
+    expect(result.pushed.sources).toBe(0)
+    expect((await b.listSources())[0].bibtex.fields.title).toBe('From A')
   })
 })
 
