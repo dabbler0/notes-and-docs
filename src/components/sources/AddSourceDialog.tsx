@@ -3,7 +3,7 @@ import { Modal } from '../Modal'
 import { parseBibtex, emptyEntry } from '../../lib/bibtex'
 import { parseCitationFields } from '../../lib/citationParse'
 import { loadPdf } from '../../lib/pdf'
-import { extractPageHtml, type ExtractionMode } from '../../lib/textExtraction'
+import { extractPageHtml } from '../../lib/textExtraction'
 import { createSource } from '../../models/sourcesRepo'
 import type { BibtexEntry } from '../../models/types'
 
@@ -20,7 +20,7 @@ export function AddSourceDialog({ onClose, onCreated }: { onClose: () => void; o
   const [comment, setComment] = useState('')
   const [file, setFile] = useState<File | null>(null)
   const [textOnly, setTextOnly] = useState(false)
-  const [extractionMode, setExtractionMode] = useState<ExtractionMode>('plain')
+  const [includeImages, setIncludeImages] = useState(true)
   const [busy, setBusy] = useState(false)
   const [status, setStatus] = useState('')
 
@@ -73,9 +73,7 @@ export function AddSourceDialog({ onClose, onCreated }: { onClose: () => void; o
       if (file) {
         const buf = await file.arrayBuffer()
         const doc = await loadPdf(buf)
-        pageHtml = await extractPageHtml(doc, extractionMode, (page, total) =>
-          setStatus(extractionMode === 'layout' ? `Extracting page ${page} of ${total} (experimental layout mode)…` : 'Extracting text from PDF…'),
-        )
+        pageHtml = await extractPageHtml(doc, (page, total) => setStatus(`Extracting page ${page} of ${total}…`), { includeImages })
       }
 
       await createSource(entry, { comment, pdfFile: file ?? undefined, pageHtml, textOnly })
@@ -109,8 +107,8 @@ export function AddSourceDialog({ onClose, onCreated }: { onClose: () => void; o
               Extract text only — don't keep the PDF file itself (good for a very large PDF you don't want stored or synced at all)
             </label>
             <label className="muted" style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 14 }}>
-              <input type="checkbox" checked={extractionMode === 'layout'} onChange={(e) => setExtractionMode((e.target as HTMLInputElement).checked ? 'layout' : 'plain')} />
-              Experimental: try to preserve the PDF's own text positioning, sizing, and coloring, plus any images — slower, and can come out wrong for a complex layout
+              <input type="checkbox" checked={includeImages} onChange={(e) => setIncludeImages((e.target as HTMLInputElement).checked)} />
+              Include images from the PDF (uncheck for a smaller, faster extraction with text only)
             </label>
           </>
         )}

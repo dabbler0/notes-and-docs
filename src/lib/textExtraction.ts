@@ -1,29 +1,28 @@
 /**
  * Turns a PDF into `Source.pageHtml` — one HTML string per page, the thing
  * `TextViewer` actually renders and `htmlToPlainText` (below) reduces back
- * down to plain text for search/snippets/scanned-detection. Two extractors:
+ * down to plain text for search/snippets/scanned-detection. Layout
+ * extraction (`extractLayoutPageHtml`, below) is the sole extractor: it
+ * attempts to reproduce the PDF page's actual visual appearance — each text
+ * run's own position, size, and color, plus images (raster ones, and
+ * anything vector-drawn that isn't text either — see
+ * `detectVectorArtRegions`) pulled out of the page and reinserted where they
+ * were — instead of collapsing everything down to plain reading-order prose.
+ * `LayoutExtractionOptions.includeImages` lets a caller skip the image side
+ * of that entirely, for a smaller/faster extraction.
  *
- * - `'plain'` (the default, and the only one that existed before this file
- *   did): reuses `reflowTextItems`'s existing line/paragraph-break
- *   heuristic, then bakes the result into plain, unstyled HTML
- *   (`plainTextToHtml`) — a `<p>` per paragraph, a `<br>` per line break
- *   inside one. This is also exactly what migrates an old source's
- *   already-extracted plain text (from before `pageHtml` existed) into the
- *   new shape — see `plainTextToHtml`'s own doc comment.
- * - `'layout'` (experimental — see `extractLayoutPageHtml`'s own doc
- *   comment): attempts to reproduce the PDF page's actual visual
- *   appearance — each text run's own position, size, and color, plus
- *   images (raster ones, and anything vector-drawn that isn't text either —
- *   see `detectVectorArtRegions`) pulled out of the page and reinserted
- *   where they were — instead of collapsing everything down to plain
- *   reading-order prose.
+ * There used to be a second, plainer extractor (reusing `reflowTextItems`'s
+ * line/paragraph-break heuristic to bake out bare, unstyled HTML). It's
+ * gone now that layout extraction has proven reliable enough to always use,
+ * but `plainTextToHtml` (below) survives on its own — it's also exactly
+ * what migrates an old source's already-extracted plain text (from before
+ * `pageHtml` existed at all) into the new shape, which has nothing to do
+ * with which extractor produced any given source's `pageHtml`.
  */
 import * as pdfjsLib from 'pdfjs-dist'
 import { escapeHtml, escapeAttr } from './html'
-import { reflowTextItems, renderPageToCanvas, separatorForGap, textItemHeight, type PdfDoc } from './pdf'
+import { renderPageToCanvas, separatorForGap, type PdfDoc } from './pdf'
 import { sanitizePageHtml } from './sanitizeHtml'
-
-export type ExtractionMode = 'plain' | 'layout'
 
 /**
  * Turns plain text (paragraphs separated by a blank line, single line
@@ -31,11 +30,10 @@ export type ExtractionMode = 'plain' | 'layout'
  * paragraph, a `<br>` per line break inside it — that renders identically
  * to how `TextViewer` used to render the plain text directly, but as
  * actual markup rather than leaning on the viewer's own CSS
- * (`white-space: pre`) to reproduce the line breaks. Two uses: the `'plain'`
- * extractor's own output, and migrating an old source's plain-text
- * `pageTexts` (from before `pageHtml` existed) into the new shape with
- * (by construction) an identical rendered appearance — see
- * `migratePlainTextSources` in `sourcesRepo.ts`.
+ * (`white-space: pre`) to reproduce the line breaks. Only used today to
+ * migrate an old source's plain-text `pageTexts` (from before `pageHtml`
+ * existed) into the new shape with (by construction) an identical rendered
+ * appearance — see `migratePlainTextSources` in `sourcesRepo.ts`.
  *
  * Every escaped character and fixed tag here already makes this output
  * safe by construction — no attributes, nothing derived from anything but
@@ -92,23 +90,30 @@ export function htmlToPlainText(html: string): string {
     .trim()
 }
 
-/** Extracts `Source.pageHtml` for every page of `doc`, using whichever
- * extractor `mode` names. `onProgress` (1-based page number, total pages)
- * lets a caller show status for the slower `'layout'` mode, the same way
- * OCR already does. */
-export async function extractPageHtml(doc: PdfDoc, mode: ExtractionMode = 'plain', onProgress?: (page: number, totalPages: number) => void): Promise<string[]> {
+/** Turns off the image side of layout extraction — see `extractPageHtml`'s
+ * and `extractLayoutPageHtml`'s doc comments. Defaults (when omitted, or
+ * when `includeImages` itself is omitted) to `true`, matching extraction's
+ * long-standing behavior. */
+export interface LayoutExtractionOptions {
+  /** `false` skips the entire page-render/pixel-sampling pass that image
+   * detection and cropping need — no raster-image or vector-art regions are
+   * found or embedded, and per-run text color falls back to plain black
+   * (color detection needs those same sampled pixels) — for a smaller,
+   * faster extraction when a caller doesn't want images along for the ride. */
+  includeImages?: boolean
+}
+
+/** Extracts `Source.pageHtml` for every page of `doc` via layout extraction
+ * (see `extractLayoutPageHtml`'s own doc comment). `onProgress` (1-based
+ * page number, total pages) lets a caller show extraction status, the same
+ * way OCR already does. */
+export async function extractPageHtml(doc: PdfDoc, onProgress?: (page: number, totalPages: number) => void, opts: LayoutExtractionOptions = {}): Promise<string[]> {
   const pages: string[] = []
   for (let p = 1; p <= doc.numPages; p++) {
     onProgress?.(p, doc.numPages)
-    pages.push(mode === 'layout' ? await extractLayoutPageHtml(doc, p) : await extractPlainPageHtml(doc, p))
+    pages.push(await extractLayoutPageHtml(doc, p, opts))
   }
   return pages
-}
-
-async function extractPlainPageHtml(doc: PdfDoc, pageNumber: number): Promise<string> {
-  const page = await doc.getPage(pageNumber)
-  const content = await page.getTextContent()
-  return plainTextToHtml(reflowTextItems(content.items as any[]))
 }
 
 // Rendered at a higher resolution than viewing scale for the same reason
@@ -125,13 +130,13 @@ export interface Rect {
 }
 
 /**
- * Experimental: attempts to reproduce a PDF page's actual visual appearance
- * instead of collapsing it to plain reading-order prose — each text run
- * positioned, sized, and colored the way it was in the original, with
- * images pulled out of the page and placed back where they were. Marked
- * experimental (see the UI's own "Re-extract (experimental layout)" and
- * "Use experimental layout-preserving extraction" labels) because none of
- * this is exact:
+ * Attempts to reproduce a PDF page's actual visual appearance instead of
+ * collapsing it to plain reading-order prose — each text run positioned,
+ * sized, and colored the way it was in the original, with images pulled out
+ * of the page and placed back where they were (unless `opts.includeImages`
+ * is `false` — see `LayoutExtractionOptions`, which also skips per-run color
+ * detection, since both need the same rendered-page pixels). None of this is
+ * exact:
  *
  * - Position comes straight from the same raw pdf.js text-item transforms
  *   `reflowTextItems` already uses — reliable, not a heuristic. Size (both
@@ -200,35 +205,48 @@ export interface Rect {
  *   though every run is independently positioned with nothing visually
  *   between them.
  */
-async function extractLayoutPageHtml(doc: PdfDoc, pageNumber: number): Promise<string> {
+async function extractLayoutPageHtml(doc: PdfDoc, pageNumber: number, opts: LayoutExtractionOptions = {}): Promise<string> {
+  const includeImages = opts.includeImages ?? true
   const page = await doc.getPage(pageNumber)
   const viewport = page.getViewport({ scale: 1 })
   const content = await page.getTextContent()
-  const opList = await page.getOperatorList()
 
   const renderCanvas = document.createElement('canvas')
-  await renderPageToCanvas(doc, pageNumber, renderCanvas, LAYOUT_RENDER_SCALE)
-  const renderCtx = renderCanvas.getContext('2d')!
-  const pixels = renderCtx.getImageData(0, 0, renderCanvas.width, renderCanvas.height)
-
+  let renderCtx: CanvasRenderingContext2D
+  let pixels: ImageData | null = null
   const parts: string[] = []
-  const textBoxes = computeTextBoxes(content.items as any[], viewport)
-  const rasterRegions = computeImageRegions(opList, viewport)
-  const keptRasterRegions = rasterRegions.filter((region) => !regionIsMostlyText(region, textBoxes))
-  // Every raster region counts as "covered" here even when it was just
-  // dropped above for being mostly text — an OCR'd scan's own faint
-  // background texture or a stray artifact inside it shouldn't get
-  // rediscovered as "leftover vector art" and re-embedded right back after
-  // being deliberately dropped a moment ago.
-  const coverage = [...rasterRegions, ...textBoxes.map(padTextBoxForCoverage)]
-  const vectorRegions = detectVectorArtRegions(pixels, coverage, LAYOUT_RENDER_SCALE)
+  let embeddedRegions: Rect[] = []
 
-  const embeddedRegions = [...keptRasterRegions, ...vectorRegions]
-  for (const region of embeddedRegions) {
-    const dataUrl = cropImageRegion(renderCanvas, region)
-    if (dataUrl) {
-      parts.push(`<img src="${escapeAttr(dataUrl)}" alt="" style="position:absolute;left:${region.x}px;top:${region.y}px;width:${region.width}px;height:${region.height}px;">`)
+  if (includeImages) {
+    const opList = await page.getOperatorList()
+    await renderPageToCanvas(doc, pageNumber, renderCanvas, LAYOUT_RENDER_SCALE)
+    renderCtx = renderCanvas.getContext('2d')!
+    pixels = renderCtx.getImageData(0, 0, renderCanvas.width, renderCanvas.height)
+
+    const textBoxes = computeTextBoxes(content.items as any[], viewport)
+    const rasterRegions = computeImageRegions(opList, viewport)
+    const keptRasterRegions = rasterRegions.filter((region) => !regionIsMostlyText(region, textBoxes))
+    // Every raster region counts as "covered" here even when it was just
+    // dropped above for being mostly text — an OCR'd scan's own faint
+    // background texture or a stray artifact inside it shouldn't get
+    // rediscovered as "leftover vector art" and re-embedded right back after
+    // being deliberately dropped a moment ago.
+    const coverage = [...rasterRegions, ...textBoxes.map(padTextBoxForCoverage)]
+    const vectorRegions = detectVectorArtRegions(pixels, coverage, LAYOUT_RENDER_SCALE)
+
+    embeddedRegions = [...keptRasterRegions, ...vectorRegions]
+    for (const region of embeddedRegions) {
+      const dataUrl = cropImageRegion(renderCanvas, region)
+      if (dataUrl) {
+        parts.push(`<img src="${escapeAttr(dataUrl)}" alt="" style="position:absolute;left:${region.x}px;top:${region.y}px;width:${region.width}px;height:${region.height}px;">`)
+      }
     }
+  } else {
+    // No page render needed at all when images are skipped — `renderCtx`
+    // still has to exist to serve as `measureHorizontalScale`'s
+    // `TextMeasurer` (it only needs `measureText`, never the rendered
+    // pixels), so a throwaway, unsized canvas stands in for the real one.
+    renderCtx = renderCanvas.getContext('2d')!
   }
 
   const styles = (content.styles ?? {}) as Record<string, { fontFamily?: string }>
@@ -260,7 +278,7 @@ async function extractLayoutPageHtml(doc: PdfDoc, pageNumber: number): Promise<s
 
     if (item.str.trim() && !isMostlyInsideAnyRegion({ x: tx[4], y: tx[5] - height, width: item.width > 0 ? item.width : height * item.str.length * 0.55, height }, embeddedRegions)) {
       const declaredWidth = typeof item.width === 'number' && item.width > 0 ? item.width : height * item.str.length * 0.55
-      const color = sampleTextColor(pixels, tx, height, declaredWidth)
+      const color = pixels ? sampleTextColor(pixels, tx, height, declaredWidth) : '#000'
       const fontFamily = styles[item.fontName]?.fontFamily || 'sans-serif'
       const scaleX = measureHorizontalScale(renderCtx, item.str, height, fontFamily, declaredWidth)
       const transforms: string[] = []

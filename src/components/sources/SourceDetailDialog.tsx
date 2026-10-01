@@ -7,7 +7,7 @@ import { displayTitle, formatBibtex, parseBibtex } from '../../lib/bibtex'
 import { downloadBlob, filenameFor } from '../../lib/download'
 import { EpubExportDialog } from './EpubExportDialog'
 import { loadPdf } from '../../lib/pdf'
-import { extractPageHtml, htmlToPlainText, type ExtractionMode } from '../../lib/textExtraction'
+import { extractPageHtml, htmlToPlainText } from '../../lib/textExtraction'
 import { formatBytes } from '../../lib/format'
 import { describeOcrError, looksLikeScannedPdf, ocrImage, ocrPdf, reOcrPdf } from '../../lib/ocr'
 import { useSourceStorageBytes } from '../../lib/useSourceStorageBytes'
@@ -130,7 +130,7 @@ export function SourceDetailDialog({
     try {
       const buf = await file.arrayBuffer()
       const doc = await loadPdf(buf)
-      const pageHtml = await extractPageHtml(doc, 'plain', (page, total) => setPdfStatus(`Extracting text from PDF… (page ${page} of ${total})`))
+      const pageHtml = await extractPageHtml(doc, (page, total) => setPdfStatus(`Extracting text from PDF… (page ${page} of ${total})`))
       await setSourcePdf(source, file, pageHtml)
       setPage(1)
       setViewMode('pdf')
@@ -165,14 +165,12 @@ export function SourceDetailDialog({
    * overwriting `pageHtml` with the result. Extraction only ever happens
    * when a PDF is first attached (`handlePdfFileChosen`) or swapped for a
    * new one (`setSourcePdf`) — a source added before some improvement to
-   * the extractor (e.g. the line-break-preserving reflow, or the
-   * experimental layout-preserving mode this now also offers) keeps
-   * whatever its `pageHtml` looked like at the time forever, since nothing
-   * re-derives it from the still-stored PDF automatically. This is the
-   * escape hatch: same PDF bytes, re-extracted under today's rules — or a
-   * different extractor entirely, via `mode`.
+   * the extractor keeps whatever its `pageHtml` looked like at the time
+   * forever, since nothing re-derives it from the still-stored PDF
+   * automatically. This is the escape hatch: same PDF bytes, re-extracted
+   * under today's rules — optionally without images, via `opts`.
    */
-  async function handleReExtractText(mode: ExtractionMode) {
+  async function handleReExtractText(opts: { includeImages: boolean }) {
     if (!source.pdfBlobId) return
     setPdfBusy(true)
     try {
@@ -180,9 +178,7 @@ export function SourceDetailDialog({
       if (!blob) return
       const buf = await blob.arrayBuffer()
       const doc = await loadPdf(buf)
-      source.pageHtml = await extractPageHtml(doc, mode, (page, total) =>
-        setPdfStatus(mode === 'layout' ? `Re-extracting (experimental layout mode)… page ${page} of ${total}` : `Re-extracting text from PDF… (page ${page} of ${total})`),
-      )
+      source.pageHtml = await extractPageHtml(doc, (page, total) => setPdfStatus(`Re-extracting text from PDF… (page ${page} of ${total})`), opts)
       await updateSource(source)
       onChanged()
     } finally {
@@ -220,7 +216,7 @@ export function SourceDetailDialog({
       const ocrBytes = await ocrPdf(originalBytes, doc, (p) => setPdfStatus(`${p.status} (page ${p.page} of ${p.totalPages})`))
       const ocrFile = new File([ocrBytes as BlobPart], source.pdfFileName || 'ocr.pdf', { type: 'application/pdf' })
       const ocrDoc = await loadPdf(await ocrFile.arrayBuffer())
-      const pageHtml = await extractPageHtml(ocrDoc, 'plain')
+      const pageHtml = await extractPageHtml(ocrDoc)
       await setSourcePdf(source, ocrFile, pageHtml)
       setViewMode('pdf')
       onChanged()
@@ -254,7 +250,7 @@ export function SourceDetailDialog({
       const ocrBytes = await reOcrPdf(doc, (p) => setPdfStatus(`${p.status} (page ${p.page} of ${p.totalPages})`))
       const ocrFile = new File([ocrBytes as BlobPart], source.pdfFileName || 'ocr.pdf', { type: 'application/pdf' })
       const ocrDoc = await loadPdf(await ocrFile.arrayBuffer())
-      const pageHtml = await extractPageHtml(ocrDoc, 'plain')
+      const pageHtml = await extractPageHtml(ocrDoc)
       const blobId = await stageOcrPreview(ocrFile)
       setOcrPreview({ blobId, fileName: ocrFile.name, pageHtml })
       setViewMode('pdf')
@@ -505,7 +501,13 @@ export function SourceDetailDialog({
             {source.pdfBlobId && (
               <>
                 {' · '}
-                <button type="button" className="btn-link-muted" disabled={pdfBusy || !!ocrPreview} onClick={() => handleReExtractText('plain')} title="Re-run text extraction against this PDF — useful if it was added before an improvement to how text gets extracted">
+                <button
+                  type="button"
+                  className="btn-link-muted"
+                  disabled={pdfBusy || !!ocrPreview}
+                  onClick={() => handleReExtractText({ includeImages: true })}
+                  title="Re-run text extraction against this PDF, with images — useful if it was added before an improvement to how text gets extracted"
+                >
                   Re-extract text
                 </button>
               </>
@@ -517,10 +519,10 @@ export function SourceDetailDialog({
                   type="button"
                   className="btn-link-muted"
                   disabled={pdfBusy || !!ocrPreview}
-                  onClick={() => handleReExtractText('layout')}
-                  title="Experimental: re-extract text while trying to preserve the PDF's own positioning, sizing, and coloring, plus any images — slower, and can come out wrong for a complex layout"
+                  onClick={() => handleReExtractText({ includeImages: false })}
+                  title="Re-extract text without images, for a smaller result"
                 >
-                  Re-extract (experimental layout)
+                  Re-extract (no images)
                 </button>
               </>
             )}
@@ -548,7 +550,7 @@ export function SourceDetailDialog({
                   className="btn-link-muted"
                   disabled={pdfBusy || !!ocrPreview}
                   onClick={() => setShowEpubDialog(true)}
-                  title="Experimental: best-effort-guesses headings, footnotes, and running headers/footers from the extracted text and builds a sectioned EPUB you can skip around in on an e-reader — with a review step to confirm or correct the guesses first. Works best on text extracted with the experimental layout mode; plain-mode text has no font size or position to guess from, so detection is weaker."
+                  title="Experimental: best-effort-guesses headings, footnotes, and running headers/footers from the extracted text and builds a sectioned EPUB you can skip around in on an e-reader — with a review step to confirm or correct the guesses first. Older sources extracted before layout extraction have no font size or position to guess from, so detection is weaker for them."
                 >
                   Download as EPUB (experimental)
                 </button>

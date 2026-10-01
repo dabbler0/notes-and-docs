@@ -17,11 +17,14 @@ export interface Source {
   /**
    * Per-page extracted content, for reading (`TextViewer`), search, and
    * quoting. Empty if no PDF. Real HTML, not plain text — enrichable rather
-   * than just a flat string — produced by one of the two extractors in
-   * `lib/textExtraction.ts`: `'plain'` (the default; a `<p>` per paragraph,
-   * a `<br>` per line break, nothing else) or the experimental `'layout'`
-   * one (each run of text positioned, sized, and colored to match the
-   * original page, with images reinserted where they were). Wherever this
+   * than just a flat string — produced by layout extraction
+   * (`extractLayoutPageHtml` in `lib/textExtraction.ts`): each run of text
+   * positioned, sized, and colored to match the original page, with images
+   * reinserted where they were (unless extracted with images skipped — see
+   * `LayoutExtractionOptions`). A source extracted before layout extraction
+   * became the only extractor may instead hold plain, unstyled HTML (a
+   * `<p>` per paragraph, a `<br>` per line break, nothing else) from the
+   * extractor that used to exist alongside it. Wherever this
    * needs to be searched, scanned for "does this look like a scanned PDF,"
    * or shown as a short plain-text snippet rather than actually rendered,
    * `htmlToPlainText` (`lib/textExtraction.ts`) reduces it back down first

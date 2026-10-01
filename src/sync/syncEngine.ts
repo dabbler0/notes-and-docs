@@ -365,7 +365,7 @@ export function describeLocalDoc(collectionName: SyncedCollection, localDoc: Loc
  * short comment) that's a few KB at most, comfortably inside a single
  * Firestore field. A source's `pageHtmlCompressed` breaks that assumption:
  * it's already-gzipped bytes that can themselves run past a megabyte for a
- * long or heavily-illustrated PDF (the experimental layout extractor
+ * long or heavily-illustrated PDF (layout extraction
  * embeds each figure as its own base64 PNG), and by the time that's
  * base64-tagged for JSON (`jsonReplacer` in `lib/crypto.ts`) *and then*
  * the resulting ciphertext is base64-encoded again for storage, it's
