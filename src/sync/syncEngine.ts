@@ -290,63 +290,105 @@ const FIRESTORE_STRING_CHUNK_SIZE = 700_000
 // means this can actually get hit, not just a defensive nicety.
 const MAX_BATCH_WRITES = 500
 
-// How many ~700,000-character chunks (see FIRESTORE_STRING_CHUNK_SIZE) get
-// bundled into one atomic commit. This is *not* sized against Firestore's
-// 500-operation batch ceiling above (that's a correctness limit — go past
-// it and the SDK rejects the batch outright); it's sized for how much data
-// one commit can safely move over a slow or unreliable connection. Batching
-// only exists in the first place to keep the SDK's own concurrent-writes
-// flow-control happy (see this function's own doc comment) — nothing about
-// that goal needs each batch to be *large*, and a large one is actively
-// worse for exactly the connections most likely to need this code to be
-// resilient at all: a batch of, say, 40 chunks is ~28MB in one atomic
-// HTTP request, which a real mobile connection can easily fail to complete
-// within any reasonable timeout even when it's perfectly capable of moving
-// the same 28MB in several smaller pieces — confirmed directly as the cause
-// of a real "Timed out waiting for a batch of writes" failure on mobile,
-// pushing a source with a large layout-extracted (image-embedding) PDF
-// payload, that didn't reproduce on a faster desktop connection. Lowered
-// again from an earlier 6 (~4.2MB) after that same failure kept recurring
-// on a real mobile connection even at that size ("Timed out waiting for
-// part 3 of 3," always on a multi-megabyte PDF upload, never on ordinary
-// document pushes) — 3 chunks (~2.1MB) leaves more headroom for a
-// genuinely bad connection, at the cost of roughly double the round trips
-// for a large payload.
-const CHUNK_COMMIT_BATCH_SIZE = 3
+// How many ~700,000-character chunks (see FIRESTORE_STRING_CHUNK_SIZE) a
+// `writeChunkedDocs` batch starts out trying to commit as one atomic write.
+// This is *not* sized against Firestore's 500-operation batch ceiling above
+// (that's a correctness limit — go past it and the SDK rejects the batch
+// outright); it's sized for how much data one commit can move in a single
+// request. 6 chunks is ~4.2MB — comfortably fine, and fast (few round
+// trips), on an ordinary connection. A connection too poor to complete that
+// within `NETWORK_TIMEOUT_MS` doesn't just fail outright, though — see
+// `commitChunkSlice`'s own doc comment for the backoff this is paired with,
+// which re-tries a failed batch at progressively smaller sizes instead of
+// either grinding *every* connection down to a small, many-round-trip size
+// up front, or giving up the first time a large batch times out. A real
+// "Timed out waiting for a batch of writes" failure on mobile, pushing a
+// source with a large layout-extracted (image-embedding) PDF payload, is
+// exactly the case this backoff exists for.
+const CHUNK_COMMIT_BATCH_SIZE = 6
 
-// How many times a single batch commit gets retried (after the first
-// attempt) before `writeChunkedDocs` gives up on it — see this module's own
-// note on `CHUNK_COMMIT_BATCH_SIZE` for the mobile failure this is paired
-// with. A batch timing out at 25s on a poor connection is overwhelmingly a
-// transient hiccup (a momentary signal drop, a carrier network hand-off)
-// rather than a connection that's genuinely down — retrying the same small
-// batch a couple of times, with a short pause to let whatever caused the
-// hiccup pass, recovers from that automatically instead of surfacing an
-// error (and aborting the rest of the sync pass) for what was really just
-// one bad roundtrip. A connection that's actually offline still fails all
-// the way through and reports normally.
-const CHUNK_COMMIT_RETRIES = 2
+// The floor the backoff in `commitChunkSlice` stops splitting at — a single
+// chunk (~700,000 characters) can't usefully be split any smaller, so a
+// batch already down to one gets a few in-place retries (see
+// `CHUNK_COMMIT_MIN_SIZE_RETRIES`) instead of splitting further.
+const CHUNK_COMMIT_MIN_BATCH_SIZE = 1
+
+// How many additional times a single chunk (the smallest possible batch,
+// see `CHUNK_COMMIT_MIN_BATCH_SIZE`) gets retried in place before
+// `commitChunkSlice` finally gives up on it, pausing `CHUNK_COMMIT_RETRY_DELAY_MS`
+// between attempts to let whatever caused a transient hiccup (a momentary
+// signal drop, a carrier network hand-off) pass. A connection that's
+// actually offline still fails all the way through these and reports
+// normally.
+const CHUNK_COMMIT_MIN_SIZE_RETRIES = 2
 const CHUNK_COMMIT_RETRY_DELAY_MS = 2_000
 
-/** Retries `fn` (1-based attempt number passed in, for a caller that wants
- * to label a retried attempt differently) up to `retries` additional times
- * after its first failure, pausing `delayMs` between attempts, before
- * rethrowing whatever the last attempt failed with. */
-async function withRetries<T>(fn: (attempt: number) => Promise<T>, retries: number, delayMs: number): Promise<T> {
-  for (let attempt = 1; ; attempt++) {
-    try {
-      return await fn(attempt)
-    } catch (err) {
-      if (attempt > retries) throw err
-      await new Promise((resolve) => setTimeout(resolve, delayMs))
-    }
+/**
+ * Commits `entries[start, end)` as one `WriteBatch`. On failure, the
+ * response depends on whether this slice can still be split: anything
+ * bigger than one chunk backs off by splitting in half and committing each
+ * half independently (recursively — a half that fails splits again) rather
+ * than blindly retrying the same oversized batch that just failed, on the
+ * theory that *size* close to the connection's limit, not bad luck, is the
+ * likeliest reason a large batch didn't make it — few mobile hiccups are
+ * so brief that the exact same multi-megabyte request would have succeeded
+ * a moment later, but a smaller one very often does. Already-successful
+ * siblings are never retried, so a batch of, say, 6 that fails only costs
+ * extra round trips for figuring out how small this *particular* connection
+ * needs them, not for the data that already went through fine. Once split
+ * all the way down to a single chunk with nowhere smaller left to go, a
+ * handful of in-place retries (`CHUNK_COMMIT_MIN_SIZE_RETRIES`) is the
+ * actual backstop for a genuine transient failure, before finally
+ * surfacing the error. `start`/`end` are only ever used for progress/error
+ * labeling — recursion always sees a sub-range of the same original
+ * `entries`, so every chunk still gets written exactly once regardless of
+ * how many times its own slice gets split.
+ */
+async function commitChunkSlice(
+  db: Firestore,
+  entries: { ref: ReturnType<typeof doc>; data: Record<string, unknown> }[],
+  start: number,
+  end: number,
+  total: number,
+  onProgress?: (done: number, total: number) => void,
+): Promise<void> {
+  const slice = entries.slice(start, end)
+  const label = slice.length === 1 ? `chunk ${start + 1} of ${total}` : `chunks ${start + 1}-${end} of ${total}`
+  const commitOnce = (attemptLabel: string) => {
+    const batch = writeBatch(db)
+    for (const { ref, data } of slice) batch.set(ref, data)
+    return withTimeout(batch.commit(), attemptLabel)
   }
+  try {
+    await commitOnce(label)
+  } catch (err) {
+    if (slice.length > CHUNK_COMMIT_MIN_BATCH_SIZE) {
+      const mid = start + Math.ceil(slice.length / 2)
+      await commitChunkSlice(db, entries, start, mid, total, onProgress)
+      await commitChunkSlice(db, entries, mid, end, total, onProgress)
+      return
+    }
+    let lastErr = err
+    for (let attempt = 1; attempt <= CHUNK_COMMIT_MIN_SIZE_RETRIES; attempt++) {
+      await new Promise((resolve) => setTimeout(resolve, CHUNK_COMMIT_RETRY_DELAY_MS))
+      try {
+        await commitOnce(`${label} (retry ${attempt})`)
+        lastErr = null
+        break
+      } catch (retryErr) {
+        lastErr = retryErr
+      }
+    }
+    if (lastErr) throw lastErr
+  }
+  onProgress?.(end, total)
 }
 
 /**
  * Writes every `{ref, data}` pair as a sequence of `WriteBatch`s (at most
- * `CHUNK_COMMIT_BATCH_SIZE` operations each, committed one at a time) rather
- * than as one giant `Promise.all` of independent `setDoc()` calls —
+ * `CHUNK_COMMIT_BATCH_SIZE` operations each to start, backing off to
+ * smaller ones on failure — see `commitChunkSlice`'s own doc comment)
+ * rather than as one giant `Promise.all` of independent `setDoc()` calls —
  * confirmed directly as the cause of a real "Write stream exhausted maximum
  * allowed queued writes" error: that's the Firestore client SDK's own
  * flow-control limit on how many mutations can be in flight on one write
@@ -357,14 +399,11 @@ async function withRetries<T>(fn: (attempt: number) => Promise<T>, retries: numb
  * independent mutations at once; batching a handful at a time into one
  * atomic commit each, awaited in sequence, both respects the SDK's
  * flow-control and keeps each individual network operation small enough to
- * actually finish on a slow connection (see `CHUNK_COMMIT_BATCH_SIZE`'s own
- * doc comment for why that's a smaller number than it might look like it
- * needs to be). Each batch gets a few retries before being reported as a
- * failure (see `CHUNK_COMMIT_RETRIES`) — a fresh `WriteBatch` per attempt,
- * since a `WriteBatch` can only ever be committed once. `onProgress` fires
- * after each batch commits, so a caller pushing a large multi-chunk payload
- * can show real movement instead of one static message for however long the
- * whole multi-megabyte transfer takes.
+ * actually finish on a slow connection. `onProgress` fires after each
+ * top-level batch's own range finishes committing (however many smaller
+ * pieces it actually took to get there), so a caller pushing a large
+ * multi-chunk payload can show real movement instead of one static message
+ * for however long the whole multi-megabyte transfer takes.
  */
 export async function writeChunkedDocs(
   db: Firestore,
@@ -372,21 +411,8 @@ export async function writeChunkedDocs(
   onProgress?: (done: number, total: number) => void,
 ): Promise<void> {
   const batchSize = Math.min(CHUNK_COMMIT_BATCH_SIZE, MAX_BATCH_WRITES)
-  const totalParts = Math.ceil(entries.length / batchSize)
   for (let i = 0; i < entries.length; i += batchSize) {
-    const part = Math.floor(i / batchSize) + 1
-    const slice = entries.slice(i, i + batchSize)
-    await withRetries(
-      (attempt) => {
-        const batch = writeBatch(db)
-        for (const { ref, data } of slice) batch.set(ref, data)
-        const label = attempt > 1 ? `part ${part} of ${totalParts} (retry ${attempt - 1})` : `part ${part} of ${totalParts}`
-        return withTimeout(batch.commit(), label)
-      },
-      CHUNK_COMMIT_RETRIES,
-      CHUNK_COMMIT_RETRY_DELAY_MS,
-    )
-    onProgress?.(Math.min(i + batchSize, entries.length), entries.length)
+    await commitChunkSlice(db, entries, i, Math.min(i + batchSize, entries.length), entries.length, onProgress)
   }
 }
 

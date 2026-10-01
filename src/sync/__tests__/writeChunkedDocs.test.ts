@@ -16,7 +16,7 @@
  */
 import { describe, expect, it } from 'vitest'
 import { doc, getDoc, getFirestore } from 'firebase/firestore'
-import { __resetFakeCloud } from '../../test/fakeFirestore'
+import { __clearPersistentWriteFailure, __failNextWriteTo, __failWritesToUntilCleared, __resetFakeCloud } from '../../test/fakeFirestore'
 import { writeChunkedDocs } from '../syncEngine'
 
 describe('writeChunkedDocs', () => {
@@ -54,4 +54,48 @@ describe('writeChunkedDocs', () => {
     const db = getFirestore()
     await expect(writeChunkedDocs(db, [])).resolves.toBeUndefined()
   })
+
+  it('backs off to smaller batches (instead of failing outright) when the first, ambitious-sized batch fails', async () => {
+    __resetFakeCloud()
+    const db = getFirestore()
+    // One ambitious top-level batch's worth of entries (see
+    // CHUNK_COMMIT_BATCH_SIZE) — small enough that a real connection would
+    // normally commit it in one shot, which is exactly the case this test
+    // forces to fail once so the backoff in commitChunkSlice has to kick in.
+    const entries = Array.from({ length: 6 }, (_, i) => ({ ref: doc(db, 'accounts', 'u', 'probe3', String(i)), data: { value: i } }))
+
+    // Fails only the very first write this batch attempts — simulating a
+    // batch that's simply too big for this connection to complete, not a
+    // doc-specific problem. Self-clears after firing once, so the smaller
+    // retried batches that follow succeed normally.
+    __failNextWriteTo((path) => path.includes('/probe3/0'))
+
+    const progressCalls: [number, number][] = []
+    await writeChunkedDocs(db, entries, (done, total) => progressCalls.push([done, total]))
+
+    for (let i = 0; i < 6; i++) {
+      expect((await getDoc(doc(db, 'accounts', 'u', 'probe3', String(i)))).data()?.value).toBe(i)
+    }
+    // Progress still only ever reports in increasing, in-order amounts —
+    // the caller sees real movement regardless of how many smaller pieces
+    // the failed batch actually took to get there.
+    expect(progressCalls[progressCalls.length - 1]).toEqual([6, 6])
+    for (let i = 1; i < progressCalls.length; i++) expect(progressCalls[i][0]).toBeGreaterThan(progressCalls[i - 1][0])
+  })
+
+  it('gives up and reports the real error once a batch has been split all the way down to a single chunk and that still fails every retry', async () => {
+    __resetFakeCloud()
+    const db = getFirestore()
+    const entries = [{ ref: doc(db, 'accounts', 'u', 'probe4', '0'), data: { value: 0 } }]
+
+    // A single chunk has nowhere smaller left to back off to — this keeps
+    // every attempt at it failing (unlike __failNextWriteTo, which clears
+    // itself after one hit), simulating a connection that's genuinely down
+    // for it rather than a one-off hiccup, so its in-place retries should
+    // all be exhausted too before this finally rejects.
+    __failWritesToUntilCleared((path) => path.endsWith('/probe4/0'))
+
+    await expect(writeChunkedDocs(db, entries)).rejects.toThrow(/simulated persistent write failure/)
+    __clearPersistentWriteFailure()
+  }, 15_000)
 })

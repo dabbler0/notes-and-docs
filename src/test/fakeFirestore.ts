@@ -24,6 +24,7 @@ export function __getFakeCloud(): Map<string, Record<string, unknown>> {
 export function __resetFakeCloud(): void {
   __getFakeCloud().clear()
   getFailNextWriteMatcher().fn = null
+  getPersistentFailMatcher().fn = null
 }
 
 interface FakeDb {
@@ -160,6 +161,27 @@ export function __failNextWriteTo(matcher: (path: string) => boolean): void {
   getFailNextWriteMatcher().fn = matcher
 }
 
+// Same idea as `getFailNextWriteMatcher`, but for a failure that doesn't
+// clear itself after one hit — for simulating a connection that's
+// genuinely down for a given path rather than a one-off hiccup, where a
+// test needs every retry to keep failing until it deliberately clears this.
+function getPersistentFailMatcher(): { fn: ((path: string) => boolean) | null } {
+  const g = globalThis as unknown as { __fakeFirestorePersistentFail?: { fn: ((path: string) => boolean) | null } }
+  if (!g.__fakeFirestorePersistentFail) g.__fakeFirestorePersistentFail = { fn: null }
+  return g.__fakeFirestorePersistentFail
+}
+
+/** Every `setDoc`/batch write whose path matches `matcher` throws, until
+ * `__clearPersistentWriteFailure()` is called — unlike `__failNextWriteTo`,
+ * this does not clear itself after one hit. */
+export function __failWritesToUntilCleared(matcher: (path: string) => boolean): void {
+  getPersistentFailMatcher().fn = matcher
+}
+
+export function __clearPersistentWriteFailure(): void {
+  getPersistentFailMatcher().fn = null
+}
+
 // Real Firestore's client SDK caps how many individual write mutations can
 // be in flight on its one write stream at once (around 500) — a genuine
 // production bug (this app once fired hundreds of independent `setDoc()`
@@ -198,6 +220,10 @@ export async function setDoc(ref: DocRef, data: Record<string, unknown>, options
     if (failMatcher.fn && failMatcher.fn(ref.path)) {
       failMatcher.fn = null
       throw new Error('Fake Firestore: simulated write failure')
+    }
+    const persistentFailMatcher = getPersistentFailMatcher()
+    if (persistentFailMatcher.fn && persistentFailMatcher.fn(ref.path)) {
+      throw new Error('Fake Firestore: simulated persistent write failure')
     }
     assertNoUndefined(data, ref.path)
     assertNoOversizedField(data, ref.path)
