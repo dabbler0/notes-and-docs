@@ -5,7 +5,7 @@ import { estimateFirebaseStorageBytes } from '../../sync/storageUsage'
 import type { Source } from '../../models/types'
 import { SourceCard } from './SourceCard'
 import { AddSourceDialog } from './AddSourceDialog'
-import { SourceDetailDialog } from './SourceDetailDialog'
+import { SourceWorkspace } from './SourceWorkspace'
 import { StorageUsageBar } from './StorageUsageBar'
 import { Icon } from '../Icon'
 
@@ -21,7 +21,7 @@ export function SourcesView() {
   const [loading, setLoading] = useState(true)
   const [query, setQuery] = useState('')
   const [adding, setAdding] = useState(false)
-  const [selected, setSelected] = useState<Source | null>(null)
+  const [openId, setOpenId] = useState<string | null>(null)
   // Kept separate from `loading`/`sources` — it covers every synced
   // collection, not just this tab's own list, and shouldn't block (or be
   // blocked by) the source list's own render just because it happens to
@@ -40,6 +40,13 @@ export function SourcesView() {
     // straight into IndexedDB, so this needs its own nudge to refetch.
     return onSyncApplied(reload)
   }, [])
+
+  // A source opens as its own full screen (see SourceWorkspace), the same
+  // way EssayWorkspace replaces EssaysView's own list — not as a modal
+  // layered on top of it.
+  if (openId) {
+    return <SourceWorkspace sourceId={openId} onBack={() => setOpenId(null)} onChanged={reload} />
+  }
 
   const filtered = sources.filter((s) => matchesSourceQuery(s, query))
 
@@ -65,7 +72,7 @@ export function SourcesView() {
       ) : (
         <div className="card-grid">
           {filtered.map((s) => (
-            <SourceCard key={s.id} source={s} onClick={() => setSelected(s)} />
+            <SourceCard key={s.id} source={s} onClick={() => setOpenId(s.id)} />
           ))}
         </div>
       )}
@@ -79,7 +86,6 @@ export function SourcesView() {
           }}
         />
       )}
-      {selected && <SourceDetailDialog source={selected} onClose={() => setSelected(null)} onChanged={reload} />}
     </div>
   )
 }

@@ -9,7 +9,7 @@ export async function listBookmarks(): Promise<Bookmark[]> {
   return entries.filter((b) => !b.deleted)
 }
 
-/** A single source's own bookmarks, in page order — what `SourceDetailDialog` and `ReaderMode` both actually want, rather than filtering the whole collection themselves. */
+/** A single source's own bookmarks, in page order — what `SourceWorkspace` and `ReaderMode` both actually want, rather than filtering the whole collection themselves. */
 export async function listBookmarksForSource(sourceId: string): Promise<Bookmark[]> {
   const all = await listBookmarks()
   return all.filter((b) => b.sourceId === sourceId).sort((a, b) => a.page - b.page)

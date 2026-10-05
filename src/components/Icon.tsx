@@ -42,6 +42,7 @@ export type IconName =
   | 'history'
   | 'camera'
   | 'qrcode'
+  | 'fullscreen'
 
 const STROKE = { fill: 'none', stroke: 'currentColor', strokeWidth: 2, strokeLinecap: 'round' as const, strokeLinejoin: 'round' as const }
 
@@ -323,6 +324,19 @@ export function Icon({ name, size = 18, className }: { name: IconName; size?: nu
             <rect x="14.5" y="18.5" width="2.5" height="2.5" />
             <rect x="18.5" y="18.5" width="2.5" height="2.5" />
           </g>
+        </svg>
+      )
+    case 'fullscreen':
+      // Four open corner brackets — the standard "expand to fill the
+      // screen" shorthand, distinct from an X-shaped "maximize window"
+      // icon (which this app's fullscreen reader mode isn't: closing it
+      // returns to this same page, not another window).
+      return (
+        <svg {...props} {...STROKE}>
+          <path d="M4 9V5a1 1 0 0 1 1-1h4" />
+          <path d="M15 4h4a1 1 0 0 1 1 1v4" />
+          <path d="M20 15v4a1 1 0 0 1-1 1h-4" />
+          <path d="M9 20H5a1 1 0 0 1-1-1v-4" />
         </svg>
       )
   }

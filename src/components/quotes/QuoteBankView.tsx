@@ -4,7 +4,7 @@ import { hasQuotableText, listSources } from '../../models/sourcesRepo'
 import { citationLabel, citationPage, displayAuthors, displayTitle } from '../../lib/bibtex'
 import { onSyncApplied } from '../../sync/syncEvents'
 import type { QuoteBankEntry, Source } from '../../models/types'
-import { SourceDetailDialog } from '../sources/SourceDetailDialog'
+import { SourceWorkspace } from '../sources/SourceWorkspace'
 import { Icon } from '../Icon'
 
 /**
@@ -23,7 +23,7 @@ export function QuoteBankView() {
   const [entries, setEntries] = useState<QuoteBankEntry[]>([])
   const [sources, setSources] = useState<Map<string, Source>>(new Map())
   const [query, setQuery] = useState('')
-  const [viewing, setViewing] = useState<{ source: Source; page: number } | null>(null)
+  const [viewing, setViewing] = useState<{ sourceId: string; page: number } | null>(null)
 
   async function reload() {
     const [qs, ss] = await Promise.all([listQuoteBank(), listSources()])
@@ -37,6 +37,12 @@ export function QuoteBankView() {
     // straight into IndexedDB, so this needs its own nudge to refetch.
     return onSyncApplied(reload)
   }, [])
+
+  // A quote's source opens as its own full screen (see SourceWorkspace) —
+  // "back" returns to this same quote list, not just closes a modal.
+  if (viewing) {
+    return <SourceWorkspace sourceId={viewing.sourceId} initialPage={viewing.page} onBack={() => setViewing(null)} onChanged={reload} />
+  }
 
   async function handleDelete(entryId: string) {
     if (!confirm('Remove this quote from the quote bank?')) return
@@ -82,7 +88,7 @@ export function QuoteBankView() {
                       className="btn btn-ghost btn-sm"
                       onClick={(ev) => {
                         ev.stopPropagation()
-                        setViewing({ source, page: e.page })
+                        setViewing({ sourceId: source.id, page: e.page })
                       }}
                     >
                       View in source
@@ -105,7 +111,6 @@ export function QuoteBankView() {
         </div>
       )}
 
-      {viewing && <SourceDetailDialog source={viewing.source} initialPage={viewing.page} onClose={() => setViewing(null)} onChanged={reload} />}
     </div>
   )
 }

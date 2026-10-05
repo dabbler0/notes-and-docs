@@ -219,7 +219,7 @@ export async function updateSource(source: Source): Promise<void> {
 /**
  * Records that this device just looked at `source`'s PDF/text viewer, and
  * (when given) which page — so the next time this source is opened it
- * resumes on the same page (`SourceDetailDialog`'s own initial `page`
+ * resumes on the same page (`SourceWorkspace`'s own initial `page`
  * state), and so `listSources` can order by recency of actual use rather
  * than last edit. Deliberately writes straight through `persistMeta`
  * rather than the generic `updateSource`-style content-blind write it
@@ -336,7 +336,7 @@ export async function setSourcePdf(source: Source, file: File, pageHtml: string[
 
 /**
  * Uploads a candidate re-OCR'd PDF as a standalone blob, without touching
- * the source's own saved data at all — used to let `SourceDetailDialog`
+ * the source's own saved data at all — used to let `SourceWorkspace`
  * preview a fresh OCR pass (via a throwaway `Source`-shaped object pointing
  * at this blob id) before the user decides whether to keep it. Paired with
  * `commitOcrPreview` (keep it) or `discardOcrPreview` (throw it away); the

@@ -140,7 +140,7 @@ export function emptyEntry(key: string): BibtexEntry {
  * Turns a raw page number — always the literal PDF/text-viewer page a quote
  * was taken from, the same one "View in source" navigates by — into what a
  * citation should actually display, honoring a source's own page-numbering
- * preferences (set in `SourceDetailDialog`): `null` (no page shown at all)
+ * preferences (set in `SourceWorkspace`): `null` (no page shown at all)
  * for a source marked as having no page numbers of its own, or the raw page
  * shifted by `pageOffset` otherwise. `pageOffset` can run either direction:
  * positive for a PDF with some number of unnumbered pages (a cover, a title

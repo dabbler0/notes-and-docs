@@ -156,7 +156,7 @@ function canvasToBlob(canvas: HTMLCanvasElement, type: string, quality?: number)
  * own doc comment for that caveat).
  *
  * Deliberately returns just the new bytes rather than saving them as this
- * source's PDF — the caller (`SourceDetailDialog`) is expected to let the
+ * source's PDF — the caller (`SourceWorkspace`) is expected to let the
  * user preview the result before deciding whether to keep it or discard it
  * in favor of what they already had.
  */

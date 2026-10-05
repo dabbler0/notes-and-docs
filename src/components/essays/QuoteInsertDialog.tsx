@@ -41,7 +41,7 @@ export function QuoteInsertDialog({
   const quote = active?.quote.trim() ?? ''
   const hasPdf = !!pdfSource?.pdfBlobId
   // A text-only source (its PDF discarded via "Discard PDF, keep text
-  // only" — see SourceDetailDialog) still has real pages to browse and
+  // only" — see SourceWorkspace) still has real pages to browse and
   // select from via TextViewer, same as a source with a PDF attached —
   // only a source with neither falls back to typing the quote in by hand.
   const hasExtractedText = !!pdfSource && pdfSource.pageCount > 0
