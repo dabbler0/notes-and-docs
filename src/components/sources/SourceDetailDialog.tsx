@@ -11,23 +11,52 @@ import { extractPageHtml, htmlToPlainText } from '../../lib/textExtraction'
 import { formatBytes } from '../../lib/format'
 import { describeOcrError, looksLikeScannedPdf, ocrImage, ocrPdf, reOcrPdf } from '../../lib/ocr'
 import { useSourceStorageBytes } from '../../lib/useSourceStorageBytes'
-import { commitOcrPreview, convertSourceToTextOnly, deleteSource, discardOcrPreview, getSourcePdfBlob, removeSourcePdf, setSourcePdf, stageOcrPreview, touchSourceViewed, updateSource } from '../../models/sourcesRepo'
+import { commitOcrPreview, convertSourceToTextOnly, deleteSource, discardOcrPreview, getSource, getSourcePdfBlob, removeSourcePdf, setSourcePdf, stageOcrPreview, touchSourceViewed, updateSource, updateSourceContent } from '../../models/sourcesRepo'
 import { addQuoteToBank, deleteQuoteFromBank, listQuotesForSource } from '../../models/quoteBankRepo'
 import { addBookmark, bookmarkDisplayLabel, deleteBookmark, listBookmarksForSource } from '../../models/bookmarkRepo'
 import type { Bookmark, QuoteBankEntry, Source } from '../../models/types'
 
 export function SourceDetailDialog({
-  source,
+  source: initialSource,
   initialPage,
   onClose,
   onChanged,
 }: {
+  /** The source to show — often a lightweight one straight out of
+   * `listSources()`, with accurate metadata (including `pageCount`) but
+   * no actual `pageHtml` loaded (see that field's own doc comment). This
+   * dialog fetches the real, full source itself (see the `source` state
+   * below) the moment it mounts, since actually viewing/searching/quoting
+   * a source is exactly the case `getSource` exists for. */
   source: Source
   /** Opens the PDF pane straight to this page — used by the Quotes tab's "View in source" link, so following a saved quote back to its source doesn't leave you on page 1 hunting for it. */
   initialPage?: number
   onClose: () => void
   onChanged: () => void
 }) {
+  // Starts as whatever was passed in (instant metadata — title, flags,
+  // pageCount — all already accurate; only `pageHtml` itself is typically
+  // empty) and gets replaced the moment the real fetch below resolves.
+  // Every handler in this component reads and mutates *this*, not the
+  // `initialSource` prop directly, so a save made before the fetch
+  // resolves (e.g. blurring the comment field right after opening) still
+  // lands on whichever object is current at that moment — self-correcting
+  // either way, since every editable field here is its own controlled
+  // local `useState`, only ever written back onto `source` at the moment
+  // it's actually saved, never re-read from it on every render.
+  const [source, setSource] = useState<Source>(initialSource)
+  useEffect(() => {
+    let cancelled = false
+    setSource(initialSource)
+    getSource(initialSource.id).then((full) => {
+      if (full && !cancelled) setSource(full)
+    })
+    return () => {
+      cancelled = true
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [initialSource.id])
+
   const [tab, setTab] = useState<'bibtex' | 'pdf' | 'quotes'>(initialPage ? 'pdf' : 'bibtex')
   const [comment, setComment] = useState(source.comment)
   const [noPageNumbers, setNoPageNumbers] = useState(!!source.noPageNumbers)
@@ -75,8 +104,15 @@ export function SourceDetailDialog({
   // it's now only redone when the extracted text actually changes (a fresh
   // extraction, an OCR pass), not on every page turn.
   const isScanned = useMemo(() => !!source.pdfBlobId && looksLikeScannedPdf(source.pageHtml.map(htmlToPlainText)), [source.pdfBlobId, source.pageHtml])
-  const hasViewer = !!source.pdfBlobId || (source.textOnly && source.pageHtml.length > 0)
-  const previewSource: Source | null = ocrPreview ? { ...source, pdfBlobId: ocrPreview.blobId, pageHtml: ocrPreview.pageHtml } : null
+  // `pageCount`, unlike `pageHtml.length`, is accurate even before the
+  // real-content fetch above resolves — see `Source.pageHtml`'s own doc
+  // comment — so this (and everywhere else in this component that only
+  // needs to know *whether*/*how much* text there is, not the text
+  // itself) uses it instead, same as `hasQuotableText` does.
+  const hasViewer = !!source.pdfBlobId || (source.textOnly && source.pageCount > 0)
+  const previewSource: Source | null = ocrPreview
+    ? { ...source, pdfBlobId: ocrPreview.blobId, pageHtml: ocrPreview.pageHtml, pageCount: ocrPreview.pageHtml.length }
+    : null
   const displaySource = previewSource ?? source
 
   /** Discards any staged-but-undecided re-OCR preview — called before
@@ -179,8 +215,8 @@ export function SourceDetailDialog({
       if (!blob) return
       const buf = await blob.arrayBuffer()
       const doc = await loadPdf(buf)
-      source.pageHtml = await extractPageHtml(doc, (page, total) => setPdfStatus(`Re-extracting text from PDF… (page ${page} of ${total})`), opts)
-      await updateSource(source)
+      const pageHtml = await extractPageHtml(doc, (page, total) => setPdfStatus(`Re-extracting text from PDF… (page ${page} of ${total})`), opts)
+      await updateSourceContent(source, pageHtml)
       onChanged()
     } finally {
       setPdfBusy(false)
@@ -578,7 +614,7 @@ export function SourceDetailDialog({
                 </button>
               </>
             )}
-            {source.pdfBlobId && source.pageHtml.length > 0 && (
+            {source.pdfBlobId && source.pageCount > 0 && (
               <>
                 {' · '}
                 <button type="button" className="btn-link-muted" disabled={pdfBusy || !!ocrPreview} onClick={handleConvertToTextOnly}>
@@ -586,7 +622,7 @@ export function SourceDetailDialog({
                 </button>
               </>
             )}
-            {source.pageHtml.length > 0 && (
+            {source.pageCount > 0 && (
               <>
                 {' · '}
                 <button

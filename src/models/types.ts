@@ -16,30 +16,44 @@ export interface Source {
   pdfFileName?: string
   /**
    * Per-page extracted content, for reading (`TextViewer`), search, and
-   * quoting. Empty if no PDF. Real HTML, not plain text — enrichable rather
-   * than just a flat string — produced by layout extraction
-   * (`extractLayoutPageHtml` in `lib/textExtraction.ts`): each run of text
-   * positioned, sized, and colored to match the original page, with images
-   * reinserted where they were (unless extracted with images skipped — see
-   * `LayoutExtractionOptions`). A source extracted before layout extraction
-   * became the only extractor may instead hold plain, unstyled HTML (a
-   * `<p>` per paragraph, a `<br>` per line break, nothing else) from the
-   * extractor that used to exist alongside it. Wherever this
+   * quoting. Real HTML, not plain text — enrichable rather than just a
+   * flat string — produced by layout extraction (`extractLayoutPageHtml`
+   * in `lib/textExtraction.ts`): each run of text positioned, sized, and
+   * colored to match the original page, with images reinserted where they
+   * were (unless extracted with images skipped — see
+   * `LayoutExtractionOptions`). A source extracted before layout
+   * extraction became the only extractor may instead hold plain, unstyled
+   * HTML (a `<p>` per paragraph, a `<br>` per line break, nothing else)
+   * from the extractor that used to exist alongside it. Wherever this
    * needs to be searched, scanned for "does this look like a scanned PDF,"
    * or shown as a short plain-text snippet rather than actually rendered,
    * `htmlToPlainText` (`lib/textExtraction.ts`) reduces it back down first
-   * — nothing else should assume this is plain text. A source saved before
-   * `pageHtml` existed (when this field was `pageTexts: string[]`, genuine
-   * plain text) gets migrated the moment it's loaded — see `sourcesRepo.ts`'s
-   * own doc comment on `normalizeSource`.
+   * — nothing else should assume this is plain text.
    *
-   * This is the shape every other part of the app sees and works with —
-   * `sourcesRepo.ts` is the only place that ever touches how it's actually
-   * stored, which is gzip-compressed (see that module's doc comment) rather
-   * than this plain array; nothing outside that module should assume
-   * anything about the on-disk shape from this field's type.
+   * **Often empty (`[]`) even for a source that genuinely has pages** —
+   * `sourcesRepo.ts` stores this field in its own `sourceContent` record,
+   * separate from the rest of the source, specifically so listing sources
+   * (`listSources`) never has to load it at all; only `getSource` (one
+   * specific source, fetched to actually view/search/quote it) populates
+   * it for real. `pageCount` below is always accurate regardless of
+   * whether this is loaded — check that, never `pageHtml.length`, for
+   * "does this source have extracted text" or "how many pages." When this
+   * *is* loaded, `pageHtml.length === pageCount` always holds.
    */
   pageHtml: string[]
+  /** Always accurate, whether or not `pageHtml` above is actually loaded —
+   * see its own doc comment. Set by whatever last wrote this source's
+   * content (`sourcesRepo.ts`'s `updateSourceContent`/`createSource`), 0
+   * for a BibTeX-only source with nothing extracted. */
+  pageCount: number
+  /** This source's extracted-text content as it actually sits on disk,
+   * compressed (see `sourcesRepo.ts`'s own doc comment on
+   * `StoredSourceContent`) — always accurate without needing `pageHtml`
+   * loaded, the same way `pageCount` is. 0 when `pageCount` is 0. Used for
+   * the "how much space is this using" display (`getSourceStorageBytes`),
+   * which would otherwise need to recompress a source's full text just to
+   * report its own size every time a source list renders. */
+  contentBytes: number
   /**
    * True once the original PDF has been discarded and only its extracted
    * `pageHtml` is kept (see `convertSourceToTextOnly` in

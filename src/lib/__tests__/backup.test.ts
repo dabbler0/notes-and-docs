@@ -49,6 +49,8 @@ function oldFormatManifest(): Omit<BackupManifest, 'quotes' | 'graveyard'> {
     bibtex: { type: 'article', key: 'old2019', fields: { title: 'Old Paper' } },
     comment: '',
     pageHtml: [],
+    pageCount: 0,
+    contentBytes: 0,
     createdAt: now,
     updatedAt: now,
   }

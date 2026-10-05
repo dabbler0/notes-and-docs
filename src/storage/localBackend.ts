@@ -1,4 +1,6 @@
 import { gzipCompressBytes, gzipDecompressBytes } from '../lib/compression'
+import { runMigrations } from './migrations'
+import { ALL_MIGRATIONS } from './migrationRegistry'
 import type { Backend, BlobStore, DocStore } from './types'
 
 const DB_NAME = 'marginal'
@@ -31,67 +33,128 @@ function openDb(): Promise<IDBDatabase> {
   })
 }
 
-let dbPromise: Promise<IDBDatabase> | null = null
-function db() {
-  if (!dbPromise) dbPromise = openDb()
-  return dbPromise
-}
-
 function key(collection: string, id: string) {
   return `${collection}/${id}`
+}
+
+// The same four operations `IndexedDbDocStore` exposes below, but taking an
+// already-open connection directly instead of awaiting `db()` — `db()`
+// itself needs these to run migrations *before* it considers the
+// connection ready to hand out, so going through `db()` again here would
+// deadlock (it's still awaiting its own promise). `IndexedDbDocStore`'s
+// methods below are thin wrappers around these once `db()` has resolved;
+// migrations (see `runPendingMigrations`) are the one caller that uses
+// them directly, against the connection `openDb()` just produced.
+function rawGet<T>(conn: IDBDatabase, collection: string, id: string): Promise<T | undefined> {
+  return new Promise((resolve, reject) => {
+    const tx = conn.transaction(STORE, 'readonly')
+    const req = tx.objectStore(STORE).get(key(collection, id))
+    req.onsuccess = () => resolve(req.result as T | undefined)
+    req.onerror = () => reject(req.error)
+  })
+}
+
+function rawPut<T extends { id: string }>(conn: IDBDatabase, collection: string, doc: T): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const tx = conn.transaction(STORE, 'readwrite')
+    tx.objectStore(STORE).put(doc, key(collection, doc.id))
+    tx.oncomplete = () => resolve()
+    tx.onerror = () => reject(tx.error)
+  })
+}
+
+function rawDelete(conn: IDBDatabase, collection: string, id: string): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const tx = conn.transaction(STORE, 'readwrite')
+    tx.objectStore(STORE).delete(key(collection, id))
+    tx.oncomplete = () => resolve()
+    tx.onerror = () => reject(tx.error)
+  })
+}
+
+function rawList<T>(conn: IDBDatabase, collection: string): Promise<T[]> {
+  return new Promise((resolve, reject) => {
+    const tx = conn.transaction(STORE, 'readonly')
+    const store = tx.objectStore(STORE)
+    const range = IDBKeyRange.bound(collection + '/', collection + '/￿')
+    const req = store.openCursor(range)
+    const out: T[] = []
+    req.onsuccess = () => {
+      const cursor = req.result
+      if (cursor) {
+        out.push(cursor.value as T)
+        cursor.continue()
+      } else {
+        resolve(out)
+      }
+    }
+    req.onerror = () => reject(req.error)
+  })
+}
+
+function rawListSince<T>(conn: IDBDatabase, collection: string, since: number): Promise<T[]> {
+  return new Promise((resolve, reject) => {
+    const tx = conn.transaction(STORE, 'readonly')
+    const index = tx.objectStore(STORE).index(UPDATED_AT_INDEX)
+    const range = IDBKeyRange.lowerBound(since, true) // exclusive: strictly greater than `since`, matching list()+filter's `> since`
+    const req = index.openCursor(range)
+    const prefix = collection + '/'
+    const out: T[] = []
+    req.onsuccess = () => {
+      const cursor = req.result
+      if (cursor) {
+        if (typeof cursor.primaryKey === 'string' && cursor.primaryKey.startsWith(prefix)) out.push(cursor.value as T)
+        cursor.continue()
+      } else {
+        resolve(out)
+      }
+    }
+    req.onerror = () => reject(req.error)
+  })
+}
+
+/** Runs every pending data migration (see `storage/migrations.ts`) against
+ * a freshly-opened connection, directly — not through `IndexedDbDocStore`,
+ * which would recurse back into `db()` before it's resolved (see the note
+ * on the raw functions above). */
+function runPendingMigrations(conn: IDBDatabase): Promise<void> {
+  const ctx: DocStore = {
+    get: (collection, id) => rawGet(conn, collection, id),
+    put: (collection, doc) => rawPut(conn, collection, doc),
+    delete: (collection, id) => rawDelete(conn, collection, id),
+    list: (collection) => rawList(conn, collection),
+    listSince: (collection, since) => rawListSince(conn, collection, since),
+  }
+  return runMigrations(ctx, ALL_MIGRATIONS)
+}
+
+let dbPromise: Promise<IDBDatabase> | null = null
+function db() {
+  if (!dbPromise) {
+    dbPromise = openDb().then(async (conn) => {
+      await runPendingMigrations(conn)
+      return conn
+    })
+  }
+  return dbPromise
 }
 
 /** IndexedDB-backed DocStore. */
 class IndexedDbDocStore implements DocStore {
   async get<T>(collection: string, id: string): Promise<T | undefined> {
-    const conn = await db()
-    return new Promise((resolve, reject) => {
-      const tx = conn.transaction(STORE, 'readonly')
-      const req = tx.objectStore(STORE).get(key(collection, id))
-      req.onsuccess = () => resolve(req.result as T | undefined)
-      req.onerror = () => reject(req.error)
-    })
+    return rawGet<T>(await db(), collection, id)
   }
 
   async put<T extends { id: string }>(collection: string, doc: T): Promise<void> {
-    const conn = await db()
-    return new Promise((resolve, reject) => {
-      const tx = conn.transaction(STORE, 'readwrite')
-      tx.objectStore(STORE).put(doc, key(collection, doc.id))
-      tx.oncomplete = () => resolve()
-      tx.onerror = () => reject(tx.error)
-    })
+    return rawPut(await db(), collection, doc)
   }
 
   async delete(collection: string, id: string): Promise<void> {
-    const conn = await db()
-    return new Promise((resolve, reject) => {
-      const tx = conn.transaction(STORE, 'readwrite')
-      tx.objectStore(STORE).delete(key(collection, id))
-      tx.oncomplete = () => resolve()
-      tx.onerror = () => reject(tx.error)
-    })
+    return rawDelete(await db(), collection, id)
   }
 
   async list<T>(collection: string): Promise<T[]> {
-    const conn = await db()
-    return new Promise((resolve, reject) => {
-      const tx = conn.transaction(STORE, 'readonly')
-      const store = tx.objectStore(STORE)
-      const range = IDBKeyRange.bound(collection + '/', collection + '/￿')
-      const req = store.openCursor(range)
-      const out: T[] = []
-      req.onsuccess = () => {
-        const cursor = req.result
-        if (cursor) {
-          out.push(cursor.value as T)
-          cursor.continue()
-        } else {
-          resolve(out)
-        }
-      }
-      req.onerror = () => reject(req.error)
-    })
+    return rawList<T>(await db(), collection)
   }
 
   /**
@@ -107,27 +170,10 @@ class IndexedDbDocStore implements DocStore {
    * way pushing a non-matching record into the results would.
    */
   async listSince<T>(collection: string, since: number): Promise<T[]> {
-    const conn = await db()
-    return new Promise((resolve, reject) => {
-      const tx = conn.transaction(STORE, 'readonly')
-      const index = tx.objectStore(STORE).index(UPDATED_AT_INDEX)
-      const range = IDBKeyRange.lowerBound(since, true) // exclusive: strictly greater than `since`, matching list()+filter's `> since`
-      const req = index.openCursor(range)
-      const prefix = collection + '/'
-      const out: T[] = []
-      req.onsuccess = () => {
-        const cursor = req.result
-        if (cursor) {
-          if (typeof cursor.primaryKey === 'string' && cursor.primaryKey.startsWith(prefix)) out.push(cursor.value as T)
-          cursor.continue()
-        } else {
-          resolve(out)
-        }
-      }
-      req.onerror = () => reject(req.error)
-    })
+    return rawListSince<T>(await db(), collection, since)
   }
 }
+
 
 async function rawBlobGet(id: string): Promise<unknown> {
   const conn = await db()

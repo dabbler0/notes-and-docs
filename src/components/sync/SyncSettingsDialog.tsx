@@ -587,7 +587,9 @@ function AccountPanel({ uid, onKeyForgotten }: { uid: string; onKeyForgotten: ()
       return
     setStatus({ kind: 'running', message: `Discarding local ${label} changes…` })
     try {
-      await discardLocalChanges(collections.flatMap((c) => (c === 'essays' ? (['essays', 'nodes'] as const) : ([c] as const))))
+      await discardLocalChanges(
+        collections.flatMap((c) => (c === 'essays' ? (['essays', 'nodes'] as const) : (['sources', 'sourceContent'] as const))),
+      )
       await handleSync()
     } catch (err) {
       setStatus({ kind: 'error', message: err instanceof Error ? err.message : String(err) })

@@ -7,6 +7,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { commitOcrPreview, convertSourceToTextOnly, createSource, discardOcrPreview, getSource, getSourcePdfBlob, getSourceStorageBytes, hasQuotableText, listSources, removeSourcePdf, searchPdfBank, setSourcePdf, stageOcrPreview, touchSourceViewed, updateSource } from '../sourcesRepo'
 import { emptyEntry } from '../../lib/bibtex'
 import { gzipCompress, gzipDecompress } from '../../lib/compression'
+import { runMigrations } from '../../storage/migrations'
+import { sourcesMigrations } from '../sourcesMigrations'
 
 /** `getSourceStorageBytes`' own expected value for a text-only source: the
  * compressed size actually written to disk (see `sourcesRepo.ts`'s doc
@@ -260,9 +262,24 @@ describe('listSources ordering', () => {
   })
 })
 
-describe('migrating an old source stored with pageTexts instead of pageHtml', () => {
+/**
+ * These exercise the *formal* migration chain (see `storage/migrations.ts`
+ * and `models/sourcesMigrations.ts`) directly against the fake backend's
+ * own `DocStore`, the same way `localBackend.ts`'s real `db()` runs it
+ * once against a real IndexedDB connection — `sourcesRepo.ts`'s own
+ * `getSource`/`listSources` no longer do any of this lazily themselves
+ * (see `runLegacyMigrations` below, and the describe block further down
+ * for the one case they still *do* handle lazily: a doc arriving via sync
+ * mid-split, after migrations already ran this session).
+ */
+describe('the formal migration chain (pageTexts -> pageHtml -> compressed -> split)', () => {
+  async function fakeDocStore() {
+    const { backend } = (await import('../../storage')) as unknown as { backend: { docs: { put: (collection: string, doc: any) => Promise<void>; get: (collection: string, id: string) => Promise<any>; list: (collection: string) => Promise<any[]>; delete: (collection: string, id: string) => Promise<void>; listSince: (collection: string, since: number) => Promise<any[]> } } }
+    return backend.docs
+  }
+
   async function putLegacySource(overrides: Record<string, unknown> = {}) {
-    const { backend } = (await import('../../storage')) as unknown as { backend: { docs: { put: (collection: string, doc: any) => Promise<void> } } }
+    const docs = await fakeDocStore()
     const legacy = {
       id: 'legacy-1',
       bibtex: emptyEntry('legacy2019'),
@@ -272,34 +289,35 @@ describe('migrating an old source stored with pageTexts instead of pageHtml', ()
       updatedAt: 1,
       ...overrides,
     }
-    await backend.docs.put('sources', legacy)
+    await docs.put('sources', legacy)
     return legacy
   }
 
-  it('getSource converts pageTexts to the equivalent pageHtml', async () => {
+  /** Simulates the app starting up against a database that already has
+   * this legacy data sitting in it — the same thing `localBackend.ts`'s
+   * `db()` does once, for real, against the actual IndexedDB connection. */
+  async function runLegacyMigrations() {
+    const docs = await fakeDocStore()
+    await runMigrations(docs, sourcesMigrations)
+  }
+
+  it('converts legacy pageTexts all the way through to a split sourceContent record', async () => {
     await putLegacySource()
+    await runLegacyMigrations()
+
     const source = await getSource('legacy-1')
     expect(source).toBeDefined()
     expect((source as any).pageTexts).toBeUndefined()
     expect(source!.pageHtml).toEqual(['<p>First paragraph.<br>With a line break.</p>', '<p>Second page.</p>'])
-  })
+    expect(source!.pageCount).toBe(2)
 
-  it('listSources converts it too, and filters out a deleted legacy source same as any other', async () => {
-    await putLegacySource()
-    await putLegacySource({ id: 'legacy-2', deleted: true })
-    const sources = await listSources()
-    expect(sources).toHaveLength(1)
-    expect(sources[0].pageHtml).toEqual(['<p>First paragraph.<br>With a line break.</p>', '<p>Second page.</p>'])
-  })
-
-  it('persists the migration (compressed) so a second read never sees pageTexts again', async () => {
-    await putLegacySource()
-    await getSource('legacy-1')
-
-    const { backend } = (await import('../../storage')) as unknown as { backend: { docs: { get: (collection: string, id: string) => Promise<any> } } }
-    const raw = await backend.docs.get('sources', 'legacy-1')
+    const docs = await fakeDocStore()
+    const raw = await docs.get('sources', 'legacy-1')
     expect(raw.pageTexts).toBeUndefined()
     expect(raw.pageHtml).toBeUndefined()
+    expect(raw.pageHtmlCompressed).toBeUndefined() // moved out to sourceContent by migration 3
+    expect(raw.pageCount).toBe(2)
+    const content = await docs.get('sourceContent', 'legacy-1')
     // Not `toBeInstanceOf(Uint8Array)` — this project's own worker-pool test
     // setup can hand back a `Uint8Array` from a different realm than this
     // file's own `Uint8Array` binding (confirmed directly: `instanceof`
@@ -307,25 +325,39 @@ describe('migrating an old source stored with pageTexts instead of pageHtml', ()
     // `[object Uint8Array]`), the same real cross-realm gotcha
     // `lib/crypto.ts`'s `jsonReplacer` had to work around for the same
     // reason. Checking the tag directly instead is realm-agnostic.
-    expect(Object.prototype.toString.call(raw.pageHtmlCompressed)).toBe('[object Uint8Array]')
-    expect(JSON.parse(await gzipDecompress(raw.pageHtmlCompressed))).toEqual(['<p>First paragraph.<br>With a line break.</p>', '<p>Second page.</p>'])
+    expect(Object.prototype.toString.call(content.pageHtmlCompressed)).toBe('[object Uint8Array]')
+    expect(JSON.parse(await gzipDecompress(content.pageHtmlCompressed))).toEqual(['<p>First paragraph.<br>With a line break.</p>', '<p>Second page.</p>'])
   })
 
-  it('does not touch updatedAt — the migration is a pure local storage-shape upgrade, not a real edit', async () => {
+  it('listSources reflects the migration too, and filters out a deleted legacy source same as any other', async () => {
+    await putLegacySource()
+    await putLegacySource({ id: 'legacy-2', deleted: true })
+    await runLegacyMigrations()
+
+    const sources = await listSources()
+    expect(sources).toHaveLength(1)
+    expect(sources[0].pageCount).toBe(2)
+    expect(sources[0].pageHtml).toEqual([]) // listSources never loads content — see Source.pageHtml's own doc comment
+  })
+
+  it('does not touch updatedAt — every step is a pure local storage-shape upgrade, not a real edit', async () => {
     await putLegacySource({ updatedAt: 12345 })
+    await runLegacyMigrations()
     const source = await getSource('legacy-1')
     expect(source!.updatedAt).toBe(12345)
   })
 
-  it('round-trips a source already on the current compressed shape unchanged', async () => {
+  it('round-trips a source already on the current shape unchanged', async () => {
     const source = await createSource(emptyEntry('x2020'), { pageHtml: ['<p>Already migrated.</p>'] })
+    await runLegacyMigrations() // a no-op here — nothing for it to do
     const reloaded = await getSource(source.id)
     expect(reloaded!.pageHtml).toEqual(['<p>Already migrated.</p>'])
+    expect(reloaded!.pageCount).toBe(1)
   })
 
-  it('migrates an old *uncompressed* pageHtml shape (from before compression existed) to the compressed one', async () => {
-    const { backend } = (await import('../../storage')) as unknown as { backend: { docs: { put: (collection: string, doc: any) => Promise<void>; get: (collection: string, id: string) => Promise<any> } } }
-    await backend.docs.put('sources', {
+  it('migrates an old *uncompressed* pageHtml shape (from before compression existed) all the way to split', async () => {
+    const docs = await fakeDocStore()
+    await docs.put('sources', {
       id: 'uncompressed-1',
       bibtex: emptyEntry('uncompressed2020'),
       comment: '',
@@ -333,12 +365,60 @@ describe('migrating an old source stored with pageTexts instead of pageHtml', ()
       createdAt: 1,
       updatedAt: 1,
     })
+    await runLegacyMigrations()
 
     const source = await getSource('uncompressed-1')
     expect(source!.pageHtml).toEqual(['<p>Not compressed yet.</p>'])
 
-    const raw = await backend.docs.get('sources', 'uncompressed-1')
+    const raw = await docs.get('sources', 'uncompressed-1')
     expect(raw.pageHtml).toBeUndefined()
-    expect(Object.prototype.toString.call(raw.pageHtmlCompressed)).toBe('[object Uint8Array]')
+    expect(raw.pageHtmlCompressed).toBeUndefined()
+    expect(raw.pageCount).toBe(1)
+    expect(Object.prototype.toString.call((await docs.get('sourceContent', 'uncompressed-1')).pageHtmlCompressed)).toBe('[object Uint8Array]')
+  })
+
+  it('backfills pageCount/contentBytes (both 0) for a pre-existing BibTeX-only source with no content field at all', async () => {
+    const docs = await fakeDocStore()
+    await docs.put('sources', { id: 'bibtex-only-1', bibtex: emptyEntry('nopdf2020'), comment: '', createdAt: 1, updatedAt: 1 })
+    await runLegacyMigrations()
+
+    const source = await getSource('bibtex-only-1')
+    expect(source!.pageCount).toBe(0)
+    expect(source!.contentBytes).toBe(0)
+    expect(source!.pageHtml).toEqual([])
+  })
+})
+
+/**
+ * `ensureSplit` (internal to `sourcesRepo.ts`) is the one place that *does*
+ * still lazily handle an old shape at read time — not for this device's
+ * own historical data (the formal migration above owns that), but for a
+ * doc arriving via sync from another device that's still running
+ * pre-split code, which can show up at any time, long after this
+ * session's migrations already ran once. Simulated here the same way: put
+ * an already-inline-shaped record directly (as a sync pull would), with
+ * no migration pass run first.
+ */
+describe('self-healing a record that arrives already-inline (the cross-device sync-skew case)', () => {
+  it('getSource splits it out on read, without needing a migration pass', async () => {
+    const docs = (await import('../../storage')) as unknown as { backend: { docs: { put: (collection: string, doc: any) => Promise<void>; get: (collection: string, id: string) => Promise<any> } } }
+    const pageHtmlCompressed = await gzipCompress(JSON.stringify(['<p>Pulled from an older device.</p>']))
+    await docs.backend.docs.put('sources', { id: 'pulled-1', bibtex: emptyEntry('pulled2021'), comment: '', pageHtmlCompressed, createdAt: 1, updatedAt: 1 })
+
+    const source = await getSource('pulled-1')
+    expect(source!.pageHtml).toEqual(['<p>Pulled from an older device.</p>'])
+    expect(source!.pageCount).toBe(1)
+
+    const raw = await docs.backend.docs.get('sources', 'pulled-1')
+    expect(raw.pageHtmlCompressed).toBeUndefined()
+    expect(raw.pageCount).toBe(1)
+  })
+
+  it('does not bump updatedAt', async () => {
+    const docs = (await import('../../storage')) as unknown as { backend: { docs: { put: (collection: string, doc: any) => Promise<void> } } }
+    const pageHtmlCompressed = await gzipCompress(JSON.stringify(['text']))
+    await docs.backend.docs.put('sources', { id: 'pulled-2', bibtex: emptyEntry('pulled2022'), comment: '', pageHtmlCompressed, createdAt: 1, updatedAt: 999 })
+    const source = await getSource('pulled-2')
+    expect(source!.updatedAt).toBe(999)
   })
 })

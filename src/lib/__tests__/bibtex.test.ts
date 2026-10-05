@@ -8,6 +8,8 @@ function source(overrides: Partial<Source> = {}): Source {
     bibtex: { type: 'article', key: 'smith2020', fields: { author: 'Smith', year: '2020' } },
     comment: '',
     pageHtml: [],
+    pageCount: 0,
+    contentBytes: 0,
     createdAt: 0,
     updatedAt: 0,
     ...overrides,

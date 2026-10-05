@@ -5,7 +5,7 @@ import { TextViewer } from '../sources/TextViewer'
 import { Icon } from '../Icon'
 import { citationLabel, citationPage, displayAuthors, displayTitle } from '../../lib/bibtex'
 import { describeOcrError, ocrImage } from '../../lib/ocr'
-import { listSources, matchesSourceQuery } from '../../models/sourcesRepo'
+import { getSource, listSources, matchesSourceQuery } from '../../models/sourcesRepo'
 import { listQuoteBank, matchesQuoteQuery } from '../../models/quoteBankRepo'
 import type { QuoteBankEntry, Source } from '../../models/types'
 
@@ -31,6 +31,7 @@ export function QuoteInsertDialog({
 }) {
   const [tab, setTab] = useState<'source' | 'bank'>('source')
   const [pdfSource, setPdfSource] = useState<Source | null>(null)
+  const [loadingSource, setLoadingSource] = useState(false)
   const [pdfPage, setPdfPage] = useState(1)
   const [pdfQuote, setPdfQuote] = useState('')
   const [picked, setPicked] = useState<Picked | null>(null)
@@ -43,17 +44,30 @@ export function QuoteInsertDialog({
   // only" — see SourceDetailDialog) still has real pages to browse and
   // select from via TextViewer, same as a source with a PDF attached —
   // only a source with neither falls back to typing the quote in by hand.
-  const hasExtractedText = !!pdfSource && pdfSource.pageHtml.length > 0
+  const hasExtractedText = !!pdfSource && pdfSource.pageCount > 0
   const hasViewer = hasPdf || hasExtractedText
 
-  function handlePickSource(s: Source) {
-    setPdfSource(s)
+  /** `InlineSourcePicker` only ever offers a source straight out of
+   * `listSources()` — lightweight, with no extracted text actually loaded
+   * (see `Source.pageHtml`'s own doc comment) — but the PDF/text viewer
+   * right below needs the real thing to render or search anything. Fetches
+   * the full source before showing it; `loadingSource` covers the brief
+   * gap so a text-only source doesn't flash "no extracted text" before its
+   * real content arrives. */
+  async function handlePickSource(s: Source) {
     setPdfQuote('')
-    // A PDF or text-only source has a real "current page" to track as the
-    // viewer turns pages; a source with neither has nothing to default it
-    // from, so it starts unset (0 — falsy, so citationHtml() below leaves
-    // the page number off entirely until/unless the user types one in).
-    setPdfPage(s.pdfBlobId || s.pageHtml.length > 0 ? 1 : 0)
+    setLoadingSource(true)
+    try {
+      const full = (await getSource(s.id)) ?? s
+      setPdfSource(full)
+      // A PDF or text-only source has a real "current page" to track as the
+      // viewer turns pages; a source with neither has nothing to default it
+      // from, so it starts unset (0 — falsy, so citationHtml() below leaves
+      // the page number off entirely until/unless the user types one in).
+      setPdfPage(full.pdfBlobId || full.pageCount > 0 ? 1 : 0)
+    } finally {
+      setLoadingSource(false)
+    }
   }
 
   /**
@@ -87,7 +101,9 @@ export function QuoteInsertDialog({
       </div>
 
       {tab === 'source' ? (
-        pdfSource ? (
+        loadingSource ? (
+          <p className="muted">Loading source…</p>
+        ) : pdfSource ? (
           <>
             {hasPdf ? (
               <>
@@ -207,7 +223,7 @@ function InlineSourcePicker({ onSelect }: { onSelect: (s: Source) => void }) {
             <div className="card-title">{displayTitle(s.bibtex)}</div>
             <div className="card-meta">
               {displayAuthors(s.bibtex) || 'Unknown author'} {s.bibtex.fields.year ? `· ${s.bibtex.fields.year}` : ''}
-              {!s.pdfBlobId && (s.textOnly && s.pageHtml.length > 0 ? ' · text only' : ' · no PDF attached')}
+              {!s.pdfBlobId && (s.textOnly && s.pageCount > 0 ? ' · text only' : ' · no PDF attached')}
             </div>
           </div>
         ))}

@@ -52,10 +52,19 @@ describe('basic push/pull round trip', () => {
     await a.sync()
     await b.sync()
 
-    const [source] = await b.listSources()
-    expect(source.bibtex.fields.title).toBe('A Paper')
-    expect(source.comment).toBe('good stuff')
-    expect(source.pageHtml).toEqual(['page one text'])
+    // listSources() is the lightweight, metadata-only path (see
+    // Source.pageHtml's own doc comment) — its own pageCount still has to
+    // be correct post-sync, but the actual text only comes from getSource,
+    // which means the content half (a separate synced collection — see
+    // sync/collections.ts) made the round trip too, not just metadata.
+    const [listed] = await b.listSources()
+    expect(listed.bibtex.fields.title).toBe('A Paper')
+    expect(listed.comment).toBe('good stuff')
+    expect(listed.pageHtml).toEqual([])
+    expect(listed.pageCount).toBe(1)
+
+    const full = await b.getSource(listed.id)
+    expect(full?.pageHtml).toEqual(['page one text'])
   })
 
   it('round-trips a PDF blob byte-for-byte through the chunking scheme', { timeout: 20_000 }, async () => {

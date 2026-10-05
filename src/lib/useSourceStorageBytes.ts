@@ -3,11 +3,15 @@ import { getSourceStorageBytes } from '../models/sourcesRepo'
 import type { Source } from '../models/types'
 
 /** Loads a source's on-disk footprint (see `getSourceStorageBytes`) lazily
- * — a metadata-only IndexedDB read (`blobs.sizeOf`, not a full read of the
- * PDF blob's own possibly-compressed bytes) or a `gzipCompress(...)
- * .byteLength` over the extracted text, cheap but still async, so this
- * starts out `null` ("not known yet") rather than blocking whatever
- * renders it. */
+ * — a metadata-only IndexedDB read (`blobs.sizeOf`) for a PDF, or just
+ * `source.contentBytes` itself for text-only (no read at all, let alone a
+ * decompress/recompress), so this starts out `null` ("not known yet")
+ * mostly for the PDF case's one genuinely async read, rather than because
+ * computing it is ever actually slow. Depends on `contentBytes`/
+ * `pdfBlobId`/`textOnly` specifically (not `pageHtml`, which this never
+ * touches and which usually isn't even loaded — see that field's own doc
+ * comment on `Source`) so this doesn't re-fire on an identity change that
+ * has nothing to do with what it's actually reporting. */
 export function useSourceStorageBytes(source: Source): number | null {
   const [bytes, setBytes] = useState<number | null>(null)
 
@@ -20,7 +24,7 @@ export function useSourceStorageBytes(source: Source): number | null {
     return () => {
       cancelled = true
     }
-  }, [source.id, source.pdfBlobId, source.textOnly, source.pageHtml])
+  }, [source.id, source.pdfBlobId, source.textOnly, source.contentBytes])
 
   return bytes
 }

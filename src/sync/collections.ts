@@ -6,8 +6,15 @@
  * `getAccountMeta`/`setAccountMeta`/`markEncryptionVersion`).
  */
 
-/** Every top-level collection under `accounts/{uid}/...` that holds real user data — `wipeRemoteAccountData` (account reset) and `migrateAccountEncryption` (below) both need this same list, and used to each hardcode their own slightly-stale copy. */
-export const SYNCED_COLLECTIONS = ['essays', 'nodes', 'sources', 'quotes', 'graveyard', 'bookmarks'] as const
+/** Every top-level collection under `accounts/{uid}/...` that holds real user data — `wipeRemoteAccountData` (account reset) and `migrateAccountEncryption` (below) both need this same list, and used to each hardcode their own slightly-stale copy.
+ *
+ * `sourceContent` holds a source's own extracted page text, split out of
+ * its `sources` record locally (see `sourcesRepo.ts`'s own doc comment on
+ * `StoredSourceMeta`) specifically so listing sources never has to load
+ * it — it syncs as its own independent collection for the same reason:
+ * nothing about pulling/pushing a library's worth of BibTeX metadata
+ * should have to also move everyone's extracted text around with it. */
+export const SYNCED_COLLECTIONS = ['essays', 'nodes', 'sources', 'sourceContent', 'quotes', 'graveyard', 'bookmarks'] as const
 export type SyncedCollection = (typeof SYNCED_COLLECTIONS)[number]
 
 /**

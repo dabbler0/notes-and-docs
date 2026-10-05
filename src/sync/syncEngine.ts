@@ -113,35 +113,41 @@ function withTimeout<T>(promise: Promise<T>, what: string): Promise<T> {
  * what: Firestore needs to filter/sort on it server-side for incremental
  * sync's own `where('updatedAt', '>', cursor)` queries to work at all.
  *
- * `sources.pageHtmlCompressed` was `pageHtml` (and, before that,
- * `pageTexts`) before `sourcesRepo.ts` started storing it gzip-compressed
- * (see that module's own doc comment on `StoredSource`) — same field, same
- * sensitivity, just renamed and now carrying a `Uint8Array` instead of a
- * `string[]`; not an encryption-policy change, so it didn't need a
- * `CURRENT_ENCRYPTION_VERSION` bump the way an actual change to *which*
- * fields get encrypted would. `encryptJson`/`decryptJson` (`lib/crypto.ts`)
- * already know how to carry a `Uint8Array` value through JSON untouched, so
- * this field needs no special handling here beyond its name — compression
- * happens below this module entirely, in `sourcesRepo.ts`, before a doc
- * ever reaches here to be encrypted, which is also why the *encrypted*
- * payload ends up smaller too, not just what's stored locally.
+ * `sourceContent.pageHtmlCompressed` is a source's own extracted page
+ * text — `sources.pageHtmlCompressed`/`pageHtml`/`pageTexts` were the
+ * same field, same sensitivity, under three successively older on-disk
+ * shapes (see `sourcesRepo.ts`'s own doc comment on `StoredSourceMeta`,
+ * and `models/sourcesMigrations.ts`), the most recent of which moved it
+ * off the `sources` record entirely into this separate collection —
+ * nothing about *which* data is sensitive changed across any of this, so
+ * none of it needed a `CURRENT_ENCRYPTION_VERSION` bump the way an actual
+ * change to *which* fields get encrypted would. `encryptJson`/
+ * `decryptJson` (`lib/crypto.ts`) already know how to carry a `Uint8Array`
+ * value through JSON untouched, so this field needs no special handling
+ * here beyond its name — compression happens below this module entirely,
+ * in `sourcesRepo.ts`, before a doc ever reaches here to be encrypted,
+ * which is also why the *encrypted* payload ends up smaller too, not just
+ * what's stored locally.
  *
- * `pageHtml` and `pageTexts` stay listed here too, even though nothing
- * ever *writes* those field names anymore — this module reads a source's
- * raw stored shape straight off `backend.docs.list`, bypassing
- * `sourcesRepo.ts`'s own read path (`listSources`/`getSource`), which is
- * the only place that actually migrates an old shape to the current one.
- * A source that predates this device's upgrade and hasn't been opened
- * (and thus migrated) yet could still be sitting in local storage under
- * either older name the moment a sync pass runs — dropping them from this
- * list the moment the field was renamed would have pushed that doc's
- * still-unmigrated, still-sensitive page content as *plaintext* metadata
- * instead of encrypting it.
+ * `sources.pageHtmlCompressed`/`pageHtml`/`pageTexts` stay listed here
+ * too, even though nothing ever *writes* those field names onto a
+ * `sources` record anymore — this module reads a source's raw stored
+ * shape straight off `backend.docs.list`, bypassing `sourcesRepo.ts`'s own
+ * read path (`listSources`/`getSource`), which is the only place that
+ * actually migrates/splits an old shape into the current one. A source
+ * that predates this device's upgrade and hasn't been opened (and thus
+ * migrated) yet, or one just pulled down from a device that's still
+ * running older code, could still be sitting in local storage with its
+ * page text inline under any of these older names the moment a sync pass
+ * runs — dropping them from this list the moment each field was
+ * renamed/moved would have pushed that doc's still-unmigrated, still-
+ * sensitive page content as *plaintext* metadata instead of encrypting it.
  */
 const SENSITIVE_FIELDS: Record<SyncedCollection, string[]> = {
   essays: ['title'],
   nodes: ['title', 'draftContent', 'versions', 'footnotes'],
   sources: ['bibtex', 'comment', 'pdfFileName', 'pageHtmlCompressed', 'pageHtml', 'pageTexts'],
+  sourceContent: ['pageHtmlCompressed'],
   quotes: ['quoteText', 'annotation', 'page'],
   graveyard: ['html', 'nodeTitle'],
   bookmarks: ['label', 'page'],
@@ -259,6 +265,7 @@ export interface SyncCounts {
   essays: number
   nodes: number
   sources: number
+  sourceContent: number
   quotes: number
   graveyard: number
   bookmarks: number
@@ -695,8 +702,8 @@ async function runSyncPassNow(onProgress?: (message: string) => void): Promise<S
   const cursors = loadCursors()
   const passStartedAt = Date.now()
   const result: SyncResult = {
-    pushed: { essays: 0, nodes: 0, sources: 0, quotes: 0, graveyard: 0, bookmarks: 0, blobs: 0 },
-    pulled: { essays: 0, nodes: 0, sources: 0, quotes: 0, graveyard: 0, bookmarks: 0, blobs: 0 },
+    pushed: { essays: 0, nodes: 0, sources: 0, sourceContent: 0, quotes: 0, graveyard: 0, bookmarks: 0, blobs: 0 },
+    pulled: { essays: 0, nodes: 0, sources: 0, sourceContent: 0, quotes: 0, graveyard: 0, bookmarks: 0, blobs: 0 },
   }
 
   // A failure anywhere in here used to abort the *entire* pass outright —
