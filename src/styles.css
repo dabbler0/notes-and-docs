@@ -2327,7 +2327,8 @@ select {
 .reader-mode-embedded .reader-mode-search,
 .reader-mode-embedded .reader-mode-bookmark-corner,
 .reader-mode-embedded .reader-mode-page-bar,
-.reader-mode-embedded .reader-mode-quote-bar {
+.reader-mode-embedded .reader-mode-quote-bar,
+.reader-mode-embedded .reader-mode-page-nav {
   position: absolute;
 }
 
@@ -2382,6 +2383,9 @@ select {
   right: 18px;
   width: 30px;
   height: 30px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   border: none;
   border-radius: 50%;
   background: rgba(255, 255, 255, 0.08);
@@ -2396,6 +2400,49 @@ select {
 .reader-mode-exit:hover {
   opacity: 1;
   background: rgba(255, 255, 255, 0.16);
+}
+
+/* Tall, mostly-invisible click/tap zones for mouse/touch paging — see
+   ReaderMode's own doc comment. Deliberately narrow (not the chevron's own
+   hit target alone) so it sits in the page's own margin rather than over
+   it, and `z-index: 2` (same layer as the other corner chrome) so it's
+   reachable even though `.reader-page-area` beneath it is `position:
+   relative` with its own stacking context. */
+.reader-mode-page-nav {
+  position: fixed;
+  z-index: 2;
+  top: 0;
+  bottom: 0;
+  width: 72px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  background: transparent;
+  color: rgba(255, 255, 255, 0.55);
+  cursor: pointer;
+  opacity: 0.22;
+  transition: opacity 0.15s ease, background 0.15s ease;
+}
+
+.reader-mode-page-nav:hover:not(:disabled) {
+  opacity: 1;
+  background: linear-gradient(to var(--reader-page-nav-fade-dir, right), rgba(0, 0, 0, 0.25), transparent);
+}
+
+.reader-mode-page-nav.left {
+  left: 0;
+  --reader-page-nav-fade-dir: right;
+}
+
+.reader-mode-page-nav.right {
+  right: 0;
+  --reader-page-nav-fade-dir: left;
+}
+
+.reader-mode-page-nav:disabled {
+  cursor: default;
+  opacity: 0.08;
 }
 
 /* The page indicator/jump control — a little more substantial than a bare

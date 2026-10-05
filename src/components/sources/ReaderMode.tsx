@@ -24,21 +24,32 @@ import type { Bookmark, QuoteBankEntry, Source } from '../../models/types'
  * there the entire time on the off chance you highlight something).
  *
  * Two sizes, one component: by default this fills the whole screen as a
- * fixed overlay (`SourceWorkspace`'s own "Fullscreen" button). `embedded`
- * instead sizes it to whatever box its caller gives it — `SourceWorkspace`'s
- * own main pane uses this directly in place of `PdfViewer`/`TextViewer`, so
- * the *normal* reading view gets the same fit-to-screen page and unobtrusive
- * chrome the fullscreen one already had, rather than those two staying
- * fixed-width-with-scrollbars affairs that only reader mode ever fixed.
- * Every corner control below is positioned the same way either way (`top`/
- * `right`/etc. unchanged) — only whether that positioning is relative to the
- * viewport (`fixed`) or to this component's own box (`absolute`, via the
- * `.reader-mode-embedded` modifier class) changes. Embedded mode skips the
- * exit control entirely (there's nothing to "exit" — this isn't an overlay)
- * and, since it can coexist on screen with other focusable fields (the
- * surrounding workspace's own BibTeX/comment editors), the keyboard
- * shortcuts below back off whenever a real text field elsewhere on the page
- * currently has focus — see the guard in the keydown handler.
+ * fixed overlay. `embedded` instead sizes it to whatever box its caller
+ * gives it — `SourceWorkspace`'s own main pane uses this directly in place
+ * of `PdfViewer`/`TextViewer`, so the *normal* reading view gets the same
+ * fit-to-screen page and unobtrusive chrome the fullscreen one already had,
+ * rather than those two staying fixed-width-with-scrollbars affairs that
+ * only reader mode ever fixed. Every corner control below is positioned the
+ * same way either way (`top`/`right`/etc. unchanged) — only whether that
+ * positioning is relative to the viewport (`fixed`) or to this component's
+ * own box (`absolute`, via the `.reader-mode-embedded` modifier class)
+ * changes. Embedded mode skips the exit control (there's nothing to
+ * "exit" — this isn't an overlay) and instead can show a top-right
+ * "Fullscreen" corner button in the same spot (`onFullscreen`), the
+ * embedded view's own way of handing off to the real fullscreen one —
+ * `SourceWorkspace`'s header used to carry this button itself, which put it
+ * nowhere near the thing it actually affects. Since embedded mode can
+ * coexist on screen with other focusable fields (the surrounding
+ * workspace's own BibTeX/comment editors), the keyboard shortcuts below
+ * back off whenever a real text field elsewhere on the page currently has
+ * focus — see the guard in the keydown handler.
+ *
+ * Mouse/touch paging doesn't need a keyboard at all: tall, mostly-invisible
+ * `.reader-mode-page-nav` strips sit along the left and right edges the
+ * entire height of the reader, each just a faint chevron that brightens on
+ * hover — present but out of the way of actually reading, the same "there
+ * but not fighting for attention" treatment every other bit of chrome here
+ * gets, rather than a conventional always-visible prev/next button pair.
  *
  * This deliberately duplicates a fair chunk of `PdfViewer`'s and
  * `TextViewer`'s own rendering logic rather than reusing those components
@@ -57,6 +68,7 @@ export function ReaderMode({
   onModeChange,
   onQuoteSaved,
   onClose,
+  onFullscreen,
   embedded = false,
 }: {
   source: Source
@@ -79,6 +91,12 @@ export function ReaderMode({
   /** Only meaningful (and only ever called) in the default, non-embedded
    * fullscreen mode — embedded mode has no "exit," so omit it there. */
   onClose?: () => void
+  /** The mirror image of `onClose`: draws a top-right corner button (same
+   * spot, same look as the non-embedded exit control, just a different
+   * icon) that asks the caller to switch to the real, non-embedded
+   * fullscreen reader instead. Only meaningful in `embedded` mode — the
+   * fullscreen one is already fullscreen. */
+  onFullscreen?: () => void
   /** Sizes to the caller's own box (`width`/`height: 100%`, `position:
    * relative`) instead of covering the whole screen as a fixed overlay. */
   embedded?: boolean
@@ -292,6 +310,25 @@ export function ReaderMode({
           ×
         </button>
       )}
+
+      {embedded && onFullscreen && (
+        <button className="reader-mode-exit" onClick={onFullscreen} title="Fullscreen, distraction-free reading" aria-label="Enter fullscreen">
+          <Icon name="fullscreen" size={16} />
+        </button>
+      )}
+
+      {/* Tall, unobtrusive click/tap zones along the left and right edges —
+          mouse and touchscreen navigation to match the arrow keys, without
+          a visible button sitting in the middle of the page. Disabled (and
+          faded further) past either end, same as the arrow keys already
+          are via goToPage's own clamping — this just makes that limit
+          visible instead of a click there silently doing nothing. */}
+      <button className="reader-mode-page-nav left" onClick={() => goToPage(page - (twoPage ? 2 : 1))} disabled={page <= 1} title="Previous page" aria-label="Previous page">
+        <Icon name="chevron-left" size={22} />
+      </button>
+      <button className="reader-mode-page-nav right" onClick={() => goToPage(page + (twoPage ? 2 : 1))} disabled={numPages > 0 && (showSecondPage ? secondPage : page) >= numPages} title="Next page" aria-label="Next page">
+        <Icon name="chevron-right" size={22} />
+      </button>
 
       <div className="reader-mode-search">
         {searchOpen ? (

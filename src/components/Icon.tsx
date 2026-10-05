@@ -43,6 +43,8 @@ export type IconName =
   | 'camera'
   | 'qrcode'
   | 'fullscreen'
+  | 'chevron-left'
+  | 'chevron-right'
 
 const STROKE = { fill: 'none', stroke: 'currentColor', strokeWidth: 2, strokeLinecap: 'round' as const, strokeLinejoin: 'round' as const }
 
@@ -337,6 +339,18 @@ export function Icon({ name, size = 18, className }: { name: IconName; size?: nu
           <path d="M15 4h4a1 1 0 0 1 1 1v4" />
           <path d="M20 15v4a1 1 0 0 1-1 1h-4" />
           <path d="M9 20H5a1 1 0 0 1-1-1v-4" />
+        </svg>
+      )
+    case 'chevron-left':
+      return (
+        <svg {...props} {...STROKE}>
+          <polyline points="15 4 7 12 15 20" />
+        </svg>
+      )
+    case 'chevron-right':
+      return (
+        <svg {...props} {...STROKE}>
+          <polyline points="9 4 17 12 9 20" />
         </svg>
       )
   }

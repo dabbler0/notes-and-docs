@@ -29,12 +29,12 @@ import type { QuoteBankEntry, Source } from '../../models/types'
  * normal reading view: a page that fits the available space instead of a
  * fixed-width, scrollbar-and-chrome viewer, with reader mode's own
  * search/bookmark/quote-saving/two-page controls instead of a separate copy
- * of each built into this component. The "Fullscreen" button in the header
- * swaps in a second, non-embedded `ReaderMode` as a true fullscreen overlay
- * on top (`readerMode` state) — the embedded one is unmounted while that's
- * open, both so its own keyboard shortcuts don't double up with the
- * overlay's and because there's no reason to keep two PDF renders live at
- * once.
+ * of each built into this component. The embedded reader's own top-right
+ * "Fullscreen" corner button (`onFullscreen`) swaps in a second,
+ * non-embedded `ReaderMode` as a true fullscreen overlay on top (`readerMode`
+ * state) — the embedded one is unmounted while that's open, both so its own
+ * keyboard shortcuts don't double up with the overlay's and because there's
+ * no reason to keep two PDF renders live at once.
  */
 export function SourceWorkspace({
   sourceId,
@@ -640,11 +640,6 @@ export function SourceWorkspace({
             </button>
           </>
         )}
-        {hasViewer && !ocrPreview && (
-          <button type="button" className="btn btn-ghost btn-sm" onClick={() => setReaderMode(true)} title="Fullscreen, distraction-free reading — pages fit the screen, arrow keys turn pages, and you can still highlight to save a quote">
-            <Icon name="fullscreen" /> <span className="btn-label">Fullscreen</span>
-          </button>
-        )}
       </div>
 
       <div className="workspace">
@@ -689,6 +684,7 @@ export function SourceWorkspace({
                   mode={displaySource!.pdfBlobId && viewMode === 'pdf' ? 'pdf' : 'text'}
                   onModeChange={setViewMode}
                   onQuoteSaved={refreshQuotes}
+                  onFullscreen={ocrPreview ? undefined : () => setReaderMode(true)}
                 />
               )
             ) : (
