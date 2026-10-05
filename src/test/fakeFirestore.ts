@@ -201,7 +201,7 @@ export function __clearPersistentWriteFailure(): void {
 const MAX_CONCURRENT_WRITES = 500
 let inFlightWrites = 0
 
-/** `options.merge` mirrors real Firestore's shallow top-level merge (not a deep merge, not field-path merge — the one form this app's own code actually uses, in accountMeta.ts's markEncryptionVersion). Without it, setDoc replaces the whole document, same as real Firestore's own default. */
+/** `options.merge` mirrors real Firestore's shallow top-level merge (not a deep merge, not field-path merge). Without it, setDoc replaces the whole document, same as real Firestore's own default. */
 export async function setDoc(ref: DocRef, data: Record<string, unknown>, options?: { merge?: boolean }): Promise<void> {
   inFlightWrites++
   try {

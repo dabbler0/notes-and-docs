@@ -49,6 +49,12 @@
  *    redundantly re-check every doc, and whichever finishes last would
  *    overwrite the other's cursor update; sharing one pass makes that a
  *    non-issue rather than a rare-and-hard-to-reproduce one.
+ *  - Before any of the above, an account whose remote data isn't yet fully
+ *    through `remoteMigrationRegistry.ts`'s chain of versioned migrations
+ *    (the Firestore counterpart to local storage's own `storage/
+ *    migrations.ts`) gets brought up to date first — so the push/pull
+ *    loops themselves never have to know or care about any shape a
+ *    document might have been in historically, only the current one.
  *
  * What this deliberately does *not* do (documented in README rather than
  * built): realtime listeners (this polls on an interval / on demand
@@ -61,11 +67,14 @@
  * same reason, a document's own now-unused `encChunks` once its encrypted
  * payload next shrinks back under the inline-field limit).
  */
-import { collection, doc, getDoc, getDocs, query, setDoc, where, writeBatch, type DocumentData, type Firestore, type QuerySnapshot } from 'firebase/firestore'
+import { collection, deleteDoc, doc, getDoc, getDocs, query, setDoc, where, writeBatch, type DocumentData, type Firestore, type QuerySnapshot } from 'firebase/firestore'
 import { currentUser, firestoreDb } from './firebaseClient'
 import { getLocalKey } from './account'
-import { getAccountMeta, markEncryptionVersion, setAccountMeta } from './accountMeta'
-import { CURRENT_ENCRYPTION_VERSION, SYNCED_COLLECTIONS, type SyncedCollection } from './collections'
+import { getAccountMeta, setAccountMeta } from './accountMeta'
+import { SYNCED_COLLECTIONS, type SyncedCollection } from './collections'
+import { remoteMigrations } from './remoteMigrationRegistry'
+import { runMigrations } from '../storage/migrations'
+import type { DocStore } from '../storage/types'
 import { b64ToBuf, bufToB64, decryptBytes, decryptJson, encryptBytes, encryptJson, type EncryptedField } from '../lib/crypto'
 import { backend } from '../storage'
 import { notifySyncApplied } from './syncEvents'
@@ -105,13 +114,14 @@ function withTimeout<T>(promise: Promise<T>, what: string): Promise<T> {
 /**
  * Which fields of each collection's docs are the sensitive payload that
  * gets encrypted, vs. left as plaintext metadata. The policy (see
- * CURRENT_ENCRYPTION_VERSION's own doc comment for the version history):
- * every user-editable field is encrypted; the only things left as
- * plaintext metadata are system-generated ids/references and the
- * system-stamped createdAt/updatedAt/deleted fields — never something a
- * user typed. `updatedAt` in particular *has* to stay plaintext no matter
- * what: Firestore needs to filter/sort on it server-side for incremental
- * sync's own `where('updatedAt', '>', cursor)` queries to work at all.
+ * `CURRENT_REMOTE_SCHEMA_VERSION`'s own doc comment in `collections.ts`
+ * for the full version history): every user-editable field is encrypted;
+ * the only things left as plaintext metadata are system-generated
+ * ids/references and the system-stamped createdAt/updatedAt/deleted
+ * fields — never something a user typed. `updatedAt` in particular *has*
+ * to stay plaintext no matter what: Firestore needs to filter/sort on it
+ * server-side for incremental sync's own `where('updatedAt', '>', cursor)`
+ * queries to work at all.
  *
  * `sourceContent.pageHtmlCompressed` is a source's own extracted page
  * text — `sources.pageHtmlCompressed`/`pageHtml`/`pageTexts` were the
@@ -120,28 +130,31 @@ function withTimeout<T>(promise: Promise<T>, what: string): Promise<T> {
  * and `models/sourcesMigrations.ts`), the most recent of which moved it
  * off the `sources` record entirely into this separate collection —
  * nothing about *which* data is sensitive changed across any of this, so
- * none of it needed a `CURRENT_ENCRYPTION_VERSION` bump the way an actual
- * change to *which* fields get encrypted would. `encryptJson`/
- * `decryptJson` (`lib/crypto.ts`) already know how to carry a `Uint8Array`
- * value through JSON untouched, so this field needs no special handling
- * here beyond its name — compression happens below this module entirely,
- * in `sourcesRepo.ts`, before a doc ever reaches here to be encrypted,
- * which is also why the *encrypted* payload ends up smaller too, not just
- * what's stored locally.
+ * none of it needed its own dedicated encryption-policy bump (version 2,
+ * `remoteMigrationRegistry.ts`) the way an actual change to *which* fields
+ * get encrypted would — it got its own schema-version bump (versions 3-5)
+ * instead, for the shape change itself. `encryptJson`/`decryptJson`
+ * (`lib/crypto.ts`) already know how to carry a `Uint8Array` value through
+ * JSON untouched, so this field needs no special handling here beyond its
+ * name — compression happens below this module entirely, in
+ * `sourcesRepo.ts`, before a doc ever reaches here to be encrypted, which
+ * is also why the *encrypted* payload ends up smaller too, not just what's
+ * stored locally.
  *
  * `sources.pageHtmlCompressed`/`pageHtml`/`pageTexts` stay listed here
  * too, even though nothing ever *writes* those field names onto a
  * `sources` record anymore — this module reads a source's raw stored
  * shape straight off `backend.docs.list`, bypassing `sourcesRepo.ts`'s own
  * read path (`listSources`/`getSource`), which is the only place that
- * actually migrates/splits an old shape into the current one. A source
- * that predates this device's upgrade and hasn't been opened (and thus
- * migrated) yet, or one just pulled down from a device that's still
- * running older code, could still be sitting in local storage with its
- * page text inline under any of these older names the moment a sync pass
- * runs — dropping them from this list the moment each field was
- * renamed/moved would have pushed that doc's still-unmigrated, still-
- * sensitive page content as *plaintext* metadata instead of encrypting it.
+ * actually migrates/splits an old shape into the current one (local data
+ * is always already past that by the time any read happens — see
+ * `storage/migrations.ts` — but a doc arriving mid-pass via this very
+ * sync pass's own pull loop, from a remote account not yet through
+ * `remoteMigrationRegistry.ts`'s own migrations, is a narrower but real
+ * version of the same risk). Dropping these names from this list the
+ * moment each field was renamed/moved would push that doc's
+ * still-unmigrated, still-sensitive page content as *plaintext* metadata
+ * instead of encrypting it.
  */
 const SENSITIVE_FIELDS: Record<SyncedCollection, string[]> = {
   essays: ['title'],
@@ -589,44 +602,78 @@ async function decodeFromRemote(remote: Record<string, unknown>, cryptoKey: Cryp
 }
 
 /**
- * Re-encrypts every remote document in every synced collection under the
- * *current* SENSITIVE_FIELDS policy, regardless of any individual doc's
- * own `updatedAt` — the normal incremental push/pull loops below only
- * ever touch a doc that's actually changed since some watermark, so
- * anything nobody has edited since before the policy last changed would
- * otherwise sit in its old, less-encrypted shape forever. `decodeFromRemote`
- * already has to handle a doc that's entirely unencrypted metadata,
- * entirely the new shape, or any mix of the two (a doc can easily have
- * been pushed once under an older policy and never touched again) — so
- * running every doc through decode-then-encode is the migration: whatever
- * used to sit as plaintext metadata but is sensitive under the current
- * policy moves into `_enc`, and everything else (most importantly
- * `updatedAt`) passes through completely unchanged, so this can never
- * look like a real edit to any other device's last-write-wins comparison.
+ * A `DocStore` adapter over one account's remote Firestore data — reads
+ * decrypt via `decodeFromRemote`, writes encrypt via `encodeForRemote` —
+ * so a `Migration` (see `storage/migrations.ts`) written against the
+ * generic `DocStore` interface runs against remote data exactly the same
+ * way it already runs against local IndexedDB (`localBackend.ts`'s own
+ * migration bootstrap), with zero knowledge that Firestore, encryption, or
+ * chunked uploads are even involved. `remoteMigrationRegistry.ts`'s own
+ * `migrateEncryptEveryField` is a good example of what this buys: "decode
+ * then re-encode every document" is *exactly* what a plain `list` followed
+ * by a `put` of the same records already does through this adapter, so
+ * that migration needs no Firestore- or encryption-specific code of its
+ * own at all.
+ *
+ * `__meta` (see `storage/migrations.ts`'s own doc comment on
+ * `SCHEMA_META_COLLECTION`) is the one exception: read/written as a plain,
+ * unencrypted document rather than run through decode/encode — the same
+ * way local's own schema-version doc is never itself encrypted, since a
+ * bare integer isn't sensitive user data, and keeping it in plain sight in
+ * the Firestore console makes an account's migration state trivial to
+ * inspect directly.
+ *
+ * A write failure during a migration is rare enough (an account's whole
+ * remote library, re-saved in one pass, regardless of whether anything in
+ * it is actually unusual) that *which* document it was matters — `put`
+ * wraps a failure with `describeLocalDoc`'s human-readable identification
+ * of it, the same reasoning the main push loop's own try/catch below uses
+ * for the exact same reason.
  */
-async function migrateAccountEncryption(db: Firestore, uid: string, cryptoKey: CryptoKey, onProgress?: (message: string) => void): Promise<void> {
-  for (const col of SYNCED_COLLECTIONS) {
-    onProgress?.(`Checking ${col} for encryption upgrades…`)
-    const snap = await withTimeout(getDocs(collection(db, 'accounts', uid, col)), `${col} to check for encryption upgrades`)
-    for (const [i, docSnap] of snap.docs.entries()) {
-      onProgress?.(`Upgrading ${col} to the current encryption policy… (${i + 1} of ${snap.docs.length})`)
-      const decoded = await decodeFromRemote(docSnap.data(), cryptoKey, docSnap.ref)
-      const reencoded = await encodeForRemote(col, decoded, cryptoKey, db, docSnap.ref, (done, total) =>
-        onProgress?.(`Upgrading ${col} (${i + 1} of ${snap.docs.length})… uploading data (${done} of ${total} pieces)`),
+function createFirestoreDocStore(db: Firestore, uid: string, cryptoKey: CryptoKey, onProgress?: (message: string) => void): DocStore {
+  function ref(collectionName: string, id: string) {
+    return doc(db, 'accounts', uid, collectionName, id)
+  }
+  return {
+    async get<T>(collectionName: string, id: string): Promise<T | undefined> {
+      const docRef = ref(collectionName, id)
+      const snap = await withTimeout(getDoc(docRef), `${collectionName}/${id}`)
+      if (!snap.exists()) return undefined
+      if (collectionName === '__meta') return snap.data() as T
+      return (await decodeFromRemote(snap.data(), cryptoKey, docRef)) as T
+    },
+    async put<T extends { id: string }>(collectionName: string, value: T): Promise<void> {
+      const docRef = ref(collectionName, value.id)
+      if (collectionName === '__meta') {
+        await withTimeout(setDoc(docRef, value), `${collectionName}/${value.id} to upload`)
+        return
+      }
+      const localDoc = value as unknown as LocalDoc
+      const remoteDoc = await encodeForRemote(collectionName as SyncedCollection, localDoc, cryptoKey, db, docRef, (doneCount, total) =>
+        onProgress?.(`Migrating ${collectionName}/${value.id}… uploading data (${doneCount} of ${total} pieces)`),
       )
       try {
-        await withTimeout(setDoc(docSnap.ref, reencoded), `${col}/${docSnap.id} to upload`)
+        await withTimeout(setDoc(docRef, remoteDoc), `${collectionName}/${value.id} to upload`)
       } catch (err) {
-        // Same reasoning as the main push loop's own try/catch: this runs
-        // unconditionally over every remote doc regardless of whether it's
-        // actually dirty, so an unusual old-shape document nobody's touched
-        // in years is exactly the kind of thing likeliest to surface here
-        // first — naming which one matters just as much as it does there.
-        console.error(`Encryption-policy migration failed for ${col}/${docSnap.id}`, { error: err, doc: describeLocalDoc(col, decoded) })
+        console.error(`Remote migration failed writing ${collectionName}/${value.id}`, { error: err, doc: describeLocalDoc(collectionName as SyncedCollection, localDoc) })
         const message = err instanceof Error ? err.message : String(err)
-        throw new Error(`Failed migrating ${col}/${docSnap.id} (${describeLocalDoc(col, decoded).identify ?? 'see console for details'}): ${message}`, { cause: err })
+        throw new Error(`Failed migrating ${collectionName}/${value.id} (${describeLocalDoc(collectionName as SyncedCollection, localDoc).identify ?? 'see console for details'}): ${message}`, { cause: err })
       }
-    }
+    },
+    async delete(collectionName: string, id: string): Promise<void> {
+      await withTimeout(deleteDoc(ref(collectionName, id)), `${collectionName}/${id} to delete`)
+    },
+    async list<T>(collectionName: string): Promise<T[]> {
+      const snap = await withTimeout(getDocs(collection(db, 'accounts', uid, collectionName)), `remote ${collectionName}`)
+      if (collectionName === '__meta') return snap.docs.map((d) => d.data() as T)
+      return Promise.all(snap.docs.map(async (d) => (await decodeFromRemote(d.data(), cryptoKey, d.ref)) as T))
+    },
+    async listSince<T>(collectionName: string, since: number): Promise<T[]> {
+      const q = query(collection(db, 'accounts', uid, collectionName), where('updatedAt', '>', since))
+      const snap = await withTimeout(getDocs(q), `remote ${collectionName} since ${since}`)
+      if (collectionName === '__meta') return snap.docs.map((d) => d.data() as T)
+      return Promise.all(snap.docs.map(async (d) => (await decodeFromRemote(d.data(), cryptoKey, d.ref)) as T))
+    },
   }
 }
 
@@ -686,17 +733,33 @@ async function runSyncPassNow(onProgress?: (message: string) => void): Promise<S
   if (!meta) {
     // First sync ever for this account, from any device — this device's
     // key becomes the account's canonical one from here on, and there's
-    // nothing remote yet to migrate: this starts already at the current
-    // encryption version.
+    // nothing remote yet to migrate.
     await setAccountMeta(uid, localKey.fingerprint)
-  } else if ((meta.encryptionVersion ?? 1) < CURRENT_ENCRYPTION_VERSION) {
-    // An account that predates the current field-encryption policy (or
-    // predates encryptionVersion existing at all) — bring its remote data
-    // up to date before doing anything else this pass, so the push/pull
-    // loops below always see (and only ever have to write) the current
-    // shape.
-    await migrateAccountEncryption(db, uid, cryptoKey, onProgress)
-    await markEncryptionVersion(uid, CURRENT_ENCRYPTION_VERSION)
+  } else {
+    // An account that might predate some (or all) of the remote schema
+    // history in `remoteMigrationRegistry.ts` — bring its remote data up
+    // to the current version before doing anything else this pass, so the
+    // push/pull loops below always see (and only ever have to write) the
+    // current shape. `runMigrations` itself is a fast no-op, beyond the
+    // one version read, for an account already fully migrated.
+    const remoteStore = createFirestoreDocStore(db, uid, cryptoKey, onProgress)
+    try {
+      await runMigrations(remoteStore, remoteMigrations, {
+        onProgress,
+        // An account whose remote data predates this general, chained
+        // migration system (or predates it having a schema-version doc of
+        // its own at all) seeds this run's starting point from the older,
+        // single-purpose `encryptionVersion` counter — see
+        // `AccountMeta.encryptionVersion`'s own doc comment — so it
+        // resumes the chain from wherever it actually left off instead of
+        // redundantly re-running migrations its data has already
+        // effectively been through.
+        seedVersion: () => meta.encryptionVersion ?? 1,
+      })
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err)
+      throw new Error(`Failed migrating this account's remote data to the current version: ${message}`, { cause: err })
+    }
   }
 
   const cursors = loadCursors()

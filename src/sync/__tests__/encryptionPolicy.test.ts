@@ -8,7 +8,9 @@
 import { beforeEach, describe, expect, it } from 'vitest'
 import { newDeviceSignedIn, type Device } from '../../test/deviceHarness'
 import { __getFakeCloud, __resetFakeCloud } from '../../test/fakeFirestore'
-import { CURRENT_ENCRYPTION_VERSION } from '../collections'
+import { CURRENT_REMOTE_SCHEMA_VERSION } from '../collections'
+import { decryptJson, encryptJson, generateKeyBundle, type EncryptedField } from '../../lib/crypto'
+import { gzipCompress, gzipDecompress } from '../../lib/compression'
 
 beforeEach(() => {
   __resetFakeCloud()
@@ -149,8 +151,8 @@ describe('migrating an account from the old (partially-plaintext) encryption pol
     expect(sourceAfter.comment).toBeUndefined()
     expect(sourceAfter._enc).toBeDefined()
 
-    const meta = await a.getAccountMeta()
-    expect(meta?.encryptionVersion).toBe(CURRENT_ENCRYPTION_VERSION)
+    const schemaDoc = rawRemoteDoc(a.uid!, '__meta', 'schemaVersion')
+    expect(schemaDoc.version).toBe(CURRENT_REMOTE_SCHEMA_VERSION)
 
     // And the migrated data is actually usable locally, not just re-shaped.
     const pulledEssay = await a.getEssay('essay1')
@@ -169,11 +171,11 @@ describe('migrating an account from the old (partially-plaintext) encryption pol
 
     const messages: string[] = []
     await a.sync((m) => messages.push(m))
-    expect(messages.some((m) => m.includes('Upgrading'))).toBe(true)
+    expect(messages.some((m) => m.includes('Applying migration'))).toBe(true)
 
     const messages2: string[] = []
     await a.sync((m) => messages2.push(m))
-    expect(messages2.some((m) => m.includes('Upgrading'))).toBe(false)
+    expect(messages2.some((m) => m.includes('Applying migration'))).toBe(false)
   })
 
   it('a brand-new account never runs the migration at all', async () => {
@@ -181,8 +183,58 @@ describe('migrating an account from the old (partially-plaintext) encryption pol
     await a.createLocalKey()
     const messages: string[] = []
     await a.sync((m) => messages.push(m))
-    expect(messages.some((m) => m.includes('Upgrading'))).toBe(false)
+    expect(messages.some((m) => m.includes('Applying migration'))).toBe(false)
     const meta = await a.getAccountMeta()
-    expect(meta?.encryptionVersion).toBe(CURRENT_ENCRYPTION_VERSION)
+    expect(meta?.encryptionVersion).toBe(CURRENT_REMOTE_SCHEMA_VERSION)
+  })
+})
+
+describe('migrating remote source data through the source-content-split chain (versions 3-5)', () => {
+  it("splits an old remote source doc (already fully encrypted, but pre-split) into sources + sourceContent on the next sync", async () => {
+    const { bundle, cryptoKey } = await generateKeyBundle()
+    const a = await newDeviceSignedIn('oldshape@example.com')
+    await a.importLocalKey(bundle)
+    await a.sync() // bootstraps meta at the current version — reset below to simulate an account that's already past the encryption-policy migration, but predates the source-content split
+    await a.setAccountMeta((await a.getAccountMeta())!.keyFingerprint, 2)
+
+    // A real account pushed from a device running the previous version of
+    // this app — already encrypted under the current field policy (so
+    // `bibtex`/`comment`/`pageHtmlCompressed` all sit under `_enc`), but
+    // from before the split existed, so the page content is still inline
+    // on the `sources` record rather than its own `sourceContent` one.
+    const now = 3_000_000
+    const pageHtmlCompressed = await gzipCompress(JSON.stringify(['<p>Old inline page one.</p>', '<p>Old inline page two.</p>']))
+    const enc = await encryptJson(cryptoKey, {
+      bibtex: { type: 'article', key: 'old2018', fields: { title: 'Old Shape Paper', author: 'Old Author' } },
+      comment: 'kept from before the split',
+      pageHtmlCompressed,
+    })
+    __getFakeCloud().set(`accounts/${a.uid}/sources/source1`, { id: 'source1', createdAt: now, updatedAt: now, _enc: enc })
+
+    await a.sync()
+
+    const sourceAfter = rawRemoteDoc(a.uid!, 'sources', 'source1') as { updatedAt: number; pageCount: number; contentBytes: number; _enc: EncryptedField }
+    expect(sourceAfter.updatedAt).toBe(now) // migration must never look like a new edit
+    expect(sourceAfter.pageCount).toBe(2)
+    expect(sourceAfter.contentBytes).toBe(pageHtmlCompressed.byteLength)
+    const decodedMeta = await decryptJson<Record<string, unknown>>(cryptoKey, sourceAfter._enc)
+    expect(decodedMeta.pageHtmlCompressed).toBeUndefined() // moved out, not just re-encrypted in place
+    expect((decodedMeta.bibtex as { fields: { title: string } }).fields.title).toBe('Old Shape Paper')
+
+    const contentDoc = rawRemoteDoc(a.uid!, 'sourceContent', 'source1') as { _enc: EncryptedField }
+    const decodedContent = await decryptJson<{ pageHtmlCompressed: Uint8Array }>(cryptoKey, contentDoc._enc)
+    expect(JSON.parse(await gzipDecompress(decodedContent.pageHtmlCompressed))).toEqual(['<p>Old inline page one.</p>', '<p>Old inline page two.</p>'])
+
+    const schemaDoc = rawRemoteDoc(a.uid!, '__meta', 'schemaVersion')
+    expect(schemaDoc.version).toBe(CURRENT_REMOTE_SCHEMA_VERSION)
+
+    // And a second device, pulling fresh, sees a fully usable, correctly
+    // migrated source — not just correctly re-shaped remote bytes.
+    const b = await newDeviceSignedIn('oldshape@example.com')
+    await b.importLocalKey(bundle)
+    await b.sync()
+    const pulled = await b.getSource('source1')
+    expect(pulled?.bibtex.fields.title).toBe('Old Shape Paper')
+    expect(pulled?.pageHtml).toEqual(['<p>Old inline page one.</p>', '<p>Old inline page two.</p>'])
   })
 })

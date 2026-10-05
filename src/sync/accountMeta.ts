@@ -10,12 +10,25 @@
  */
 import { collection, deleteDoc, doc, getDoc, getDocs, setDoc } from 'firebase/firestore'
 import { firestoreDb } from './firebaseClient'
-import { CURRENT_ENCRYPTION_VERSION, SYNCED_COLLECTIONS } from './collections'
+import { CURRENT_REMOTE_SCHEMA_VERSION, SYNCED_COLLECTIONS } from './collections'
 
 export interface AccountMeta {
   keyFingerprint: string
   createdAt: number
-  /** Which encryption-field policy this account's remote data is fully in — see the constant's own doc comment in `collections.ts`. Absent on any meta doc written before this field existed, which syncEngine.ts treats as version 1 and migrates from automatically. */
+  /**
+   * Historical, bootstrap-only — the original, single-purpose "which
+   * encryption-field policy is this account's remote data fully in"
+   * counter, from before the general, chained remote migration system
+   * (`CURRENT_REMOTE_SCHEMA_VERSION`, `remoteMigrationRegistry.ts`)
+   * existed. `syncEngine.ts` only ever reads it once per account, the
+   * first time that newer system finds no schema-version doc of its own
+   * yet (an account that pre-dates it), to seed that doc's own starting
+   * point instead of restarting the whole migration chain from scratch —
+   * after that, this field is never written again and has no further
+   * effect. Absent on any meta doc written before this field itself
+   * existed, treated the same as `1` (the oldest, implied starting
+   * version) either way.
+   */
   encryptionVersion?: number
 }
 
@@ -28,14 +41,9 @@ export async function getAccountMeta(uid: string): Promise<AccountMeta | null> {
   return snap.exists() ? (snap.data() as AccountMeta) : null
 }
 
-/** `encryptionVersion` defaults to the current policy — correct for the one real caller (bootstrapping a brand-new account, which by definition has no legacy remote data to migrate from) and for tests that don't care about it. Pass an older number to simulate a pre-existing account for migration tests. */
-export async function setAccountMeta(uid: string, keyFingerprint: string, encryptionVersion: number = CURRENT_ENCRYPTION_VERSION): Promise<void> {
+/** `encryptionVersion` defaults to the current version — correct for the one real caller (bootstrapping a brand-new account, which by definition has no legacy remote data to migrate from, so its schema-version doc — see `remoteMigrationRegistry.ts` — never even needs seeding) and for tests that don't care about it. Pass an older number to simulate a pre-existing account for migration tests. */
+export async function setAccountMeta(uid: string, keyFingerprint: string, encryptionVersion: number = CURRENT_REMOTE_SCHEMA_VERSION): Promise<void> {
   await setDoc(metaDocRef(uid), { keyFingerprint, createdAt: Date.now(), encryptionVersion })
-}
-
-/** Records that this account's remote data has been confirmed fully migrated to `version` — a merge write, so it never disturbs `keyFingerprint`/`createdAt`. */
-export async function markEncryptionVersion(uid: string, version: number): Promise<void> {
-  await setDoc(metaDocRef(uid), { encryptionVersion: version }, { merge: true })
 }
 
 const TOP_COLLECTIONS = SYNCED_COLLECTIONS
