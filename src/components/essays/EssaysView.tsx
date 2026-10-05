@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'preact/hooks'
-import { createEssay, deleteEssay, listEssays } from '../../models/essaysRepo'
+import { archiveEssay, createEssay, deleteEssay, listEssays, unarchiveEssay } from '../../models/essaysRepo'
 import { onSyncApplied } from '../../sync/syncEvents'
 import { Icon } from '../Icon'
 import type { Essay } from '../../models/types'
@@ -10,6 +10,7 @@ export function EssaysView() {
   const [essays, setEssays] = useState<Essay[]>([])
   const [openId, setOpenId] = useState<string | null>(null)
   const [showImport, setShowImport] = useState(false)
+  const [showArchived, setShowArchived] = useState(false)
 
   async function reload() {
     setEssays(await listEssays())
@@ -39,14 +40,29 @@ export function EssaysView() {
     reload()
   }
 
+  async function handleToggleArchived(essay: Essay, e: Event) {
+    e.stopPropagation()
+    if (essay.archived) await unarchiveEssay(essay)
+    else await archiveEssay(essay)
+    reload()
+  }
+
   if (openId) {
     return <EssayWorkspace essayId={openId} onBack={() => setOpenId(null)} />
   }
+
+  const archivedCount = essays.filter((e) => e.archived).length
+  const visible = essays.filter((e) => (showArchived ? !!e.archived : !e.archived))
 
   return (
     <div className="page-pad">
       <div className="page-header">
         <h1>Drafts</h1>
+        {archivedCount > 0 && (
+          <button className="btn btn-ghost" onClick={() => setShowArchived((v) => !v)}>
+            {showArchived ? '← Back to active' : `Show archived (${archivedCount})`}
+          </button>
+        )}
         <button className="btn btn-ghost" onClick={() => setShowImport(true)}>
           <Icon name="import" /> Import LaTeX project
         </button>
@@ -54,17 +70,25 @@ export function EssaysView() {
           + New essay
         </button>
       </div>
-      {essays.length === 0 ? (
-        <p className="empty-state">No essays yet. Start a new one to build up a section tree with versioned drafts.</p>
+      {visible.length === 0 ? (
+        <p className="empty-state">
+          {showArchived ? 'No archived essays.' : essays.length === 0 ? 'No essays yet. Start a new one to build up a section tree with versioned drafts.' : 'No active essays — everything is archived.'}
+        </p>
       ) : (
         <div className="card-grid">
-          {essays.map((e) => (
-            <div className="card" key={e.id} onClick={() => setOpenId(e.id)}>
+          {visible.map((e) => (
+            <div className={`card${e.archived ? ' card-archived' : ''}`} key={e.id} onClick={() => setOpenId(e.id)}>
+              {e.archived && <span className="badge">Archived</span>}
               <div className="card-title">{e.title}</div>
               <div className="card-meta">Updated {new Date(e.updatedAt).toLocaleString()}</div>
-              <button className="btn btn-sm btn-ghost btn-danger" style={{ alignSelf: 'flex-start' }} onClick={(ev) => handleDelete(e.id, ev)}>
-                Delete
-              </button>
+              <div style={{ display: 'flex', gap: 8 }}>
+                <button className="btn btn-sm btn-ghost" style={{ alignSelf: 'flex-start' }} onClick={(ev) => handleToggleArchived(e, ev)}>
+                  {e.archived ? 'Unarchive' : 'Archive'}
+                </button>
+                <button className="btn btn-sm btn-ghost btn-danger" style={{ alignSelf: 'flex-start' }} onClick={(ev) => handleDelete(e.id, ev)}>
+                  Delete
+                </button>
+              </div>
             </div>
           ))}
         </div>
@@ -82,3 +106,4 @@ export function EssaysView() {
     </div>
   )
 }
+

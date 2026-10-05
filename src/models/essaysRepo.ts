@@ -100,6 +100,23 @@ export async function saveEssay(essay: Essay): Promise<void> {
   await backend.docs.put(ESSAYS, essay)
 }
 
+/**
+ * Marks an essay as finished, hiding it from the main Drafts view (behind
+ * the "Show archived" toggle there) without deleting anything — unlike
+ * `deleteEssay`, nothing underneath it (its nodes, their versions/comments/
+ * footnotes) is touched at all; this only ever flips the one flag on the
+ * essay itself. `unarchiveEssay` is the plain inverse.
+ */
+export async function archiveEssay(essay: Essay): Promise<void> {
+  essay.archived = true
+  await saveEssay(essay)
+}
+
+export async function unarchiveEssay(essay: Essay): Promise<void> {
+  essay.archived = false
+  await saveEssay(essay)
+}
+
 function makeVersion(content: string, label?: string): NodeVersion {
   return { id: id(), content, createdAt: Date.now(), label }
 }

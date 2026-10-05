@@ -265,6 +265,10 @@ select {
   transform: translateY(-2px);
 }
 
+.card-archived {
+  opacity: 0.7;
+}
+
 .card-title {
   font-weight: 700;
   font-size: 15.5px;
@@ -280,13 +284,25 @@ select {
   /* Unlike a source/essay card, nothing here opens on a click to the card
      itself — only its own "View in source"/"Remove" buttons do anything —
      so it shouldn't invite one with the pointer cursor (or hover lift)
-     .card normally has. */
+     .card normally has. Overridden by `.quote-bank-card-clickable` for the
+     one place a click on the card itself does do something — the source
+     detail dialog's own Quotes tab, where clicking a card jumps straight to
+     its page. */
   cursor: default;
 }
 
 .quote-bank-card:hover {
   box-shadow: var(--shadow-soft);
   transform: none;
+}
+
+.quote-bank-card-clickable {
+  cursor: pointer;
+}
+
+.quote-bank-card-clickable:hover {
+  box-shadow: var(--shadow-lift);
+  transform: translateY(-2px);
 }
 
 .quote-bank-text {
@@ -1708,6 +1724,20 @@ select {
 }
 
 .pdf-text-layer mark.pdf-search-hit-active {
+  background: rgba(255, 152, 0, 0.75);
+}
+
+.pdf-text-layer mark.pdf-quote-hit {
+  background: rgba(123, 178, 116, 0.42);
+  color: transparent;
+  cursor: help;
+}
+
+.pdf-text-layer mark.pdf-quote-hit.pdf-search-hit {
+  background: rgba(255, 213, 79, 0.55);
+}
+
+.pdf-text-layer mark.pdf-quote-hit.pdf-search-hit-active {
   background: rgba(255, 152, 0, 0.75);
 }
 

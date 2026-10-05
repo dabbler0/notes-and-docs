@@ -1,15 +1,15 @@
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks'
-import * as pdfjsLib from 'pdfjs-dist'
 import { getSourcePdfBlob } from '../../models/sourcesRepo'
-import { addQuoteToBank } from '../../models/quoteBankRepo'
+import { addQuoteToBank, listQuotesForSource } from '../../models/quoteBankRepo'
 import { addBookmark, bookmarkDisplayLabel, deleteBookmark, listBookmarksForSource } from '../../models/bookmarkRepo'
 import { loadPdf, renderPageToCanvas, type PdfDoc } from '../../lib/pdf'
 import { reconstructSelectedText, type SelectableTextItem } from '../../lib/pdfSelection'
 import { sanitizePageHtml } from '../../lib/sanitizeHtml'
 import { htmlToPlainText } from '../../lib/textExtraction'
 import { usePageSearch, type PageSearchState } from '../../lib/usePageSearch'
-import { applySearchHighlights, buildSrcDoc, measureContentBox } from './TextViewer'
-import type { Bookmark, Source } from '../../models/types'
+import { applyQuoteHighlights, applySearchHighlights, buildSrcDoc, measureContentBox } from './TextViewer'
+import { renderPdfTextLayer } from '../../lib/pdfTextLayer'
+import type { Bookmark, QuoteBankEntry, Source } from '../../models/types'
 
 /**
  * A fullscreen, distraction-free way to read a source: the page (a real PDF
@@ -59,6 +59,7 @@ export function ReaderMode({
   const [bookmarks, setBookmarks] = useState<Bookmark[]>([])
   const [bookmarksOpen, setBookmarksOpen] = useState(false)
   const [bookmarkLabel, setBookmarkLabel] = useState('')
+  const [quotes, setQuotes] = useState<QuoteBankEntry[]>([])
   const searchInputRef = useRef<HTMLInputElement>(null)
   // Every extractor fills in one `pageHtml` entry per PDF page (see
   // `extractPageHtml`), so this is a reliable page count for *either* mode,
@@ -83,8 +84,13 @@ export function ReaderMode({
     listBookmarksForSource(source.id).then(setBookmarks)
   }
 
+  function refreshQuotes() {
+    listQuotesForSource(source.id).then(setQuotes)
+  }
+
   useEffect(() => {
     refreshBookmarks()
+    refreshQuotes()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [source.id])
 
@@ -191,6 +197,7 @@ export function ReaderMode({
       await addQuoteToBank(source.id, pendingQuotePage || page, pendingQuote.trim(), quoteAnnotation.trim())
       clearSelection()
       setQuoteAnnotation('')
+      refreshQuotes()
     } finally {
       setSavingQuote(false)
     }
@@ -214,15 +221,15 @@ export function ReaderMode({
     <div className="reader-mode" ref={containerRef}>
       <div className={`reader-page-area${twoPage ? ' reader-page-area-two' : ''}`}>
         {mode === 'pdf' ? (
-          <ReaderPdfPage source={source} page={page} containerSize={pageAreaSize} onSelectionChange={handleSelectionFrom(page)} search={search} />
+          <ReaderPdfPage source={source} page={page} containerSize={pageAreaSize} onSelectionChange={handleSelectionFrom(page)} search={search} quotes={quotes} />
         ) : (
-          <ReaderTextPage source={source} page={page} containerSize={pageAreaSize} onSelectionChange={handleSelectionFrom(page)} onFrameKeyDown={handleFrameKeyDown} search={search} />
+          <ReaderTextPage source={source} page={page} containerSize={pageAreaSize} onSelectionChange={handleSelectionFrom(page)} onFrameKeyDown={handleFrameKeyDown} search={search} quotes={quotes} />
         )}
         {showSecondPage &&
           (mode === 'pdf' ? (
-            <ReaderPdfPage source={source} page={secondPage} containerSize={pageAreaSize} onSelectionChange={handleSelectionFrom(secondPage)} search={search} />
+            <ReaderPdfPage source={source} page={secondPage} containerSize={pageAreaSize} onSelectionChange={handleSelectionFrom(secondPage)} search={search} quotes={quotes} />
           ) : (
-            <ReaderTextPage source={source} page={secondPage} containerSize={pageAreaSize} onSelectionChange={handleSelectionFrom(secondPage)} onFrameKeyDown={handleFrameKeyDown} search={search} />
+            <ReaderTextPage source={source} page={secondPage} containerSize={pageAreaSize} onSelectionChange={handleSelectionFrom(secondPage)} onFrameKeyDown={handleFrameKeyDown} search={search} quotes={quotes} />
           ))}
       </div>
 
@@ -376,12 +383,14 @@ function ReaderPdfPage({
   containerSize,
   onSelectionChange,
   search,
+  quotes,
 }: {
   source: Source
   page: number
   containerSize: { width: number; height: number }
   onSelectionChange: (text: string) => void
   search: PageSearchState
+  quotes: QuoteBankEntry[]
 }) {
   const { searchQuery, activeMatch } = search
   const [doc, setDoc] = useState<PdfDoc | null>(null)
@@ -433,55 +442,24 @@ function ReaderPdfPage({
       const layer = textLayerRef.current!
       layer.style.width = `${width}px`
       layer.style.height = `${height}px`
-      layer.innerHTML = ''
-      const query = searchQuery.trim().toLowerCase()
       const isActivePage = !!activeMatch && activeMatch.page === clamped
-      // Same per-item highlighting `PdfViewer` does — every occurrence of
+      const quotesOnPage = quotes.filter((q) => q.page === clamped)
+      // Same per-item highlighting (plus saved-quote spans) `PdfViewer`
+      // does, via the shared `renderPdfTextLayer` — every occurrence of
       // the query gets marked on whichever page(s) it's actually on (both
       // sides of a two-page spread can show hits at once), with the one
       // overall active match picked out in a brighter color.
-      let matchesSoFarOnPage = 0
-      const pageItems: SelectableTextItem[] = []
-      for (const item of content.items as any[]) {
-        if (!('str' in item) || !item.str) continue
-        const tx = pdfjsLib.Util.transform(viewport.transform, item.transform)
-        const fontHeight = Math.hypot(tx[2], tx[3])
-        const angle = Math.atan2(tx[1], tx[0])
-        const span = document.createElement('span')
-        span.dataset.itemIndex = String(pageItems.length)
-        pageItems.push({ str: item.str, transform: item.transform })
-        if (query) {
-          const lower = item.str.toLowerCase()
-          let cursor = 0
-          let idx: number
-          while ((idx = lower.indexOf(query, cursor)) !== -1) {
-            if (idx > cursor) span.appendChild(document.createTextNode(item.str.slice(cursor, idx)))
-            const mark = document.createElement('mark')
-            mark.className = 'pdf-search-hit' + (isActivePage && matchesSoFarOnPage === activeMatch!.indexInPage ? ' pdf-search-hit-active' : '')
-            mark.textContent = item.str.slice(idx, idx + query.length)
-            span.appendChild(mark)
-            matchesSoFarOnPage++
-            cursor = idx + query.length
-          }
-          if (cursor < item.str.length) span.appendChild(document.createTextNode(item.str.slice(cursor)))
-        } else {
-          span.textContent = item.str
-        }
-        span.style.left = `${tx[4]}px`
-        span.style.top = `${tx[5] - fontHeight}px`
-        span.style.fontSize = `${fontHeight}px`
-        span.style.fontFamily = 'sans-serif'
-        span.style.transform = angle ? `rotate(${angle}rad)` : ''
-        span.style.transformOrigin = '0% 0%'
-        layer.appendChild(span)
-      }
-      pageItemsRef.current = pageItems
-      layer.querySelector('.pdf-search-hit-active')?.scrollIntoView({ block: 'center', behavior: 'smooth' })
+      pageItemsRef.current = renderPdfTextLayer(layer, content, viewport, {
+        searchQuery,
+        isActivePage,
+        activeIndexInPage: activeMatch?.indexInPage ?? null,
+        quotes: quotesOnPage,
+      })
     })()
     return () => {
       cancelled = true
     }
-  }, [doc, page, containerSize.width, containerSize.height, searchQuery, activeMatch])
+  }, [doc, page, containerSize.width, containerSize.height, searchQuery, activeMatch, quotes])
 
   useEffect(() => {
     const handler = () => {
@@ -526,6 +504,7 @@ function ReaderTextPage({
   onSelectionChange,
   onFrameKeyDown,
   search,
+  quotes,
 }: {
   source: Source
   page: number
@@ -533,6 +512,7 @@ function ReaderTextPage({
   onSelectionChange: (text: string) => void
   onFrameKeyDown?: (e: KeyboardEvent) => void
   search: PageSearchState
+  quotes: QuoteBankEntry[]
 }) {
   const { searchQuery, activeMatch } = search
   const pageHtml = source.pageHtml ?? []
@@ -540,6 +520,7 @@ function ReaderTextPage({
   const clamped = Math.min(Math.max(1, page), Math.max(1, numPages))
   const iframeRef = useRef<HTMLIFrameElement>(null)
   const [contentBox, setContentBox] = useState<{ width: number; height: number } | null>(null)
+  const quotesOnPage = useMemo(() => quotes.filter((q) => q.page === clamped), [quotes, clamped])
 
   // Rebuilds the page's sandboxed document fresh on every relevant change,
   // including a search query/active-match change — the same "always start
@@ -560,6 +541,7 @@ function ReaderTextPage({
     iframe.onload = () => {
       const doc = iframe.contentDocument
       if (!doc) return
+      applyQuoteHighlights(doc, doc.body, quotesOnPage)
       applySearchHighlights(doc, doc.body, searchQuery.trim(), activeIndexOnPage)
       doc.querySelector('.text-search-hit-active')?.scrollIntoView({ block: 'center', behavior: 'smooth' })
       setContentBox(measureContentBox(doc))
@@ -584,7 +566,7 @@ function ReaderTextPage({
     }
     iframe.srcdoc = buildSrcDoc(sanitized, { suppressScrollbars: true })
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [clamped, pageHtml, searchQuery, activeMatch, onSelectionChange, onFrameKeyDown])
+  }, [clamped, pageHtml, searchQuery, activeMatch, onSelectionChange, onFrameKeyDown, quotesOnPage])
 
   if (numPages === 0) return <p style={{ color: '#ccc' }}>No extracted text available for this source.</p>
 

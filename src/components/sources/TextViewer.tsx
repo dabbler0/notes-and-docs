@@ -5,7 +5,7 @@ import { htmlToPlainText } from '../../lib/textExtraction'
 import { usePageSearch } from '../../lib/usePageSearch'
 import { PageControls } from './PageControls'
 import { PageSearchBar } from './PageSearchBar'
-import type { Source } from '../../models/types'
+import type { QuoteBankEntry, Source } from '../../models/types'
 
 /**
  * The embedded stylesheet for a page's sandboxed iframe (see `buildSrcDoc`
@@ -32,7 +32,9 @@ p { margin: 0 0 1em; white-space: pre; }
 p:last-child { margin-bottom: 0; }
 mark.text-search-hit { background: rgba(255, 213, 79, 0.65); color: inherit; border-radius: 2px; }
 mark.text-search-hit-active { background: rgba(255, 152, 0, 0.85); }
+mark.quote-span-hit { background: rgba(123, 178, 116, 0.38); color: inherit; border-radius: 2px; cursor: help; }
 `
+
 
 /**
  * As restrictive as a CSP for this content can be: no scripts at all
@@ -155,11 +157,16 @@ export function TextViewer({
   page,
   onPageChange,
   onSelectionChange,
+  quotes,
 }: {
   source: Source
   page: number
   onPageChange: (page: number) => void
   onSelectionChange?: (text: string) => void
+  /** Saved quote-bank entries for this source, if any — their own text gets
+   * highlighted on whichever page each came from (see `applyQuoteHighlights`
+   * below), with a mouseover showing the annotation (if there is one). */
+  quotes?: QuoteBankEntry[]
 }) {
   const pageHtml = source.pageHtml ?? []
   const numPages = pageHtml.length
@@ -183,6 +190,7 @@ export function TextViewer({
   const search = usePageSearch(plainPageTexts, clamped, onPageChange)
   const { searchQuery, activeMatch } = search
   const iframeRef = useRef<HTMLIFrameElement>(null)
+  const quotesOnPage = useMemo(() => (quotes ?? []).filter((q) => q.page === clamped), [quotes, clamped])
 
   useEffect(() => {
     search.reset()
@@ -209,6 +217,10 @@ export function TextViewer({
     iframe.onload = () => {
       const doc = iframe.contentDocument
       if (!doc) return
+      // Quote highlights are applied first — whole saved phrases, usually
+      // the larger spans — so a search hit landing inside one just nests a
+      // second, brighter <mark> inside it rather than the other way around.
+      applyQuoteHighlights(doc, doc.body, quotesOnPage)
       applySearchHighlights(doc, doc.body, searchQuery.trim(), activeIndexOnPage)
       doc.querySelector('.text-search-hit-active')?.scrollIntoView({ block: 'center', behavior: 'smooth' })
 
@@ -235,7 +247,7 @@ export function TextViewer({
     }
     iframe.srcdoc = buildSrcDoc(sanitized)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [clamped, pageHtml, searchQuery, activeMatch, onSelectionChange])
+  }, [clamped, pageHtml, searchQuery, activeMatch, onSelectionChange, quotesOnPage])
 
   if (numPages === 0) return <p className="empty-state">No extracted text available for this source.</p>
 
@@ -246,6 +258,72 @@ export function TextViewer({
       <iframe className="text-viewer-page" ref={iframeRef} sandbox="allow-same-origin" title="Extracted page text" />
     </div>
   )
+}
+
+/**
+ * Wraps every occurrence of each of `quotes`' own `quoteText` in
+ * `container`'s text with a `<mark class="quote-span-hit">`, same direct-DOM
+ * approach as `applySearchHighlights` right below (reusing the same
+ * whitespace-tolerant `buildSearchRegex` — a saved quote's exact text
+ * behaves exactly like a literal, non-regex search query), carrying the
+ * quote's own annotation (if any) as the mark's `title`, so hovering it
+ * shows the annotation as a native tooltip. Meant to run *before*
+ * `applySearchHighlights` in the same pass (see `TextViewer`'s own effect):
+ * a search hit landing inside an already-quote-highlighted span just nests
+ * a second `<mark>` inside this one, which is harmless both semantically
+ * and visually (the two backgrounds just stack).
+ *
+ * `quotes` is expected to already be filtered down to whichever page is
+ * currently showing — a quote whose own `page` doesn't match doesn't
+ * reliably exist anywhere in `container`'s text at all, so there's no
+ * reason to pay for matching it here.
+ *
+ * Matches within one DOM text node at a time, the same known limitation
+ * `applySearchHighlights` documents on itself: a quote that spans a `<br>`
+ * or an element boundary (crossing into a new text node) isn't found here,
+ * even though it's exactly the same text a person actually highlighted —
+ * fixing that would mean matching across the whole container's text first
+ * and then mapping the match back onto possibly-several text nodes, which
+ * search highlighting doesn't do either.
+ */
+export function applyQuoteHighlights(doc: Document, container: HTMLElement, quotes: { quoteText: string; annotation: string }[]) {
+  for (const quote of quotes) {
+    const regex = buildSearchRegex(quote.quoteText)
+    if (!regex) continue
+    const walker = doc.createTreeWalker(container, NodeFilter.SHOW_TEXT)
+    const textNodes: Text[] = []
+    let n: Node | null
+    while ((n = walker.nextNode())) textNodes.push(n as Text)
+
+    for (const node of textNodes) {
+      const text = node.data
+      regex.lastIndex = 0
+      const matches: { index: number; length: number }[] = []
+      let m: RegExpExecArray | null
+      while ((m = regex.exec(text)) !== null) {
+        if (m[0].length === 0) {
+          regex.lastIndex++
+          continue
+        }
+        matches.push({ index: m.index, length: m[0].length })
+      }
+      if (matches.length === 0) continue
+
+      const frag = doc.createDocumentFragment()
+      let cursor = 0
+      for (const match of matches) {
+        if (match.index > cursor) frag.appendChild(doc.createTextNode(text.slice(cursor, match.index)))
+        const mark = doc.createElement('mark')
+        mark.className = 'quote-span-hit'
+        if (quote.annotation) mark.title = quote.annotation
+        mark.textContent = text.slice(match.index, match.index + match.length)
+        frag.appendChild(mark)
+        cursor = match.index + match.length
+      }
+      if (cursor < text.length) frag.appendChild(doc.createTextNode(text.slice(cursor)))
+      node.parentNode?.replaceChild(frag, node)
+    }
+  }
 }
 
 /**

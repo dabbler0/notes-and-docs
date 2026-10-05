@@ -1,13 +1,13 @@
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks'
-import * as pdfjsLib from 'pdfjs-dist'
 import { getSourcePdfBlob } from '../../models/sourcesRepo'
 import { loadPdf, renderPageToCanvas, type PdfDoc } from '../../lib/pdf'
 import { reconstructSelectedText, type SelectableTextItem } from '../../lib/pdfSelection'
+import { renderPdfTextLayer } from '../../lib/pdfTextLayer'
 import { htmlToPlainText } from '../../lib/textExtraction'
 import { usePageSearch } from '../../lib/usePageSearch'
 import { PageControls } from './PageControls'
 import { PageSearchBar } from './PageSearchBar'
-import type { Source } from '../../models/types'
+import type { QuoteBankEntry, Source } from '../../models/types'
 
 /**
  * Renders one page of a source's PDF onto a canvas, with an invisible but
@@ -19,11 +19,15 @@ export function PdfViewer({
   page,
   onPageChange,
   onSelectionChange,
+  quotes,
 }: {
   source: Source
   page: number
   onPageChange: (page: number) => void
   onSelectionChange?: (text: string) => void
+  /** Saved quote-bank entries for this source, if any — highlighted on
+   * whichever page each came from; see `lib/pdfTextLayer.ts`. */
+  quotes?: QuoteBankEntry[]
 }) {
   const [doc, setDoc] = useState<PdfDoc | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -82,57 +86,19 @@ export function PdfViewer({
       const layer = textLayerRef.current!
       layer.style.width = `${width}px`
       layer.style.height = `${height}px`
-      layer.innerHTML = ''
-      const query = searchQuery.trim().toLowerCase()
       const isActivePage = !!activeMatch && activeMatch.page === clamped
-      // Occurrences are matched against each text item on its own — a query
-      // split across two items (e.g. by a line break mid-word) won't get
-      // highlighted here, even though the page's own plain-text join
-      // (htmlToPlainText over the 'plain'-mode pageHtml this search bar
-      // actually searches, built the same way reflowTextItems builds it)
-      // still finds and counts it for the overall N-of-M total.
-      let matchesSoFarOnPage = 0
-      const pageItems: SelectableTextItem[] = []
-      for (const item of content.items as any[]) {
-        if (!('str' in item) || !item.str) continue
-        const tx = pdfjsLib.Util.transform(viewport.transform, item.transform)
-        const fontHeight = Math.hypot(tx[2], tx[3])
-        const angle = Math.atan2(tx[1], tx[0])
-        const span = document.createElement('span')
-        span.dataset.itemIndex = String(pageItems.length)
-        pageItems.push({ str: item.str, transform: item.transform })
-        if (query) {
-          const lower = item.str.toLowerCase()
-          let cursor = 0
-          let idx: number
-          while ((idx = lower.indexOf(query, cursor)) !== -1) {
-            if (idx > cursor) span.appendChild(document.createTextNode(item.str.slice(cursor, idx)))
-            const mark = document.createElement('mark')
-            mark.className = 'pdf-search-hit' + (isActivePage && matchesSoFarOnPage === activeMatch!.indexInPage ? ' pdf-search-hit-active' : '')
-            mark.textContent = item.str.slice(idx, idx + query.length)
-            span.appendChild(mark)
-            matchesSoFarOnPage++
-            cursor = idx + query.length
-          }
-          if (cursor < item.str.length) span.appendChild(document.createTextNode(item.str.slice(cursor)))
-        } else {
-          span.textContent = item.str
-        }
-        span.style.left = `${tx[4]}px`
-        span.style.top = `${tx[5] - fontHeight}px`
-        span.style.fontSize = `${fontHeight}px`
-        span.style.fontFamily = 'sans-serif'
-        span.style.transform = angle ? `rotate(${angle}rad)` : ''
-        span.style.transformOrigin = '0% 0%'
-        layer.appendChild(span)
-      }
-      pageItemsRef.current = pageItems
-      layer.querySelector('.pdf-search-hit-active')?.scrollIntoView({ block: 'center', behavior: 'smooth' })
+      const quotesOnPage = (quotes ?? []).filter((q) => q.page === clamped)
+      pageItemsRef.current = renderPdfTextLayer(layer, content, viewport, {
+        searchQuery,
+        isActivePage,
+        activeIndexInPage: activeMatch?.indexInPage ?? null,
+        quotes: quotesOnPage,
+      })
     })()
     return () => {
       cancelled = true
     }
-  }, [doc, page, searchQuery, activeMatch])
+  }, [doc, page, searchQuery, activeMatch, quotes])
 
   useEffect(() => {
     if (!onSelectionChange) return

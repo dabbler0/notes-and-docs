@@ -4,7 +4,7 @@
  * — the two pieces behind the storage-size UI and the text-only viewer.
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { commitOcrPreview, convertSourceToTextOnly, createSource, discardOcrPreview, getSource, getSourcePdfBlob, getSourceStorageBytes, hasQuotableText, listSources, removeSourcePdf, searchPdfBank, setSourcePdf, stageOcrPreview } from '../sourcesRepo'
+import { commitOcrPreview, convertSourceToTextOnly, createSource, discardOcrPreview, getSource, getSourcePdfBlob, getSourceStorageBytes, hasQuotableText, listSources, removeSourcePdf, searchPdfBank, setSourcePdf, stageOcrPreview, touchSourceViewed, updateSource } from '../sourcesRepo'
 import { emptyEntry } from '../../lib/bibtex'
 import { gzipCompress, gzipDecompress } from '../../lib/compression'
 
@@ -203,6 +203,60 @@ describe('hasQuotableText', () => {
     const source = await createSource(emptyEntry('x2020'), { pdfFile: pdfFile(1000), pageHtml: ['text'] })
     await convertSourceToTextOnly(source)
     expect(hasQuotableText(source)).toBe(true)
+  })
+})
+
+describe('touchSourceViewed', () => {
+  it('sets lastViewedAt and lastViewedPage without bumping updatedAt', async () => {
+    const source = await createSource(emptyEntry('x2020'), { pageHtml: ['text'] })
+    const originalUpdatedAt = source.updatedAt
+
+    await touchSourceViewed(source, 3)
+
+    expect(source.lastViewedPage).toBe(3)
+    expect(source.lastViewedAt).toBeDefined()
+    expect(source.updatedAt).toBe(originalUpdatedAt)
+
+    const reloaded = await getSource(source.id)
+    expect(reloaded!.lastViewedPage).toBe(3)
+    expect(reloaded!.updatedAt).toBe(originalUpdatedAt)
+  })
+
+  it('without a page argument, only touches lastViewedAt', async () => {
+    const source = await createSource(emptyEntry('x2020'), { pageHtml: ['text'] })
+    await touchSourceViewed(source, 5)
+    const firstViewedAt = source.lastViewedAt
+    await new Promise((r) => setTimeout(r, 2))
+    await touchSourceViewed(source)
+    expect(source.lastViewedPage).toBe(5)
+    expect(source.lastViewedAt).toBeGreaterThanOrEqual(firstViewedAt!)
+  })
+})
+
+describe('listSources ordering', () => {
+  it('orders by last-viewed, not last-edited, once a source has been viewed', async () => {
+    const a = await createSource(emptyEntry('a2020'), { pageHtml: ['a'] })
+    await new Promise((r) => setTimeout(r, 2))
+    const b = await createSource(emptyEntry('b2020'), { pageHtml: ['b'] })
+    // b was created (and thus "edited") after a, so it would normally sort
+    // first — but a was the one actually viewed most recently, which
+    // should win once it's been viewed at all.
+    await new Promise((r) => setTimeout(r, 2))
+    await touchSourceViewed(a, 1)
+
+    const sources = await listSources()
+    expect(sources.map((s) => s.id)).toEqual([a.id, b.id])
+  })
+
+  it('falls back to updatedAt for a source that has never been viewed', async () => {
+    const a = await createSource(emptyEntry('a2020'), { pageHtml: ['a'] })
+    await new Promise((r) => setTimeout(r, 2))
+    const b = await createSource(emptyEntry('b2020'), { pageHtml: ['b'] })
+    await new Promise((r) => setTimeout(r, 2))
+    await updateSource(b) // bumps b's updatedAt past a's
+
+    const sources = await listSources()
+    expect(sources.map((s) => s.id)).toEqual([b.id, a.id])
   })
 })
 

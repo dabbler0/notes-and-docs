@@ -9,6 +9,15 @@ export async function listQuoteBank(): Promise<QuoteBankEntry[]> {
   return entries.filter((q) => !q.deleted).sort((a, b) => b.createdAt - a.createdAt)
 }
 
+/** A single source's own saved quotes, in page order — what the source
+ * viewer's own "Quotes" tab and its span-highlighting (see `TextViewer`'s
+ * and `PdfViewer`'s own `quotes` prop) both actually want, rather than
+ * filtering the whole quote bank themselves. */
+export async function listQuotesForSource(sourceId: string): Promise<QuoteBankEntry[]> {
+  const all = await listQuoteBank()
+  return all.filter((q) => q.sourceId === sourceId).sort((a, b) => a.page - b.page || b.createdAt - a.createdAt)
+}
+
 export async function getQuoteBankEntry(entryId: string): Promise<QuoteBankEntry | undefined> {
   return backend.docs.get<QuoteBankEntry>(COLLECTION, entryId)
 }

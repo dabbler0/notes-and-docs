@@ -3,7 +3,7 @@ import { Modal } from '../Modal'
 import { PdfViewer } from './PdfViewer'
 import { TextViewer } from './TextViewer'
 import { ReaderMode } from './ReaderMode'
-import { displayTitle, formatBibtex, parseBibtex } from '../../lib/bibtex'
+import { displayTitle, citationPage, formatBibtex, parseBibtex } from '../../lib/bibtex'
 import { downloadBlob, filenameFor } from '../../lib/download'
 import { EpubExportDialog } from './EpubExportDialog'
 import { loadPdf } from '../../lib/pdf'
@@ -11,10 +11,10 @@ import { extractPageHtml, htmlToPlainText } from '../../lib/textExtraction'
 import { formatBytes } from '../../lib/format'
 import { describeOcrError, looksLikeScannedPdf, ocrImage, ocrPdf, reOcrPdf } from '../../lib/ocr'
 import { useSourceStorageBytes } from '../../lib/useSourceStorageBytes'
-import { commitOcrPreview, convertSourceToTextOnly, deleteSource, discardOcrPreview, getSourcePdfBlob, removeSourcePdf, setSourcePdf, stageOcrPreview, updateSource } from '../../models/sourcesRepo'
-import { addQuoteToBank } from '../../models/quoteBankRepo'
+import { commitOcrPreview, convertSourceToTextOnly, deleteSource, discardOcrPreview, getSourcePdfBlob, removeSourcePdf, setSourcePdf, stageOcrPreview, touchSourceViewed, updateSource } from '../../models/sourcesRepo'
+import { addQuoteToBank, deleteQuoteFromBank, listQuotesForSource } from '../../models/quoteBankRepo'
 import { addBookmark, bookmarkDisplayLabel, deleteBookmark, listBookmarksForSource } from '../../models/bookmarkRepo'
-import type { Bookmark, Source } from '../../models/types'
+import type { Bookmark, QuoteBankEntry, Source } from '../../models/types'
 
 export function SourceDetailDialog({
   source,
@@ -28,11 +28,11 @@ export function SourceDetailDialog({
   onClose: () => void
   onChanged: () => void
 }) {
-  const [tab, setTab] = useState<'bibtex' | 'pdf'>(initialPage ? 'pdf' : 'bibtex')
+  const [tab, setTab] = useState<'bibtex' | 'pdf' | 'quotes'>(initialPage ? 'pdf' : 'bibtex')
   const [comment, setComment] = useState(source.comment)
   const [noPageNumbers, setNoPageNumbers] = useState(!!source.noPageNumbers)
   const [pageOffset, setPageOffset] = useState(source.pageOffset ?? 0)
-  const [page, setPage] = useState(initialPage ?? 1)
+  const [page, setPage] = useState(initialPage ?? source.lastViewedPage ?? 1)
   const [editingBibtex, setEditingBibtex] = useState(false)
   const [bibtexText, setBibtexText] = useState(() => formatBibtex(source.bibtex))
   const [bibtexError, setBibtexError] = useState('')
@@ -62,6 +62,7 @@ export function SourceDetailDialog({
   const [ocrPreview, setOcrPreview] = useState<{ blobId: string; fileName: string; pageHtml: string[] } | null>(null)
   const [bookmarks, setBookmarks] = useState<Bookmark[]>([])
   const [bookmarkLabel, setBookmarkLabel] = useState('')
+  const [quotes, setQuotes] = useState<QuoteBankEntry[]>([])
   const storageBytes = useSourceStorageBytes(source)
   // `looksLikeScannedPdf` parses every page's HTML (a DOMParser pass each,
   // via `htmlToPlainText`) to decide if this PDF has no real text layer —
@@ -297,6 +298,7 @@ export function SourceDetailDialog({
       setQuoteAnnotation('')
       setManualPage(0)
       setQuoteSaved(true)
+      refreshQuotes()
       setTimeout(() => setQuoteSaved(false), 1500)
     } finally {
       setSavingQuote(false)
@@ -307,10 +309,49 @@ export function SourceDetailDialog({
     listBookmarksForSource(source.id).then(setBookmarks)
   }
 
+  function refreshQuotes() {
+    listQuotesForSource(source.id).then(setQuotes)
+  }
+
+  /** Jumps the PDF/text pane straight to a quote's own page — the Quotes
+   * tab's own "navigate to the relevant page" affordance. */
+  function handleViewQuote(q: QuoteBankEntry) {
+    if (!source.pdfBlobId) setViewMode('text')
+    setTab('pdf')
+    handlePageChange(q.page)
+  }
+
+  async function handleDeleteQuote(quoteId: string) {
+    if (!confirm('Remove this quote from the quote bank?')) return
+    await deleteQuoteFromBank(quoteId)
+    refreshQuotes()
+  }
+
   useEffect(() => {
     refreshBookmarks()
+    refreshQuotes()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [source.id])
+
+  // Counts as "viewed" the moment there's actually something to view —
+  // opening straight to the BibTeX tab (the default) doesn't touch this,
+  // since nothing's actually being read yet; switching to the PDF/text pane
+  // (including arriving here already on it, via `initialPage`) does. Page
+  // *changes* from there on are each their own touch too — see
+  // `handlePageChange` below.
+  useEffect(() => {
+    if (tab === 'pdf' && hasViewer) touchSourceViewed(source, page)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tab === 'pdf' && hasViewer])
+
+  /** Wraps the viewers'/bookmarks'/reader mode's own `onPageChange` so every
+   * page turn also records "this is where I left off" — see
+   * `touchSourceViewed`'s own doc comment for why this is a local-only
+   * write, not a real edit. */
+  function handlePageChange(p: number) {
+    setPage(p)
+    if (hasViewer) touchSourceViewed(source, p)
+  }
 
   const currentPageBookmark = bookmarks.find((b) => b.page === page)
 
@@ -367,7 +408,10 @@ export function SourceDetailDialog({
           BibTeX &amp; notes
         </button>
         <button className={`btn btn-sm${tab === 'pdf' ? ' btn-primary' : ' btn-ghost'}`} onClick={() => setTab('pdf')}>
-          PDF &amp; quotes
+          PDF
+        </button>
+        <button className={`btn btn-sm${tab === 'quotes' ? ' btn-primary' : ' btn-ghost'}`} onClick={() => setTab('quotes')}>
+          Quotes{quotes.length > 0 ? ` (${quotes.length})` : ''}
         </button>
       </div>
 
@@ -439,7 +483,7 @@ export function SourceDetailDialog({
             Delete source
           </button>
         </div>
-      ) : (
+      ) : tab === 'pdf' ? (
         <div>
           <div className="field-header-row">
             <h4>PDF</h4>
@@ -584,9 +628,9 @@ export function SourceDetailDialog({
           )}
           {hasViewer ? (
             displaySource.pdfBlobId && viewMode === 'pdf' ? (
-              <PdfViewer key={ocrPreview?.blobId ?? 'saved'} source={displaySource} page={page} onPageChange={setPage} onSelectionChange={setPendingQuote} />
+              <PdfViewer key={ocrPreview?.blobId ?? 'saved'} source={displaySource} page={page} onPageChange={handlePageChange} onSelectionChange={setPendingQuote} quotes={quotes} />
             ) : (
-              <TextViewer source={displaySource} page={page} onPageChange={setPage} onSelectionChange={setPendingQuote} />
+              <TextViewer source={displaySource} page={page} onPageChange={handlePageChange} onSelectionChange={setPendingQuote} quotes={quotes} />
             )
           ) : (
             <p className="muted">No PDF attached — this source is BibTeX + comment only. You can still add a quote by typing it in, or attach an image below to OCR it.</p>
@@ -612,7 +656,7 @@ export function SourceDetailDialog({
                 <ul className="bookmark-list">
                   {bookmarks.map((b) => (
                     <li key={b.id} className={b.page === page ? 'bookmark-list-current' : ''}>
-                      <button type="button" className="bookmark-list-jump" onClick={() => setPage(b.page)}>
+                      <button type="button" className="bookmark-list-jump" onClick={() => handlePageChange(b.page)}>
                         {bookmarkDisplayLabel(b)}
                       </button>
                       <button type="button" className="bookmark-list-remove" onClick={() => handleRemoveBookmark(b.id)} title="Remove bookmark" aria-label="Remove bookmark">
@@ -669,6 +713,34 @@ export function SourceDetailDialog({
             </button>
           </div>
         </div>
+      ) : (
+        <div>
+          {quotes.length === 0 ? (
+            <p className="empty-state">No quotes saved from this source yet — switch to the PDF tab, highlight some text, and add it to the quote bank.</p>
+          ) : (
+            <div className="card-grid">
+              {quotes.map((q) => (
+                <div className="card quote-bank-card quote-bank-card-clickable" key={q.id} onClick={() => handleViewQuote(q)}>
+                  <blockquote className="quote-bank-text">“{q.quoteText}”</blockquote>
+                  {q.annotation && <p className="quote-bank-annotation">{q.annotation}</p>}
+                  <div className="card-meta">{citationPage(source, q.page) ? `p. ${citationPage(source, q.page)}` : `Page ${q.page}`}</div>
+                  <div className="quote-bank-actions">
+                    <button
+                      type="button"
+                      className="btn btn-ghost btn-sm"
+                      onClick={(ev) => {
+                        ev.stopPropagation()
+                        handleDeleteQuote(q.id)
+                      }}
+                    >
+                      Remove
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
       )}
       <div className="modal-actions">
         <button className="btn" onClick={handleClose}>
@@ -681,7 +753,7 @@ export function SourceDetailDialog({
         <ReaderMode
           source={displaySource}
           page={page}
-          onPageChange={setPage}
+          onPageChange={handlePageChange}
           mode={displaySource.pdfBlobId && viewMode === 'pdf' ? 'pdf' : 'text'}
           onClose={() => setReaderMode(false)}
         />

@@ -111,7 +111,12 @@ async function normalizeSource(stored: StoredSource): Promise<Source> {
 export async function listSources(): Promise<Source[]> {
   const sources = await backend.docs.list<StoredSource>(COLLECTION)
   const normalized = await Promise.all(sources.map(normalizeSource))
-  return normalized.filter((s) => !s.deleted).sort((a, b) => b.updatedAt - a.updatedAt)
+  // Most-recently-viewed first, falling back to most-recently-edited for a
+  // source that's never actually been opened in the viewer (including every
+  // source that existed before `lastViewedAt` did) — see `touchSourceViewed`
+  // below for why "viewed" is tracked as its own thing rather than folded
+  // into `updatedAt` itself.
+  return normalized.filter((s) => !s.deleted).sort((a, b) => (b.lastViewedAt ?? b.updatedAt) - (a.lastViewedAt ?? a.updatedAt))
 }
 
 export async function getSource(sourceId: string): Promise<Source | undefined> {
@@ -152,6 +157,29 @@ export async function createSource(
 
 export async function updateSource(source: Source): Promise<void> {
   source.updatedAt = Date.now()
+  await persistSource(source)
+}
+
+/**
+ * Records that this device just looked at `source`'s PDF/text viewer, and
+ * (when given) which page — so the next time this source is opened it
+ * resumes on the same page (`SourceDetailDialog`'s own initial `page`
+ * state), and so `listSources` can order by recency of actual use rather
+ * than last edit. Deliberately writes straight through `persistSource`
+ * rather than `updateSource`: merely viewing a page isn't a real edit, and
+ * bumping `updatedAt` for it would make every single page turn look like a
+ * change sync needs to push — a full re-upload of this source's entire
+ * (often multi-megabyte) `pageHtml` payload just for scrolling through it.
+ * The cost is that `lastViewedPage`/`lastViewedAt` never themselves sync to
+ * another device (they only ever ride along, as plain metadata, the next
+ * time something *else* about this source changes for real) — "resume
+ * where you left off" and "sort by recently read" are per-device, which is
+ * the behavior that actually matters for a reading-position feature like
+ * this one.
+ */
+export async function touchSourceViewed(source: Source, page?: number): Promise<void> {
+  source.lastViewedAt = Date.now()
+  if (page !== undefined) source.lastViewedPage = page
   await persistSource(source)
 }
 

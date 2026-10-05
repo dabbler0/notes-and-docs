@@ -71,6 +71,23 @@ export interface Source {
    * (and ignored) when `noPageNumbers` is set.
    */
   pageOffset?: number
+  /**
+   * This device's own last-viewed page in this source's PDF/text viewer
+   * (1-based) — what re-opening the source resumes to, and what
+   * `lastViewedAt` (below) is updated alongside. Written straight through
+   * `sourcesRepo.ts`'s `touchSourceViewed`, deliberately *not* via
+   * `updateSource` — see that function's own doc comment for why merely
+   * looking at a page is kept out of `updatedAt`/sync entirely (a purely
+   * local reading-position convenience, not real content).
+   */
+  lastViewedPage?: number
+  /**
+   * When this device last opened this source's PDF/text viewer — used only
+   * to order source lists by recency of use (`listSources`), never synced
+   * and never counted as a real edit. See `lastViewedPage`'s own doc
+   * comment for why.
+   */
+  lastViewedAt?: number
   createdAt: number
   updatedAt: number
   /**
@@ -261,6 +278,8 @@ export interface Essay {
   rootNodeId: string
   createdAt: number
   updatedAt: number
+  /** Set once an essay is considered finished — hides it from the main Drafts view (behind a "Show archived" toggle) without deleting anything; see `archiveEssay`/`unarchiveEssay` in `essaysRepo.ts`. Absent (falsy) means active, same as for any essay saved before this existed. */
+  archived?: boolean
   /** Tombstone — see the note on Source.deleted. */
   deleted?: boolean
 }
