@@ -1,10 +1,12 @@
 import { useEffect, useState } from 'preact/hooks'
 import { listSources, matchesSourceQuery } from '../../models/sourcesRepo'
 import { onSyncApplied } from '../../sync/syncEvents'
+import { estimateFirebaseStorageBytes } from '../../sync/storageUsage'
 import type { Source } from '../../models/types'
 import { SourceCard } from './SourceCard'
 import { AddSourceDialog } from './AddSourceDialog'
 import { SourceDetailDialog } from './SourceDetailDialog'
+import { StorageUsageBar } from './StorageUsageBar'
 
 export function SourcesView() {
   const [sources, setSources] = useState<Source[]>([])
@@ -19,10 +21,16 @@ export function SourcesView() {
   const [query, setQuery] = useState('')
   const [adding, setAdding] = useState(false)
   const [selected, setSelected] = useState<Source | null>(null)
+  // Kept separate from `loading`/`sources` — it covers every synced
+  // collection, not just this tab's own list, and shouldn't block (or be
+  // blocked by) the source list's own render just because it happens to
+  // live at the top of this same tab.
+  const [storageBytes, setStorageBytes] = useState<number | null>(null)
 
   async function reload() {
     setSources(await listSources())
     setLoading(false)
+    estimateFirebaseStorageBytes().then(setStorageBytes)
   }
 
   useEffect(() => {
@@ -46,6 +54,8 @@ export function SourcesView() {
           + Add source
         </button>
       </div>
+
+      <StorageUsageBar bytes={storageBytes} />
 
       {loading ? (
         <p className="muted">Loading sources…</p>

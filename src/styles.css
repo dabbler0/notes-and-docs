@@ -195,6 +195,46 @@ select {
   color: var(--ink);
 }
 
+.storage-usage {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 18px;
+}
+
+.storage-usage-track {
+  flex: 1;
+  max-width: 280px;
+  height: 6px;
+  border-radius: 999px;
+  background: var(--surface-2);
+  overflow: hidden;
+}
+
+.storage-usage-fill {
+  height: 100%;
+  background: var(--accent);
+  border-radius: 999px;
+  transition: width 0.2s ease;
+}
+
+.storage-usage-fill-warn {
+  background: #b3392a;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) .storage-usage-fill-warn {
+    background: #f0897a;
+  }
+}
+:root[data-theme='dark'] .storage-usage-fill-warn {
+  background: #f0897a;
+}
+
+.storage-usage-label {
+  white-space: nowrap;
+}
+
 .btn {
   border: none;
   border-radius: var(--radius-sm);
