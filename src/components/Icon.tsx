@@ -1,14 +1,47 @@
 /**
- * One small, hand-drawn icon set used everywhere a toolbar button used to
- * rely on an emoji or a text label — cite/quote/link/subsection in the
- * editor toolbar, and comment/export/backup/sync wherever they appear.
- * Deliberately plain inline SVG (stroke-based, `currentColor`) rather than
- * an icon font or a CDN-hosted set: this app has to keep working from a
+ * One small, hand-drawn icon set used everywhere a toolbar button, badge,
+ * or inline marker used to rely on an emoji or a text label — cite/quote/
+ * link/subsection in the editor toolbar, comment/export/backup/sync
+ * wherever they appear, the search box's magnifying glass, a source's
+ * PDF/text-only badge, the bookmark toggle, and so on. Deliberately plain
+ * inline SVG (stroke-based, `currentColor`) rather than an icon font, a
+ * CDN-hosted set, or actual emoji: this app has to keep working from a
  * downloaded `file://` HTML page with no network at all (see
- * `build:onefile`), so anything pulled in at runtime is a non-starter —
- * this costs nothing to inline and never has a loading flash.
+ * `build:onefile`), so anything pulled in at runtime is a non-starter; an
+ * emoji's own look is also entirely out of this app's hands — a different
+ * font, OS, or browser renders the exact same character as a different
+ * size, weight, and (for a full-color emoji) a clashing set of colors none
+ * of which are this app's own palette. A `currentColor` stroke costs
+ * nothing to inline, never has a loading flash, and always matches
+ * whatever text color surrounds it, light or dark theme alike.
  */
-export type IconName = 'cite' | 'quote' | 'quote-inline' | 'link' | 'subsection' | 'footnote' | 'comment' | 'graveyard' | 'export' | 'import' | 'backup' | 'sync' | 'bold' | 'italic' | 'underline' | 'list-ul' | 'list-ol' | 'clear-format'
+export type IconName =
+  | 'cite'
+  | 'quote'
+  | 'quote-inline'
+  | 'link'
+  | 'subsection'
+  | 'footnote'
+  | 'comment'
+  | 'graveyard'
+  | 'export'
+  | 'import'
+  | 'backup'
+  | 'sync'
+  | 'bold'
+  | 'italic'
+  | 'underline'
+  | 'list-ul'
+  | 'list-ol'
+  | 'clear-format'
+  | 'search'
+  | 'file'
+  | 'text'
+  | 'bookmark'
+  | 'bookmark-filled'
+  | 'history'
+  | 'camera'
+  | 'qrcode'
 
 const STROKE = { fill: 'none', stroke: 'currentColor', strokeWidth: 2, strokeLinecap: 'round' as const, strokeLinejoin: 'round' as const }
 
@@ -212,5 +245,85 @@ export function Icon({ name, size = 18, className }: { name: IconName; size?: nu
         </svg>
       )
     }
+    case 'search':
+      return (
+        <svg {...props} {...STROKE}>
+          <circle cx="10.5" cy="10.5" r="6.5" />
+          <line x1="20" y1="20" x2="15.3" y2="15.3" />
+        </svg>
+      )
+    case 'file':
+      // Same page-with-folded-corner shape as 'backup' (minus its tray),
+      // used wherever something is plainly "a file" — a source stored as a
+      // PDF, a key exported to/imported from a file on disk — rather than
+      // needing a format-specific glyph for each.
+      return (
+        <svg {...props} {...STROKE}>
+          <path d="M7 2h8l5 5v14a1 1 0 0 1-1 1H7a1 1 0 0 1-1-1V3a1 1 0 0 1 1-1z" />
+          <polyline points="15 2 15 7 20 7" />
+        </svg>
+      )
+    case 'text':
+      // A page's worth of extracted plain text, not a file format — three
+      // ragged text lines (the last one short, like a paragraph's end)
+      // rather than 'file's page outline, so a "text only" source reads as
+      // distinct from a "PDF" one at a glance, not just a relabeled file.
+      return (
+        <svg {...props} {...STROKE}>
+          <line x1="4" y1="6" x2="20" y2="6" />
+          <line x1="4" y1="12" x2="20" y2="12" />
+          <line x1="4" y1="18" x2="13" y2="18" />
+        </svg>
+      )
+    case 'bookmark':
+      return (
+        <svg {...props} {...STROKE}>
+          <path d="M6 3h12a1 1 0 0 1 1 1v17l-7-4-7 4V4a1 1 0 0 1 1-1z" />
+        </svg>
+      )
+    case 'bookmark-filled':
+      // The exact same ribbon as 'bookmark', filled solid rather than
+      // outlined — "this page already has a bookmark" vs. "add one here,"
+      // the same filled/outline pairing a star rating or a favorite toggle
+      // usually uses, without switching to a different shape altogether.
+      return (
+        <svg {...props} fill="currentColor" stroke="none">
+          <path d="M6 3h12a1 1 0 0 1 1 1v17l-7-4-7 4V4a1 1 0 0 1 1-1z" />
+        </svg>
+      )
+    case 'history':
+      // A plain clock face — "Version history" is literally "look back
+      // through this section's past states over time."
+      return (
+        <svg {...props} {...STROKE}>
+          <circle cx="12" cy="12" r="9" />
+          <polyline points="12 7 12 12 16 14" />
+        </svg>
+      )
+    case 'camera':
+      return (
+        <svg {...props} {...STROKE}>
+          <path d="M4 8h3.5l1.8-2.6a1 1 0 0 1 .8-.4h3.8a1 1 0 0 1 .8.4L16.5 8H20a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V9a1 1 0 0 1 1-1z" />
+          <circle cx="12" cy="13.5" r="3.5" />
+        </svg>
+      )
+    case 'qrcode':
+      // The three big corner "finder" squares every real QR code has,
+      // plus a scattering of small filled modules in the remaining
+      // quadrant — enough to read as "a QR code" at a glance without
+      // trying to render one that would actually scan.
+      return (
+        <svg {...props} {...STROKE}>
+          <rect x="3" y="3" width="7" height="7" />
+          <rect x="14" y="3" width="7" height="7" />
+          <rect x="3" y="14" width="7" height="7" />
+          <g fill="currentColor" stroke="none">
+            <rect x="14.5" y="14.5" width="2.5" height="2.5" />
+            <rect x="18.5" y="14.5" width="2.5" height="2.5" />
+            <rect x="14.5" y="18.5" width="2.5" height="2.5" />
+            <rect x="18.5" y="18.5" width="2.5" height="2.5" />
+          </g>
+        </svg>
+      )
   }
 }

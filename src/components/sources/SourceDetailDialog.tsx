@@ -14,6 +14,7 @@ import { useSourceStorageBytes } from '../../lib/useSourceStorageBytes'
 import { commitOcrPreview, convertSourceToTextOnly, deleteSource, discardOcrPreview, getSource, getSourcePdfBlob, removeSourcePdf, setSourcePdf, stageOcrPreview, touchSourceViewed, updateSource, updateSourceContent } from '../../models/sourcesRepo'
 import { addQuoteToBank, deleteQuoteFromBank, listQuotesForSource } from '../../models/quoteBankRepo'
 import { addBookmark, bookmarkDisplayLabel, deleteBookmark, listBookmarksForSource } from '../../models/bookmarkRepo'
+import { Icon } from '../Icon'
 import type { Bookmark, QuoteBankEntry, Source } from '../../models/types'
 
 export function SourceDetailDialog({
@@ -684,7 +685,7 @@ export function SourceDetailDialog({
                     onInput={(e) => setBookmarkLabel((e.target as HTMLInputElement).value)}
                   />
                   <button type="button" className="btn btn-ghost btn-sm" onClick={handleToggleBookmark}>
-                    {currentPageBookmark ? '★ Remove bookmark' : '☆ Bookmark this page'}
+                    <Icon name={currentPageBookmark ? 'bookmark-filled' : 'bookmark'} size={14} /> {currentPageBookmark ? 'Remove bookmark' : 'Bookmark this page'}
                   </button>
                 </div>
               </div>

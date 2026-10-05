@@ -331,10 +331,10 @@ function KeyBootstrap({ uid, onReady }: { uid: string; onReady: () => void }) {
           <p className="muted">If you're deliberately reusing a key from elsewhere, bring it in the same way as onto any other new device.</p>
           <div className="sync-import-tabs">
             <button className={`btn btn-sm${importMode === 'scan' ? ' btn-primary' : ' btn-ghost'}`} onClick={() => setImportMode('scan')}>
-              📷 Scan QR
+              <Icon name="camera" /> Scan QR
             </button>
             <button className={`btn btn-sm${importMode === 'file' ? ' btn-primary' : ' btn-ghost'}`} onClick={() => setImportMode('file')}>
-              📄 Key file
+              <Icon name="file" /> Key file
             </button>
             <button className={`btn btn-sm${importMode === 'paste' ? ' btn-primary' : ' btn-ghost'}`} onClick={() => setImportMode('paste')}>
               ⌨ Paste
@@ -452,10 +452,10 @@ function KeyMismatch({ uid, meta, onResolved }: { uid: string; meta: AccountMeta
       </p>
       <div className="sync-import-tabs">
         <button className={`btn btn-sm${importMode === 'scan' ? ' btn-primary' : ' btn-ghost'}`} onClick={() => setImportMode('scan')}>
-          📷 Scan QR
+          <Icon name="camera" /> Scan QR
         </button>
         <button className={`btn btn-sm${importMode === 'file' ? ' btn-primary' : ' btn-ghost'}`} onClick={() => setImportMode('file')}>
-          📄 Key file
+          <Icon name="file" /> Key file
         </button>
         <button className={`btn btn-sm${importMode === 'paste' ? ' btn-primary' : ' btn-ghost'}`} onClick={() => setImportMode('paste')}>
           ⌨ Paste
@@ -619,7 +619,7 @@ function AccountPanel({ uid, onKeyForgotten }: { uid: string; onKeyForgotten: ()
     <div className="sync-account-panel">
       <div className="sync-row">
         <button className="btn btn-sm" onClick={handleShowQr}>
-          📱 Show transfer QR
+          <Icon name="qrcode" /> Show transfer QR
         </button>
         <button className="btn btn-sm" onClick={handleDownloadKeyFile}>
           <Icon name="export" /> Download key file

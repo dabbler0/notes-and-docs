@@ -5,6 +5,7 @@ import { citationLabel, citationPage, displayAuthors, displayTitle } from '../..
 import { onSyncApplied } from '../../sync/syncEvents'
 import type { QuoteBankEntry, Source } from '../../models/types'
 import { SourceDetailDialog } from '../sources/SourceDetailDialog'
+import { Icon } from '../Icon'
 
 /**
  * Everything saved to the quote bank from a source's detail view, browsable
@@ -54,7 +55,7 @@ export function QuoteBankView() {
       <div className="page-header">
         <h1>Quotes</h1>
         <div className="search-bar">
-          <span>🔎</span>
+          <Icon name="search" className="muted-icon" />
           <input placeholder="Search quotes and annotations…" value={query} onInput={(e) => setQuery((e.target as HTMLInputElement).value)} />
         </div>
       </div>

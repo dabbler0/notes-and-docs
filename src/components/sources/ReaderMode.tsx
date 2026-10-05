@@ -9,6 +9,7 @@ import { htmlToPlainText } from '../../lib/textExtraction'
 import { usePageSearch, type PageSearchState } from '../../lib/usePageSearch'
 import { applyQuoteHighlights, applySearchHighlights, buildSrcDoc, measureContentBox } from './TextViewer'
 import { renderPdfTextLayer } from '../../lib/pdfTextLayer'
+import { Icon } from '../Icon'
 import type { Bookmark, QuoteBankEntry, Source } from '../../models/types'
 
 /**
@@ -272,7 +273,7 @@ export function ReaderMode({
           </div>
         ) : (
           <button className="reader-mode-search-toggle" onClick={() => setSearchOpen(true)} title="Search this source (/)" aria-label="Search">
-            🔍
+            <Icon name="search" />
           </button>
         )}
       </div>
@@ -282,7 +283,7 @@ export function ReaderMode({
           <div className="reader-mode-bookmarks-panel">
             <div className="reader-mode-bookmark-add">
               <button className="btn btn-sm btn-ghost" onClick={toggleBookmarkThisPage}>
-                {currentBookmark ? '★ Remove bookmark' : '☆ Bookmark this page'}
+                <Icon name={currentBookmark ? 'bookmark-filled' : 'bookmark'} size={14} /> {currentBookmark ? 'Remove bookmark' : 'Bookmark this page'}
               </button>
               {!currentBookmark && (
                 <input
@@ -324,7 +325,7 @@ export function ReaderMode({
           title="Bookmarks"
           aria-label="Bookmarks"
         >
-          {currentBookmark ? '★' : '🔖'}
+          <Icon name={currentBookmark ? 'bookmark-filled' : 'bookmark'} />
         </button>
       </div>
 

@@ -5,6 +5,7 @@ import { deleteComment, promoteComment, toggleCommentDisplayMode } from './comme
 import { CommentCard } from './CommentsPanel'
 import { parseSegments, reconstructContent } from '../../lib/childMarkers'
 import { FrozenPreview } from './FrozenPreview'
+import { Icon } from '../Icon'
 import type { Comment, EssayNode, Footnote, NodeVersion } from '../../models/types'
 
 const HEADING_SIZES = [21, 18, 16.5, 15, 14.5]
@@ -60,7 +61,7 @@ export function SectionBlock({
   // state only — closing it just stops showing the comparison, it doesn't
   // change any data.
   const [comparingVersionId, setComparingVersionId] = useState<string | null>(null)
-  // Full version history list, opened from the 🕓 button — separate from
+  // Full version history list, opened from the clock-icon button — separate from
   // comparingVersionId itself, since browsing history shouldn't have to
   // also mean "freeze the current text and clear this section," the way
   // clicking the version pill does.
@@ -390,10 +391,14 @@ export function SectionBlock({
           )}
           {!commentMode && (
             <button className="icon-btn" onClick={() => setShowHistory((v) => !v)} title="Version history">
-              🕓
+              <Icon name="history" size={15} />
             </button>
           )}
-          {openComments > 0 && <span className="chip comment-count-chip">💬 {openComments}</span>}
+          {openComments > 0 && (
+            <span className="chip comment-count-chip">
+              <Icon name="comment" size={12} /> {openComments}
+            </span>
+          )}
           {historyDropdown}
         </div>
       ) : (
@@ -427,10 +432,14 @@ export function SectionBlock({
           )}
           {!commentMode && (
             <button className="icon-btn" onClick={() => setShowHistory((v) => !v)} title="Version history">
-              🕓
+              <Icon name="history" size={15} />
             </button>
           )}
-          {openComments > 0 && <span className="chip comment-count-chip">💬 {openComments}</span>}
+          {openComments > 0 && (
+            <span className="chip comment-count-chip">
+              <Icon name="comment" size={12} /> {openComments}
+            </span>
+          )}
           {!commentMode && onDemote && (
             <button className="icon-btn" title="Demote: fold this section's text back into its parent, removing the subsection but keeping the text" onClick={onDemote}>
               ⤴

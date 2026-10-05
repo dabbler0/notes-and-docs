@@ -195,6 +195,11 @@ select {
   color: var(--ink);
 }
 
+.muted-icon {
+  color: var(--ink-dim);
+  flex-shrink: 0;
+}
+
 .storage-usage {
   display: flex;
   align-items: center;
@@ -393,6 +398,9 @@ select {
 }
 
 .chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
   padding: 3px 10px;
   border-radius: 999px;
   font-size: 12px;
@@ -1944,6 +1952,10 @@ select {
   color: var(--ink);
 }
 
+.icon-btn svg {
+  vertical-align: -3px;
+}
+
 /* Any button carrying an <Icon> plus a text label (Comment mode, Export,
    Backup, Sync, …) — lines the two up on one baseline with a small gap,
    instead of the icon sitting a few px off from the text next to it. */
@@ -2371,9 +2383,13 @@ select {
 .reader-mode-search-toggle {
   width: 30px;
   height: 30px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   border: none;
   border-radius: 50%;
   background: rgba(255, 255, 255, 0.08);
+  color: rgba(255, 255, 255, 0.55);
   font-size: 14px;
   cursor: pointer;
   opacity: 0.45;
@@ -2428,9 +2444,13 @@ select {
 .reader-mode-bookmark-toggle {
   width: 30px;
   height: 30px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   border: none;
   border-radius: 50%;
   background: rgba(255, 255, 255, 0.08);
+  color: rgba(255, 255, 255, 0.55);
   font-size: 14px;
   cursor: pointer;
   opacity: 0.45;

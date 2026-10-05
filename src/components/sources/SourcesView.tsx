@@ -7,6 +7,7 @@ import { SourceCard } from './SourceCard'
 import { AddSourceDialog } from './AddSourceDialog'
 import { SourceDetailDialog } from './SourceDetailDialog'
 import { StorageUsageBar } from './StorageUsageBar'
+import { Icon } from '../Icon'
 
 export function SourcesView() {
   const [sources, setSources] = useState<Source[]>([])
@@ -47,7 +48,7 @@ export function SourcesView() {
       <div className="page-header">
         <h1>Sources</h1>
         <div className="search-bar">
-          <span>🔎</span>
+          <Icon name="search" className="muted-icon" />
           <input placeholder="Search by title, author, year, notes…" value={query} onInput={(e) => setQuery((e.target as HTMLInputElement).value)} />
         </div>
         <button className="btn btn-primary" onClick={() => setAdding(true)}>

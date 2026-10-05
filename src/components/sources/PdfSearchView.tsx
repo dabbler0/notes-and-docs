@@ -2,6 +2,7 @@ import { useState } from 'preact/hooks'
 import { searchPdfBank, type PdfSearchHit } from '../../models/sourcesRepo'
 import { displayTitle } from '../../lib/bibtex'
 import { SourceDetailDialog } from './SourceDetailDialog'
+import { Icon } from '../Icon'
 import type { Source } from '../../models/types'
 
 function highlight(snippet: string, query: string) {
@@ -34,7 +35,7 @@ export function PdfSearchView() {
         <h1>Search the PDF bank</h1>
       </div>
       <form onSubmit={runSearch} className="search-bar" style={{ maxWidth: 560, marginBottom: 24 }}>
-        <span>🔎</span>
+        <Icon name="search" className="muted-icon" />
         <input autoFocus placeholder="Search for a quote or phrase across every stored PDF…" value={query} onInput={(e) => setQuery((e.target as HTMLInputElement).value)} />
         <button type="submit" className="btn btn-sm btn-primary">
           Search

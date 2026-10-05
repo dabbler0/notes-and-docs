@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'preact/hooks'
 import { commentChildren, setCommentResolved, topLevelComments, updateCommentBody, addComment } from '../../models/essaysRepo'
 import { deleteComment, toggleCommentDisplayMode } from './commentActions'
 import { id } from '../../lib/id'
+import { Icon } from '../Icon'
 import type { Comment, EssayNode } from '../../models/types'
 
 interface Row {
@@ -362,7 +363,7 @@ export function CommentCard({
           }}
           onClick={() => setCommentingOnSelection(true)}
         >
-          💬
+          <Icon name="comment" size={15} />
         </button>
         <button className="icon-btn" title="Reply" onClick={() => setReplying(true)}>
           ↩
