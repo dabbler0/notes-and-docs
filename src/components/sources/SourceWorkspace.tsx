@@ -1,7 +1,5 @@
 import { useEffect, useMemo, useState } from 'preact/hooks'
 import { Modal } from '../Modal'
-import { PdfViewer } from './PdfViewer'
-import { TextViewer } from './TextViewer'
 import { ReaderMode } from './ReaderMode'
 import { displayAuthors, displayTitle, citationPage, formatBibtex, parseBibtex } from '../../lib/bibtex'
 import { downloadBlob, filenameFor } from '../../lib/download'
@@ -14,21 +12,29 @@ import { useSourceStorageBytes } from '../../lib/useSourceStorageBytes'
 import { useIsMobile } from '../../lib/useIsMobile'
 import { commitOcrPreview, convertSourceToTextOnly, deleteSource, discardOcrPreview, getSource, getSourcePdfBlob, removeSourcePdf, setSourcePdf, stageOcrPreview, touchSourceViewed, updateSource, updateSourceContent } from '../../models/sourcesRepo'
 import { addQuoteToBank, deleteQuoteFromBank, listQuotesForSource } from '../../models/quoteBankRepo'
-import { addBookmark, bookmarkDisplayLabel, deleteBookmark, listBookmarksForSource } from '../../models/bookmarkRepo'
 import { Icon } from '../Icon'
-import type { Bookmark, QuoteBankEntry, Source } from '../../models/types'
+import type { QuoteBankEntry, Source } from '../../models/types'
 
 /**
  * A source's own full screen — the counterpart to `EssayWorkspace` for
  * sources, replacing the old everything-in-a-modal `SourceDetailDialog`.
  * Laid out the same way: a header with a back button (`onBack` — the
  * caller decides what "back" means, same as `EssayWorkspace`'s own
- * `onBack`), a collapsible left pane for metadata/file operations, the
- * actual PDF/text reader filling the main area (not tucked behind a tab),
- * and a collapsible right pane for this source's saved quotes. Every
- * handler/piece of state below is carried over unchanged from
- * `SourceDetailDialog` — only the *layout* changed, not what any of it
- * does.
+ * `onBack`), a collapsible left pane for metadata/file operations, and a
+ * collapsible right pane for this source's saved quotes.
+ *
+ * The main area is `ReaderMode` itself, `embedded` (see that component's
+ * own doc comment) — not the old, separate `PdfViewer`/`TextViewer`, and
+ * not tucked behind a tab. This is what actually gives "open a source" its
+ * normal reading view: a page that fits the available space instead of a
+ * fixed-width, scrollbar-and-chrome viewer, with reader mode's own
+ * search/bookmark/quote-saving/two-page controls instead of a separate copy
+ * of each built into this component. The "Fullscreen" button in the header
+ * swaps in a second, non-embedded `ReaderMode` as a true fullscreen overlay
+ * on top (`readerMode` state) — the embedded one is unmounted while that's
+ * open, both so its own keyboard shortcuts don't double up with the
+ * overlay's and because there's no reason to keep two PDF renders live at
+ * once.
  */
 export function SourceWorkspace({
   sourceId,
@@ -90,8 +96,6 @@ export function SourceWorkspace({
   // this instead of the source's own saved PDF, via a throwaway
   // Source-shaped object pointing at the staged blob (see previewSource).
   const [ocrPreview, setOcrPreview] = useState<{ blobId: string; fileName: string; pageHtml: string[] } | null>(null)
-  const [bookmarks, setBookmarks] = useState<Bookmark[]>([])
-  const [bookmarkLabel, setBookmarkLabel] = useState('')
   const [quotes, setQuotes] = useState<QuoteBankEntry[]>([])
   const storageBytes = useSourceStorageBytes(source ?? ({ id: sourceId } as Source))
 
@@ -350,10 +354,6 @@ export function SourceWorkspace({
     }
   }
 
-  function refreshBookmarks() {
-    listBookmarksForSource(sourceId).then(setBookmarks)
-  }
-
   function refreshQuotes() {
     listQuotesForSource(sourceId).then(setQuotes)
   }
@@ -375,7 +375,6 @@ export function SourceWorkspace({
   }
 
   useEffect(() => {
-    refreshBookmarks()
     refreshQuotes()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sourceId])
@@ -394,24 +393,6 @@ export function SourceWorkspace({
   function handlePageChange(p: number) {
     setPage(p)
     if (source && hasViewer) touchSourceViewed(source, p)
-  }
-
-  const currentPageBookmark = bookmarks.find((b) => b.page === page)
-
-  async function handleToggleBookmark() {
-    if (!source) return
-    if (currentPageBookmark) {
-      await deleteBookmark(currentPageBookmark.id)
-    } else {
-      await addBookmark(source.id, page, bookmarkLabel.trim())
-      setBookmarkLabel('')
-    }
-    refreshBookmarks()
-  }
-
-  async function handleRemoveBookmark(bookmarkId: string) {
-    await deleteBookmark(bookmarkId)
-    refreshBookmarks()
   }
 
   /**
@@ -682,23 +663,9 @@ export function SourceWorkspace({
           ))}
 
         <div className="editor-panel">
-          {source.pdfBlobId && (
-            <div className="editor-toolbar doc-toolbar">
-              <div className="tab-row" style={{ margin: 0 }}>
-                <button type="button" className={`btn btn-sm${viewMode === 'pdf' ? ' btn-primary' : ' btn-ghost'}`} onClick={() => setViewMode('pdf')}>
-                  PDF
-                </button>
-                <button type="button" className={`btn btn-sm${viewMode === 'text' ? ' btn-primary' : ' btn-ghost'}`} onClick={() => setViewMode('text')}>
-                  Text
-                </button>
-              </div>
-              <div className="spacer" />
-            </div>
-          )}
-
           <div className="source-reader-scroll">
             {ocrPreview && (
-              <div className="field" style={{ marginTop: 14, marginInline: 14, padding: 10, border: '1px solid var(--accent)', borderRadius: 8 }}>
+              <div className="field" style={{ margin: 14, padding: 10, border: '1px solid var(--accent)', borderRadius: 8 }}>
                 <p style={{ margin: '0 0 8px' }}>Previewing a fresh OCR pass below, in place of the original — browse it, then decide.</p>
                 <div style={{ display: 'flex', gap: 8 }}>
                   <button type="button" className="btn btn-primary btn-sm" onClick={handleAcceptOcrPreview}>
@@ -712,84 +679,57 @@ export function SourceWorkspace({
             )}
 
             {hasViewer ? (
-              displaySource!.pdfBlobId && viewMode === 'pdf' ? (
-                <PdfViewer key={ocrPreview?.blobId ?? 'saved'} source={displaySource!} page={page} onPageChange={handlePageChange} onSelectionChange={setPendingQuote} quotes={quotes} />
-              ) : (
-                <TextViewer source={displaySource!} page={page} onPageChange={handlePageChange} onSelectionChange={setPendingQuote} quotes={quotes} />
+              !readerMode && (
+                <ReaderMode
+                  key={ocrPreview?.blobId ?? 'saved'}
+                  embedded
+                  source={displaySource!}
+                  page={page}
+                  onPageChange={handlePageChange}
+                  mode={displaySource!.pdfBlobId && viewMode === 'pdf' ? 'pdf' : 'text'}
+                  onModeChange={setViewMode}
+                  onQuoteSaved={refreshQuotes}
+                />
               )
             ) : (
-              <p className="muted" style={{ padding: 20 }}>
-                No PDF attached — this source is BibTeX + comment only. You can still add a quote by typing it in, or attach an image below to OCR it.
-              </p>
-            )}
-
-            {hasViewer && (
-              <div className="field bookmark-field" style={{ margin: 14 }}>
-                <div className="field-header-row">
-                  <label style={{ marginBottom: 0 }}>Bookmarks</label>
-                  <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
-                    <input className="bookmark-label-input" placeholder="Label (optional)" value={bookmarkLabel} disabled={!!currentPageBookmark} onInput={(e) => setBookmarkLabel((e.target as HTMLInputElement).value)} />
-                    <button type="button" className="btn btn-ghost btn-sm" onClick={handleToggleBookmark}>
-                      <Icon name={currentPageBookmark ? 'bookmark-filled' : 'bookmark'} size={14} /> {currentPageBookmark ? 'Remove bookmark' : 'Bookmark this page'}
-                    </button>
+              <div className="source-no-viewer">
+                <p className="muted" style={{ marginTop: 0 }}>
+                  No PDF attached — this source is BibTeX + comment only. You can still add a quote by typing it in, or attach an image below to OCR it.
+                </p>
+                <div className="field">
+                  <label>Add to quote bank</label>
+                  <textarea rows={4} value={pendingQuote} onInput={(e) => setPendingQuote((e.target as HTMLTextAreaElement).value)} placeholder="Type or paste a quote here, or attach an image below to OCR it" />
+                  <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginTop: 6, flexWrap: 'wrap' }}>
+                    <label className="btn btn-ghost btn-sm" style={{ cursor: pdfBusy ? 'default' : 'pointer' }}>
+                      Attach image to OCR
+                      <input
+                        type="file"
+                        accept="image/*"
+                        disabled={pdfBusy}
+                        style={{ display: 'none' }}
+                        onChange={(e) => {
+                          const f = (e.target as HTMLInputElement).files?.[0] ?? null
+                          ;(e.target as HTMLInputElement).value = ''
+                          handleOcrImageChosen(f)
+                        }}
+                      />
+                    </label>
+                    <input
+                      type="number"
+                      min="1"
+                      placeholder="Page (optional)"
+                      value={manualPage > 0 ? String(manualPage) : ''}
+                      onInput={(e) => setManualPage(Number((e.target as HTMLInputElement).value) || 0)}
+                      style={{ width: 160, flexShrink: 0 }}
+                    />
                   </div>
+                  <input style={{ marginTop: 6 }} placeholder="Annotation (optional) — why this quote is worth keeping" value={quoteAnnotation} onInput={(e) => setQuoteAnnotation((e.target as HTMLInputElement).value)} />
+                  <button className="btn btn-ghost btn-sm" style={{ marginTop: 6 }} disabled={!pendingQuote.trim() || savingQuote} onClick={saveQuoteToBank}>
+                    {quoteSaved ? 'Added!' : '+ Add to quote bank'}
+                  </button>
                 </div>
-                {bookmarks.length > 0 && (
-                  <ul className="bookmark-list">
-                    {bookmarks.map((b) => (
-                      <li key={b.id} className={b.page === page ? 'bookmark-list-current' : ''}>
-                        <button type="button" className="bookmark-list-jump" onClick={() => handlePageChange(b.page)}>
-                          {bookmarkDisplayLabel(b)}
-                        </button>
-                        <button type="button" className="bookmark-list-remove" onClick={() => handleRemoveBookmark(b.id)} title="Remove bookmark" aria-label="Remove bookmark">
-                          ×
-                        </button>
-                      </li>
-                    ))}
-                  </ul>
-                )}
               </div>
             )}
-
-            <div className="field" style={{ margin: 14 }}>
-              <label>Add to quote bank</label>
-              <textarea
-                rows={hasViewer ? 2 : 4}
-                value={pendingQuote}
-                onInput={(e) => setPendingQuote((e.target as HTMLTextAreaElement).value)}
-                placeholder={hasViewer ? 'Drag-select text above, or type/paste a quote here' : 'Type or paste a quote here, or attach an image below to OCR it'}
-              />
-              {!hasViewer && (
-                <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginTop: 6, flexWrap: 'wrap' }}>
-                  <label className="btn btn-ghost btn-sm" style={{ cursor: pdfBusy ? 'default' : 'pointer' }}>
-                    Attach image to OCR
-                    <input
-                      type="file"
-                      accept="image/*"
-                      disabled={pdfBusy}
-                      style={{ display: 'none' }}
-                      onChange={(e) => {
-                        const f = (e.target as HTMLInputElement).files?.[0] ?? null
-                        ;(e.target as HTMLInputElement).value = ''
-                        handleOcrImageChosen(f)
-                      }}
-                    />
-                  </label>
-                  <input
-                    type="number"
-                    min="1"
-                    placeholder="Page (optional)"
-                    value={manualPage > 0 ? String(manualPage) : ''}
-                    onInput={(e) => setManualPage(Number((e.target as HTMLInputElement).value) || 0)}
-                    style={{ width: 160, flexShrink: 0 }}
-                  />
-                </div>
-              )}
-              <input style={{ marginTop: 6 }} placeholder="Annotation (optional) — why this quote is worth keeping" value={quoteAnnotation} onInput={(e) => setQuoteAnnotation((e.target as HTMLInputElement).value)} />
-              <button className="btn btn-ghost btn-sm" style={{ marginTop: 6 }} disabled={!pendingQuote.trim() || savingQuote} onClick={saveQuoteToBank}>
-                {quoteSaved ? 'Added!' : '+ Add to quote bank'}
-              </button>
-            </div>
           </div>
         </div>
 
@@ -821,7 +761,15 @@ export function SourceWorkspace({
 
       {showEpubDialog && <EpubExportDialog source={source} onClose={() => setShowEpubDialog(false)} />}
       {readerMode && displaySource && (
-        <ReaderMode source={displaySource} page={page} onPageChange={handlePageChange} mode={displaySource.pdfBlobId && viewMode === 'pdf' ? 'pdf' : 'text'} onClose={() => setReaderMode(false)} />
+        <ReaderMode
+          source={displaySource}
+          page={page}
+          onPageChange={handlePageChange}
+          mode={displaySource.pdfBlobId && viewMode === 'pdf' ? 'pdf' : 'text'}
+          onModeChange={setViewMode}
+          onQuoteSaved={refreshQuotes}
+          onClose={() => setReaderMode(false)}
+        />
       )}
     </div>
   )

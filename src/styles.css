@@ -1481,8 +1481,27 @@ select {
 .source-reader-scroll {
   flex: 1;
   min-height: 0;
-  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
   background: var(--surface-2);
+}
+
+/* The embedded reader itself fills whatever's left of .source-reader-scroll
+   after an optional OCR-preview banner above it — same reasoning as
+   .source-reader-scroll's own flex-column layout. */
+.source-reader-scroll .reader-mode-embedded {
+  flex: 1;
+  min-height: 0;
+}
+
+/* The no-viewer (BibTeX-only) fallback content needs ordinary scrolling —
+   unlike the embedded reader above it, which always fits itself to the box
+   it's given, this is plain padded form content that can genuinely run
+   taller than the available space. */
+.source-no-viewer {
+  overflow-y: auto;
+  padding: 20px;
 }
 
 .source-quotes-panel {
@@ -2288,6 +2307,28 @@ select {
   align-items: center;
   justify-content: center;
   overflow: hidden;
+}
+
+/* The embedded size (SourceWorkspace's own main pane) — same box, same
+   corner controls at the same offsets, just relative to this element's own
+   bounds instead of the viewport: `position: relative` here is what turns
+   every descendant `position: fixed` below into the `position: absolute`
+   this overrides them to instead. Fills whatever flex/grid cell its caller
+   gives it rather than covering the screen. */
+.reader-mode-embedded {
+  position: relative;
+  inset: auto;
+  z-index: auto;
+  width: 100%;
+  height: 100%;
+}
+
+.reader-mode-embedded .reader-mode-exit,
+.reader-mode-embedded .reader-mode-search,
+.reader-mode-embedded .reader-mode-bookmark-corner,
+.reader-mode-embedded .reader-mode-page-bar,
+.reader-mode-embedded .reader-mode-quote-bar {
+  position: absolute;
 }
 
 .reader-page-area {

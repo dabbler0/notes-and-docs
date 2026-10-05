@@ -13,22 +13,39 @@ import { Icon } from '../Icon'
 import type { Bookmark, QuoteBankEntry, Source } from '../../models/types'
 
 /**
- * A fullscreen, distraction-free way to read a source: the page (a real PDF
- * page, or a text-only source's extracted `pageHtml`) is scaled down to fit
- * entirely within the screen so nothing ever needs scrolling, the arrow keys
- * turn pages, and every other bit of chrome — the exit control, the page
+ * A distraction-free way to read a source: the page (a real PDF page, or a
+ * text-only source's extracted `pageHtml`) is scaled down to fit entirely
+ * within its container so nothing ever needs scrolling, the arrow keys turn
+ * pages, and every other bit of chrome — the exit control, the page
  * indicator, the quote-saving bar — is kept as unobtrusive as possible so it
  * doesn't get in the way of actually reading. The one exception is the
  * quote-saving bar, which stays fully hidden until a selection is made (the
  * whole point of chrome-free reading would be defeated by a toolbar sitting
  * there the entire time on the off chance you highlight something).
  *
+ * Two sizes, one component: by default this fills the whole screen as a
+ * fixed overlay (`SourceWorkspace`'s own "Fullscreen" button). `embedded`
+ * instead sizes it to whatever box its caller gives it — `SourceWorkspace`'s
+ * own main pane uses this directly in place of `PdfViewer`/`TextViewer`, so
+ * the *normal* reading view gets the same fit-to-screen page and unobtrusive
+ * chrome the fullscreen one already had, rather than those two staying
+ * fixed-width-with-scrollbars affairs that only reader mode ever fixed.
+ * Every corner control below is positioned the same way either way (`top`/
+ * `right`/etc. unchanged) — only whether that positioning is relative to the
+ * viewport (`fixed`) or to this component's own box (`absolute`, via the
+ * `.reader-mode-embedded` modifier class) changes. Embedded mode skips the
+ * exit control entirely (there's nothing to "exit" — this isn't an overlay)
+ * and, since it can coexist on screen with other focusable fields (the
+ * surrounding workspace's own BibTeX/comment editors), the keyboard
+ * shortcuts below back off whenever a real text field elsewhere on the page
+ * currently has focus — see the guard in the keydown handler.
+ *
  * This deliberately duplicates a fair chunk of `PdfViewer`'s and
  * `TextViewer`'s own rendering logic rather than reusing those components
  * directly: both are built around a fixed-width layout with their own
  * scrollbars and page-jump/search chrome, none of which fits a fit-to-screen,
- * chrome-optional fullscreen view — the actual page-rendering and
- * text-selection mechanics are what's shared (via `renderPageToCanvas`,
+ * chrome-optional view — the actual page-rendering and text-selection
+ * mechanics are what's shared (via `renderPageToCanvas`,
  * `reconstructSelectedText`, `sanitizePageHtml`/`buildSrcDoc`), not the
  * surrounding component.
  */
@@ -37,13 +54,34 @@ export function ReaderMode({
   page,
   onPageChange,
   mode,
+  onModeChange,
+  onQuoteSaved,
   onClose,
+  embedded = false,
 }: {
   source: Source
   page: number
   onPageChange: (page: number) => void
   mode: 'pdf' | 'text'
-  onClose: () => void
+  /** Lets this draw its own PDF/text toggle (in the page bar, next to the
+   * two-page one) instead of the caller needing a separate, more obtrusive
+   * tab row above the viewer — omit it and no toggle is shown (the
+   * fullscreen usage doesn't need one; `SourceWorkspace`'s embedded one
+   * does, and is the actual motivation for this prop existing at all). */
+  onModeChange?: (mode: 'pdf' | 'text') => void
+  /** Fires after a quote saved from in here actually lands in the quote
+   * bank — this component already tracks its own quote-saving state (the
+   * bottom bar, shown once a selection is made) entirely internally, but a
+   * caller showing its *own* separate list of this source's quotes
+   * elsewhere (`SourceWorkspace`'s right-hand panel) has no other way to
+   * know to refresh it. */
+  onQuoteSaved?: () => void
+  /** Only meaningful (and only ever called) in the default, non-embedded
+   * fullscreen mode — embedded mode has no "exit," so omit it there. */
+  onClose?: () => void
+  /** Sizes to the caller's own box (`width`/`height: 100%`, `position:
+   * relative`) instead of covering the whole screen as a fixed overlay. */
+  embedded?: boolean
 }) {
   const containerRef = useRef<HTMLDivElement>(null)
   const [containerSize, setContainerSize] = useState({ width: 0, height: 0 })
@@ -154,13 +192,27 @@ export function ReaderMode({
   const keyHandlerRef = useRef<(e: KeyboardEvent) => void>(() => {})
   useEffect(() => {
     keyHandlerRef.current = (e: KeyboardEvent) => {
+      // Any of reader mode's *own* inputs (the search box, a bookmark
+      // label, the page-jump field, a quote annotation) already stops this
+      // event from ever reaching here — see each one's own `onKeyDown`. So
+      // by the time a keydown *does* reach this handler with a text field
+      // focused, that field has to be some *other* one, outside reader
+      // mode entirely — only possible in `embedded` mode, where a form
+      // field in the surrounding workspace (a BibTeX/comment editor, say)
+      // can be focused at the same time this is on screen. Backing off
+      // here is what keeps typing a comment from also flipping pages out
+      // from under you.
+      const active = document.activeElement
+      if (active && (active.tagName === 'INPUT' || active.tagName === 'TEXTAREA' || (active as HTMLElement).isContentEditable)) return
       if (e.key === 'Escape') {
         // Escape backs out one layer of chrome at a time — closing search
         // or the bookmarks list first, rather than exiting reader mode out
         // from under someone who just wanted to dismiss the search box.
+        // No third layer to back out of in embedded mode, where there's no
+        // `onClose` at all.
         if (searchOpen) closeSearch()
         else if (bookmarksOpen) setBookmarksOpen(false)
-        else onClose()
+        else onClose?.()
       } else if (e.key === '/' && !searchOpen) {
         e.preventDefault()
         setSearchOpen(true)
@@ -199,6 +251,7 @@ export function ReaderMode({
       clearSelection()
       setQuoteAnnotation('')
       refreshQuotes()
+      onQuoteSaved?.()
     } finally {
       setSavingQuote(false)
     }
@@ -219,7 +272,7 @@ export function ReaderMode({
   const showSecondPage = twoPage && (numPages === 0 || secondPage <= numPages)
 
   return (
-    <div className="reader-mode" ref={containerRef}>
+    <div className={`reader-mode${embedded ? ' reader-mode-embedded' : ''}`} ref={containerRef}>
       <div className={`reader-page-area${twoPage ? ' reader-page-area-two' : ''}`}>
         {mode === 'pdf' ? (
           <ReaderPdfPage source={source} page={page} containerSize={pageAreaSize} onSelectionChange={handleSelectionFrom(page)} search={search} quotes={quotes} />
@@ -234,9 +287,11 @@ export function ReaderMode({
           ))}
       </div>
 
-      <button className="reader-mode-exit" onClick={onClose} title="Exit reader mode (Esc)" aria-label="Exit reader mode">
-        ×
-      </button>
+      {!embedded && (
+        <button className="reader-mode-exit" onClick={onClose} title="Exit reader mode (Esc)" aria-label="Exit reader mode">
+          ×
+        </button>
+      )}
 
       <div className="reader-mode-search">
         {searchOpen ? (
@@ -330,6 +385,11 @@ export function ReaderMode({
       </div>
 
       <div className="reader-mode-page-bar">
+        {onModeChange && source.pdfBlobId && (
+          <button className="reader-mode-page-bar-btn" onClick={() => onModeChange(mode === 'pdf' ? 'text' : 'pdf')} title={mode === 'pdf' ? 'Switch to extracted text' : 'Switch to the PDF itself'}>
+            <Icon name={mode === 'pdf' ? 'text' : 'file'} size={13} />
+          </button>
+        )}
         <button className="reader-mode-page-bar-btn" onClick={() => setTwoPage((t) => !t)} title={twoPage ? 'Switch to single-page view' : 'Switch to two-page spread'}>
           {twoPage ? '◧ 1pg' : '◫ 2pg'}
         </button>
