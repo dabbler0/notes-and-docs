@@ -2405,12 +2405,17 @@ select {
 /* Tall, mostly-invisible click/tap zones for mouse/touch paging — see
    ReaderMode's own doc comment. Deliberately narrow (not the chevron's own
    hit target alone) so it sits in the page's own margin rather than over
-   it, and `z-index: 2` (same layer as the other corner chrome) so it's
-   reachable even though `.reader-page-area` beneath it is `position:
-   relative` with its own stacking context. */
+   it, and `z-index: 1` (same layer as `.reader-page-area`, one below the
+   corner chrome) so it's reachable even though that's `position: relative`
+   with its own stacking context — but still *below* the exit/fullscreen,
+   search, bookmark, and page-bar controls, since the right-hand strip's
+   own full-height hit area genuinely overlaps the top-right corner button
+   (and would otherwise sit above it in paint order and swallow its
+   clicks — confirmed directly as exactly that bug, equal z-index falling
+   back to DOM order, with this element coming after the corner buttons). */
 .reader-mode-page-nav {
   position: fixed;
-  z-index: 2;
+  z-index: 1;
   top: 0;
   bottom: 0;
   width: 72px;
