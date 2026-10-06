@@ -4,8 +4,10 @@ import {
   detectVectorArtRegions,
   htmlToPlainText,
   measureHorizontalScale,
+  pageHtmlHasImages,
   plainTextToHtml,
   regionIsMostlyText,
+  removeImagesFromPageHtml,
   sampleTextColor,
   type Rect,
   type TextBox,
@@ -91,6 +93,43 @@ describe('htmlToPlainText', () => {
   it('round-trips plainTextToHtml output back to equivalent plain text', () => {
     const original = 'First paragraph,\nwith a line break.\n\nSecond paragraph.'
     expect(htmlToPlainText(plainTextToHtml(original))).toBe(original)
+  })
+})
+
+describe('pageHtmlHasImages', () => {
+  it('is false for pages with no <img>', () => {
+    expect(pageHtmlHasImages(['<p>Hello</p>', '<p>World</p>'])).toBe(false)
+  })
+
+  it('is true when any page has an <img>', () => {
+    expect(pageHtmlHasImages(['<p>Hello</p>', '<img src="data:image/png;base64,x"><p>World</p>'])).toBe(true)
+  })
+
+  it('is false for an empty array', () => {
+    expect(pageHtmlHasImages([])).toBe(false)
+  })
+})
+
+describe('removeImagesFromPageHtml', () => {
+  it('strips an <img> while keeping surrounding content', () => {
+    const [page] = removeImagesFromPageHtml(['<p>Before</p><img src="data:image/png;base64,x" alt=""><p>After</p>'])
+    expect(page).not.toContain('<img')
+    expect(page).toContain('Before')
+    expect(page).toContain('After')
+  })
+
+  it('strips multiple images on the same page', () => {
+    const [page] = removeImagesFromPageHtml(['<img src="data:image/png;base64,a"><p>Middle</p><img src="data:image/png;base64,b">'])
+    expect(page).not.toContain('<img')
+    expect(page).toContain('Middle')
+  })
+
+  it('leaves an image-free page untouched', () => {
+    expect(removeImagesFromPageHtml(['<p>No images here</p>'])).toEqual(['<p>No images here</p>'])
+  })
+
+  it('handles an empty array', () => {
+    expect(removeImagesFromPageHtml([])).toEqual([])
   })
 })
 

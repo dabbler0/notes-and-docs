@@ -254,12 +254,42 @@ export function ReaderMode({
   // `keyHandlerRef.current` currently is regardless.
   const handleFrameKeyDown = useMemo(() => (e: KeyboardEvent) => keyHandlerRef.current(e), [])
 
-  function handleSelectionFrom(sourcePage: number) {
-    return (text: string) => {
+  // One stable callback per spread position (primary/secondary), not a
+  // `handleSelectionFrom(sourcePage) => (text) => {...}` factory called
+  // fresh inline in JSX — that would hand `ReaderTextPage` a new function
+  // *identity* on every single render of this component (including one
+  // triggered by something that has nothing to do with reading, like a
+  // keystroke in the surrounding workspace's own comment field), and
+  // `onSelectionChange` sits in that component's own effect dependency
+  // array (see its own doc comment) — so a new identity there meant
+  // rebuilding its iframe's `srcdoc` from scratch every time, which is
+  // exactly what caused a real, confirmed bug: the extracted-text page
+  // flashing to the reader's own dark background for a frame on every
+  // unrelated re-render. `ReaderPdfPage` never had this problem — its own
+  // canvas-painting effect doesn't depend on `onSelectionChange` at all —
+  // but giving both page types the same stable-callback treatment is
+  // simpler than explaining why only one of them needs it. Reads the
+  // current page through a ref rather than closing over it directly so
+  // the callback itself genuinely never has to change identity even as
+  // `page`/`secondPage` themselves do.
+  const primaryPageRef = useRef(page)
+  primaryPageRef.current = page
+  const handlePrimarySelection = useMemo(
+    () => (text: string) => {
       setPendingQuote(text)
-      setPendingQuotePage(sourcePage)
-    }
-  }
+      setPendingQuotePage(primaryPageRef.current)
+    },
+    [],
+  )
+  const secondaryPageRef = useRef(page + 1)
+  secondaryPageRef.current = page + 1
+  const handleSecondarySelection = useMemo(
+    () => (text: string) => {
+      setPendingQuote(text)
+      setPendingQuotePage(secondaryPageRef.current)
+    },
+    [],
+  )
 
   async function handleSaveQuote() {
     if (!pendingQuote.trim()) return
@@ -293,15 +323,15 @@ export function ReaderMode({
     <div className={`reader-mode${embedded ? ' reader-mode-embedded' : ''}`} ref={containerRef}>
       <div className={`reader-page-area${twoPage ? ' reader-page-area-two' : ''}`}>
         {mode === 'pdf' ? (
-          <ReaderPdfPage source={source} page={page} containerSize={pageAreaSize} onSelectionChange={handleSelectionFrom(page)} search={search} quotes={quotes} />
+          <ReaderPdfPage source={source} page={page} containerSize={pageAreaSize} onSelectionChange={handlePrimarySelection} search={search} quotes={quotes} />
         ) : (
-          <ReaderTextPage source={source} page={page} containerSize={pageAreaSize} onSelectionChange={handleSelectionFrom(page)} onFrameKeyDown={handleFrameKeyDown} search={search} quotes={quotes} />
+          <ReaderTextPage source={source} page={page} containerSize={pageAreaSize} onSelectionChange={handlePrimarySelection} onFrameKeyDown={handleFrameKeyDown} search={search} quotes={quotes} />
         )}
         {showSecondPage &&
           (mode === 'pdf' ? (
-            <ReaderPdfPage source={source} page={secondPage} containerSize={pageAreaSize} onSelectionChange={handleSelectionFrom(secondPage)} search={search} quotes={quotes} />
+            <ReaderPdfPage source={source} page={secondPage} containerSize={pageAreaSize} onSelectionChange={handleSecondarySelection} search={search} quotes={quotes} />
           ) : (
-            <ReaderTextPage source={source} page={secondPage} containerSize={pageAreaSize} onSelectionChange={handleSelectionFrom(secondPage)} onFrameKeyDown={handleFrameKeyDown} search={search} quotes={quotes} />
+            <ReaderTextPage source={source} page={secondPage} containerSize={pageAreaSize} onSelectionChange={handleSecondarySelection} onFrameKeyDown={handleFrameKeyDown} search={search} quotes={quotes} />
           ))}
       </div>
 

@@ -90,6 +90,30 @@ export function htmlToPlainText(html: string): string {
     .trim()
 }
 
+/** Whether any page's stored HTML has an `<img>` in it — gates whether
+ * `SourceWorkspace` offers "Remove images" at all for a text-only source
+ * (one whose original PDF is already gone, so "Re-extract (no images)"
+ * isn't an option). */
+export function pageHtmlHasImages(pageHtml: string[]): boolean {
+  return pageHtml.some((html) => /<img[\s>]/i.test(html))
+}
+
+/** Strips every `<img>` out of each page's stored HTML, for a text-only
+ * source that was extracted with images embedded and no longer has the
+ * original PDF to re-extract from. Parses with `DOMParser` rather than a
+ * regex so a `<img ...>` split across what looks like a tag boundary
+ * inside a `style`/`alt` attribute's own text can't survive; removing the
+ * element outright (not just unwrapping it) is correct here since an
+ * `<img>` never has children worth keeping. */
+export function removeImagesFromPageHtml(pageHtml: string[]): string[] {
+  return pageHtml.map((html) => {
+    if (!/<img[\s>]/i.test(html)) return html
+    const doc = new DOMParser().parseFromString(html, 'text/html')
+    doc.body.querySelectorAll('img').forEach((img) => img.remove())
+    return doc.body.innerHTML
+  })
+}
+
 /** Turns off the image side of layout extraction — see `extractPageHtml`'s
  * and `extractLayoutPageHtml`'s doc comments. Defaults (when omitted, or
  * when `includeImages` itself is omitted) to `true`, matching extraction's

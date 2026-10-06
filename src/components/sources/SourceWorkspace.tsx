@@ -5,7 +5,7 @@ import { displayAuthors, displayTitle, citationPage, formatBibtex, formatCitatio
 import { downloadBlob, filenameFor } from '../../lib/download'
 import { EpubExportDialog } from './EpubExportDialog'
 import { loadPdf } from '../../lib/pdf'
-import { extractPageHtml, htmlToPlainText } from '../../lib/textExtraction'
+import { extractPageHtml, htmlToPlainText, pageHtmlHasImages, removeImagesFromPageHtml } from '../../lib/textExtraction'
 import { formatBytes } from '../../lib/format'
 import { describeOcrError, looksLikeScannedPdf, ocrImage, ocrPdf, reOcrPdf } from '../../lib/ocr'
 import { useSourceStorageBytes } from '../../lib/useSourceStorageBytes'
@@ -340,6 +340,21 @@ export function SourceWorkspace({
     }
   }
 
+  /**
+   * For a text-only source (no `pdfBlobId`, so "Re-extract (no images)"
+   * above isn't an option — there's no PDF left to re-extract from) whose
+   * stored text was extracted with images embedded. Strips them out of the
+   * already-stored `pageHtml` in place rather than needing the original
+   * PDF back.
+   */
+  async function handleRemoveImages() {
+    if (!source) return
+    if (!confirm('Remove all embedded images from this extracted text? The text itself is kept — only the images are discarded, and this can\'t be undone.')) return
+    const pageHtml = removeImagesFromPageHtml(source.pageHtml)
+    await updateSourceContent(source, pageHtml)
+    onChanged()
+  }
+
   async function saveQuoteToBank() {
     if (!pendingQuote.trim() || !source) return
     setSavingQuote(true)
@@ -591,6 +606,16 @@ export function SourceWorkspace({
                 {source.pdfBlobId && source.pageCount > 0 && (
                   <button type="button" className="ops-dropdown-item" onClick={runOtherAction(handleConvertToTextOnly)}>
                     Discard PDF, keep text only
+                  </button>
+                )}
+                {!source.pdfBlobId && pageHtmlHasImages(source.pageHtml) && (
+                  <button
+                    type="button"
+                    className="ops-dropdown-item"
+                    onClick={runOtherAction(handleRemoveImages)}
+                    title="Strips embedded images out of this source's stored extracted text. The text itself is kept — there's no PDF left to re-extract from, so this works on the stored text directly."
+                  >
+                    Remove images
                   </button>
                 )}
                 {source.pageCount > 0 && (
