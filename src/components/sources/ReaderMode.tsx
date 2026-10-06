@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks'
 import { getSourcePdfBlob } from '../../models/sourcesRepo'
-import { addQuoteToBank, listQuotesForSource } from '../../models/quoteBankRepo'
+import { addQuoteToBank } from '../../models/quoteBankRepo'
 import { addBookmark, bookmarkDisplayLabel, deleteBookmark, listBookmarksForSource } from '../../models/bookmarkRepo'
 import { loadPdf, renderPageToCanvas, type PdfDoc } from '../../lib/pdf'
 import { reconstructSelectedText, type SelectableTextItem } from '../../lib/pdfSelection'
@@ -66,6 +66,7 @@ export function ReaderMode({
   onPageChange,
   mode,
   onModeChange,
+  quotes,
   onQuoteSaved,
   onClose,
   onFullscreen,
@@ -75,6 +76,14 @@ export function ReaderMode({
   page: number
   onPageChange: (page: number) => void
   mode: 'pdf' | 'text'
+  /** This source's saved quotes, for highlighting the spans they came
+   * from — owned by the caller (`SourceWorkspace`'s own `quotes` state,
+   * the same list its right-hand panel shows) rather than fetched again
+   * in here, so an add *or delete* made anywhere else shows up here too.
+   * A second, independent copy fetched internally used to go stale the
+   * moment a quote was deleted from that panel — the highlight stuck
+   * around in the reader until the next full remount. */
+  quotes: QuoteBankEntry[]
   /** Lets this draw its own PDF/text toggle (in the page bar, next to the
    * two-page one) instead of the caller needing a separate, more obtrusive
    * tab row above the viewer — omit it and no toggle is shown (the
@@ -116,7 +125,6 @@ export function ReaderMode({
   const [bookmarks, setBookmarks] = useState<Bookmark[]>([])
   const [bookmarksOpen, setBookmarksOpen] = useState(false)
   const [bookmarkLabel, setBookmarkLabel] = useState('')
-  const [quotes, setQuotes] = useState<QuoteBankEntry[]>([])
   const searchInputRef = useRef<HTMLInputElement>(null)
   // Every extractor fills in one `pageHtml` entry per PDF page (see
   // `extractPageHtml`), so this is a reliable page count for *either* mode,
@@ -141,13 +149,8 @@ export function ReaderMode({
     listBookmarksForSource(source.id).then(setBookmarks)
   }
 
-  function refreshQuotes() {
-    listQuotesForSource(source.id).then(setQuotes)
-  }
-
   useEffect(() => {
     refreshBookmarks()
-    refreshQuotes()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [source.id])
 
@@ -298,7 +301,6 @@ export function ReaderMode({
       await addQuoteToBank(source.id, pendingQuotePage || page, pendingQuote.trim(), quoteAnnotation.trim())
       clearSelection()
       setQuoteAnnotation('')
-      refreshQuotes()
       onQuoteSaved?.()
     } finally {
       setSavingQuote(false)

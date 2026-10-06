@@ -759,6 +759,7 @@ export function SourceWorkspace({
                   onPageChange={handlePageChange}
                   mode={displaySource!.pdfBlobId && viewMode === 'pdf' ? 'pdf' : 'text'}
                   onModeChange={setViewMode}
+                  quotes={quotes}
                   onQuoteSaved={refreshQuotes}
                   onFullscreen={ocrPreview ? undefined : () => setReaderMode(true)}
                 />
@@ -839,6 +840,7 @@ export function SourceWorkspace({
           onPageChange={handlePageChange}
           mode={displaySource.pdfBlobId && viewMode === 'pdf' ? 'pdf' : 'text'}
           onModeChange={setViewMode}
+          quotes={quotes}
           onQuoteSaved={refreshQuotes}
           onClose={() => setReaderMode(false)}
         />
