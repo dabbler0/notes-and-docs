@@ -56,16 +56,29 @@
  *    loops themselves never have to know or care about any shape a
  *    document might have been in historically, only the current one.
  *
+ *  - A blob a device deletes locally for good (a source removed, a PDF
+ *    replaced or detached — see `storage/pendingBlobDeletions.ts`) gets its
+ *    remote copy (manifest + chunk docs) deleted on this device's own next
+ *    sync pass too, via a small locally-tracked to-do list rather than a
+ *    full remote scan every time. `sweepOrphanedRemoteBlobs` below is the
+ *    on-demand, full-reconciliation counterpart (the "Sweep orphaned PDFs"
+ *    button in Sync settings) — it diffs *every* remote blob id against
+ *    every local source's own `pdfBlobId` and deletes whatever matches
+ *    nothing, for the cases the per-deletion tracking doesn't catch (most
+ *    notably a 'replace'-mode backup restore, which bypasses it on purpose
+ *    — see that function's own doc comment).
+ *
  * What this deliberately does *not* do (documented in README rather than
  * built): realtime listeners (this polls on an interval / on demand
  * instead), true atomic compare-and-swap on push (the extra read before
  * writing narrows the last-push-wins race described above to a much
  * smaller window — two devices would need to push the *same* doc within
  * moments of each other to still collide — but doesn't eliminate it the
- * way a Firestore transaction would), or garbage collection of a deleted
- * source's now-orphaned blob chunk documents (or, the same gap for the
- * same reason, a document's own now-unused `encChunks` once its encrypted
- * payload next shrinks back under the inline-field limit).
+ * way a Firestore transaction would), or garbage collection of a
+ * document's own now-unused `encChunks` once its encrypted payload next
+ * shrinks back under the inline-field limit (the same *kind* of orphan
+ * problem a deleted source's blob used to have — see above — but still
+ * unaddressed for this smaller case).
  */
 import { collection, deleteDoc, doc, getDoc, getDocs, query, setDoc, where, writeBatch, type DocumentData, type Firestore, type QuerySnapshot } from 'firebase/firestore'
 import { currentUser, firestoreDb } from './firebaseClient'
@@ -77,6 +90,7 @@ import { runMigrations } from '../storage/migrations'
 import type { DocStore } from '../storage/types'
 import { b64ToBuf, bufToB64, decryptBytes, decryptJson, encryptBytes, encryptJson, type EncryptedField } from '../lib/crypto'
 import { backend } from '../storage'
+import { clearPendingBlobDeletions, loadPendingBlobDeletions } from '../storage/pendingBlobDeletions'
 import { notifySyncApplied } from './syncEvents'
 import type { Source } from '../models/types'
 
@@ -288,6 +302,11 @@ export interface SyncCounts {
 export interface SyncResult {
   pushed: SyncCounts
   pulled: SyncCounts
+  /** Remote blobs (manifest + chunk docs) deleted this pass because this
+   * device had already deleted them locally — see
+   * `storage/pendingBlobDeletions.ts`. Not part of `SyncCounts`/`pushed` —
+   * it's neither an upload nor a per-collection document count. */
+  deletedBlobs: number
 }
 
 interface LocalDoc {
@@ -434,6 +453,41 @@ export async function writeChunkedDocs(
   for (let i = 0; i < entries.length; i += batchSize) {
     await commitChunkSlice(db, entries, i, Math.min(i + batchSize, entries.length), entries.length, onProgress)
   }
+}
+
+/**
+ * Deletes every doc in `refs` as a sequence of `WriteBatch`es of at most
+ * `MAX_BATCH_WRITES` each — the delete counterpart to `writeChunkedDocs`,
+ * but simpler: a delete carries no payload of its own to worry about
+ * outgrowing one request (`CHUNK_COMMIT_BATCH_SIZE`'s whole reason for
+ * being conservative), so the only real limit here is Firestore's hard
+ * per-batch operation cap.
+ */
+async function deleteDocsBatched(db: Firestore, refs: ReturnType<typeof doc>[], label: string): Promise<void> {
+  for (let i = 0; i < refs.length; i += MAX_BATCH_WRITES) {
+    const slice = refs.slice(i, i + MAX_BATCH_WRITES)
+    const batch = writeBatch(db)
+    for (const ref of slice) batch.delete(ref)
+    await withTimeout(batch.commit(), `${label} (${i + 1}-${Math.min(i + MAX_BATCH_WRITES, refs.length)} of ${refs.length})`)
+  }
+}
+
+/**
+ * Deletes one PDF blob's remote copy — its manifest doc and every one of
+ * its `chunks` subdocuments (see the "PDF blobs, chunked" section below for
+ * the shape) — or does nothing if there's no manifest there at all (a blob
+ * id that was deleted locally before it was ever successfully pushed, or
+ * one this function already deleted on an earlier, partially-failed pass).
+ * Shared by the regular sync pass's own per-deletion cleanup and
+ * `sweepOrphanedRemoteBlobs`'s full reconciliation.
+ */
+async function deleteRemoteBlob(db: Firestore, uid: string, blobId: string): Promise<void> {
+  const blobDocRef = doc(db, 'accounts', uid, 'blobs', blobId)
+  const manifestSnap = await withTimeout(getDoc(blobDocRef), `blob ${blobId}'s manifest (checking before delete)`)
+  if (!manifestSnap.exists()) return
+  const { totalChunks } = manifestSnap.data() as { totalChunks: number }
+  const refs = [blobDocRef, ...Array.from({ length: totalChunks }, (_, i) => doc(blobDocRef, 'chunks', String(i)))]
+  await deleteDocsBatched(db, refs, `deleting blob ${blobId} (${totalChunks} chunks)`)
 }
 
 function splitIntoChunks(s: string, size: number): string[] {
@@ -767,6 +821,7 @@ async function runSyncPassNow(onProgress?: (message: string) => void): Promise<S
   const result: SyncResult = {
     pushed: { essays: 0, nodes: 0, sources: 0, sourceContent: 0, quotes: 0, graveyard: 0, bookmarks: 0, blobs: 0 },
     pulled: { essays: 0, nodes: 0, sources: 0, sourceContent: 0, quotes: 0, graveyard: 0, bookmarks: 0, blobs: 0 },
+    deletedBlobs: 0,
   }
 
   // A failure anywhere in here used to abort the *entire* pass outright —
@@ -890,11 +945,32 @@ async function runSyncPassNow(onProgress?: (message: string) => void): Promise<S
     }
   }
 
+  const blobErrors: Error[] = []
+
+  // Blobs this device deleted locally since its last sync (a PDF removed,
+  // replaced, or its whole source deleted — see `storage/pendingBlobDeletions.ts`)
+  // get their remote copy deleted now too, before anything else blob-related
+  // runs. Only ever this device's own small to-do list, not a scan of
+  // everything in Firestore — `sweepOrphanedRemoteBlobs` below is that.
+  const pendingDeletions = loadPendingBlobDeletions()
+  const actuallyDeleted: string[] = []
+  for (const [i, blobId] of [...pendingDeletions].entries()) {
+    onProgress?.(`Removing a deleted PDF's old copy from the cloud… (${i + 1} of ${pendingDeletions.size})`)
+    try {
+      await deleteRemoteBlob(db, uid, blobId)
+      actuallyDeleted.push(blobId)
+      result.deletedBlobs++
+    } catch (err) {
+      console.error(`Sync blob deletion failed for ${blobId}`, err)
+      blobErrors.push(err instanceof Error ? err : new Error(`Failed removing a deleted PDF's old cloud copy: ${String(err)}`))
+    }
+  }
+  clearPendingBlobDeletions(actuallyDeleted)
+
   // PDFs — chunked through Firestore, see the note above.
   const pushedBlobIds = loadPushedBlobIds()
   const sources = await backend.docs.list<Source>('sources')
   const toUpload = sources.filter((s) => s.pdfBlobId && !pushedBlobIds.has(s.pdfBlobId))
-  const blobErrors: Error[] = []
   for (const [i, source] of toUpload.entries()) {
     const blob = await backend.blobs.get(source.pdfBlobId!)
     if (!blob) continue
@@ -974,4 +1050,76 @@ async function runSyncPassNow(onProgress?: (message: string) => void): Promise<S
   }
 
   return result
+}
+
+export interface SweepResult {
+  /** Remote blobs (manifest + chunk docs) actually deleted. */
+  deleted: number
+  /** Remote blobs this sweep found but failed to delete (a transient
+   * network error, most likely) — still orphaned, and still only
+   * discoverable by running the sweep again, since nothing ever marked
+   * them as locally pending in the first place. */
+  errors: Error[]
+}
+
+/**
+ * The on-demand, full-reconciliation counterpart to the regular sync pass's
+ * own per-deletion blob cleanup above — "Sweep orphaned PDFs" in Sync
+ * settings. Lists *every* blob id actually sitting in this account's
+ * Firestore `blobs` collection, diffs it against every *non-deleted* local
+ * source's own `pdfBlobId` (a deleted source's tombstone keeps its old
+ * `pdfBlobId` field around — see `deleteSource` — so this deliberately
+ * excludes those rather than treating them as still-valid references), and
+ * deletes whatever remote blob matches nothing. Catches whatever the
+ * regular per-deletion tracking doesn't:
+ *  - A 'replace'-mode backup restore (`lib/backup.ts`'s `clearAllLocalData`)
+ *    wipes local blobs without going through `deleteBlobTracked` on
+ *    purpose (see that function's own doc comment) — if the backup being
+ *    restored is missing a PDF an earlier one of this account's syncs
+ *    pushed, that blob becomes exactly this kind of orphan.
+ *  - A blob a device deleted *before* this tracking existed at all, or
+ *    while sync itself was broken for some other reason.
+ *  - Simple belt-and-suspenders reassurance that the regular per-pass
+ *    cleanup is actually keeping up, for anyone who wants to check.
+ *
+ * Deliberately not run as part of every ordinary sync pass — it has to
+ * read every single remote blob id to do its diff, which on an account
+ * with a genuinely large PDF library is real, paid Firestore read volume
+ * for something the regular tracking already handles for the overwhelming
+ * majority of real deletions. Manual and occasional is the right cost for
+ * what's meant to be an occasional safety net, not a routine step.
+ */
+export async function sweepOrphanedRemoteBlobs(onProgress?: (message: string) => void): Promise<SweepResult> {
+  const user = currentUser()
+  if (!user) throw new Error('Sign in with Google first — open Sync settings.')
+  const uid = user.uid
+  const db = firestoreDb()
+
+  onProgress?.('Listing every PDF stored in the cloud…')
+  const snap = await withTimeout(getDocs(collection(db, 'accounts', uid, 'blobs')), 'listing remote blobs')
+  const remoteBlobIds = snap.docs.map((d) => d.id)
+
+  const sources = await backend.docs.list<Source>('sources')
+  const validBlobIds = new Set(sources.filter((s) => !s.deleted && s.pdfBlobId).map((s) => s.pdfBlobId!))
+  const orphaned = remoteBlobIds.filter((id) => !validBlobIds.has(id))
+
+  const errors: Error[] = []
+  const succeeded: string[] = []
+  for (const [i, blobId] of orphaned.entries()) {
+    onProgress?.(`Removing orphaned PDF ${i + 1} of ${orphaned.length} from the cloud…`)
+    try {
+      await deleteRemoteBlob(db, uid, blobId)
+      succeeded.push(blobId)
+    } catch (err) {
+      console.error(`Sweep: failed deleting orphaned blob ${blobId}`, err)
+      errors.push(err instanceof Error ? err : new Error(`Failed deleting an orphaned PDF: ${String(err)}`))
+    }
+  }
+  // Whether or not it was this exact sweep that found them, any of these
+  // ids sitting in the regular per-deletion to-do list are now resolved —
+  // leaving them there would just have the next ordinary sync pass redo
+  // (harmlessly, but needlessly) work this sweep already did.
+  clearPendingBlobDeletions(succeeded)
+
+  return { deleted: succeeded.length, errors }
 }

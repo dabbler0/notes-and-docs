@@ -129,6 +129,15 @@ async function clearAllLocalData(): Promise<void> {
   for (const e of essays) await backend.docs.delete('essays', e.id)
   for (const n of nodes) await backend.docs.delete('nodes', n.id)
   for (const s of sources) {
+    // Deliberately the plain, untracked `backend.blobs.delete` here, not
+    // `deleteBlobTracked` (see `storage/pendingBlobDeletions.ts`) — this is
+    // a transient wipe immediately followed by `restoreBackup` writing the
+    // backup's own blobs back in, often under these exact same ids. Tracking
+    // this as a real remote deletion would, for any blob id the backup
+    // happens to restore, mark a blob that's still genuinely in use for
+    // deletion on the next sync. A backup that's actually missing some of
+    // this account's PDFs (restoring an older one, say) is exactly what
+    // `sweepOrphanedRemoteBlobs`'s on-demand full reconciliation is for.
     if (s.pdfBlobId) await backend.blobs.delete(s.pdfBlobId)
     await backend.docs.delete('sources', s.id)
   }

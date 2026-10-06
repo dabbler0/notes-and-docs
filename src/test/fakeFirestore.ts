@@ -155,8 +155,9 @@ function getFailNextWriteMatcher(): { fn: ((path: string) => boolean) | null } {
   return g.__fakeFirestoreFailNextWrite
 }
 
-/** The next `setDoc`/batch write whose path matches `matcher` throws instead
- * of succeeding — exactly once; call again to arm another one. */
+/** The next `setDoc`/batch write *or* `deleteDoc`/batch delete whose path
+ * matches `matcher` throws instead of succeeding — exactly once; call
+ * again to arm another one. */
 export function __failNextWriteTo(matcher: (path: string) => boolean): void {
   getFailNextWriteMatcher().fn = matcher
 }
@@ -171,9 +172,10 @@ function getPersistentFailMatcher(): { fn: ((path: string) => boolean) | null } 
   return g.__fakeFirestorePersistentFail
 }
 
-/** Every `setDoc`/batch write whose path matches `matcher` throws, until
- * `__clearPersistentWriteFailure()` is called — unlike `__failNextWriteTo`,
- * this does not clear itself after one hit. */
+/** Every `setDoc`/batch write *or* `deleteDoc`/batch delete whose path
+ * matches `matcher` throws, until `__clearPersistentWriteFailure()` is
+ * called — unlike `__failNextWriteTo`, this does not clear itself after
+ * one hit. */
 export function __failWritesToUntilCleared(matcher: (path: string) => boolean): void {
   getPersistentFailMatcher().fn = matcher
 }
@@ -241,16 +243,22 @@ export async function setDoc(ref: DocRef, data: Record<string, unknown>, options
 
 const MAX_BATCH_WRITES = 500
 
-/** Mirrors real Firestore's `writeBatch()`: queues `.set()` calls locally and only actually writes anything on `.commit()`, as one unit — real Firestore also caps a single batch at 500 writes and rejects a bigger one outright, which this reproduces too (see `syncEngine.ts`'s own chunked-write helper, which pages into batches of exactly this size specifically to respect it). */
-export function writeBatch(_db: FakeDb): { set(ref: DocRef, data: Record<string, unknown>): void; commit(): Promise<void> } {
-  const ops: { ref: DocRef; data: Record<string, unknown> }[] = []
+/** Mirrors real Firestore's `writeBatch()`: queues `.set()`/`.delete()` calls locally and only actually writes anything on `.commit()`, as one unit — real Firestore also caps a single batch at 500 operations and rejects a bigger one outright, which this reproduces too (see `syncEngine.ts`'s own chunked-write/chunked-delete helpers, which page into batches of exactly this size specifically to respect it). */
+export function writeBatch(_db: FakeDb): { set(ref: DocRef, data: Record<string, unknown>): void; delete(ref: DocRef): void; commit(): Promise<void> } {
+  const ops: ({ kind: 'set'; ref: DocRef; data: Record<string, unknown> } | { kind: 'delete'; ref: DocRef })[] = []
   return {
     set(ref, data) {
-      ops.push({ ref, data })
+      ops.push({ kind: 'set', ref, data })
+    },
+    delete(ref) {
+      ops.push({ kind: 'delete', ref })
     },
     async commit() {
       if (ops.length > MAX_BATCH_WRITES) throw new Error(`Fake Firestore: a WriteBatch cannot have more than ${MAX_BATCH_WRITES} writes`)
-      for (const { ref, data } of ops) await setDoc(ref, data)
+      for (const op of ops) {
+        if (op.kind === 'set') await setDoc(op.ref, op.data)
+        else await deleteDoc(op.ref)
+      }
     },
   }
 }
@@ -274,6 +282,16 @@ export async function getDoc(ref: DocRef): Promise<DocSnap> {
 }
 
 export async function deleteDoc(ref: DocRef): Promise<void> {
+  await Promise.resolve() // same real-await-point reasoning as setDoc's own yield
+  const failMatcher = getFailNextWriteMatcher()
+  if (failMatcher.fn && failMatcher.fn(ref.path)) {
+    failMatcher.fn = null
+    throw new Error('Fake Firestore: simulated write failure')
+  }
+  const persistentFailMatcher = getPersistentFailMatcher()
+  if (persistentFailMatcher.fn && persistentFailMatcher.fn(ref.path)) {
+    throw new Error('Fake Firestore: simulated persistent write failure')
+  }
   __getFakeCloud().delete(ref.path)
 }
 

@@ -24,7 +24,7 @@ import type { Essay, EssayNode, Source, BibtexEntry, QuoteBankEntry, GraveyardFr
 import type { KeyBundle } from '../lib/crypto'
 import type { LocalKey } from '../sync/account'
 import type { AccountMeta } from '../sync/accountMeta'
-import type { SyncResult } from '../sync/syncEngine'
+import type { SweepResult, SyncResult } from '../sync/syncEngine'
 
 const DEFAULT_CONFIG = { apiKey: 'fake', authDomain: 'fake.firebaseapp.com', projectId: 'fake-project', appId: '1:fake:web:fake' }
 
@@ -71,6 +71,8 @@ export interface Device {
   listSources(): Promise<Source[]>
   getSourcePdfBlob(source: Source): Promise<Blob | undefined>
   removeSourcePdf(source: Source): Promise<void>
+  deleteSource(id: string): Promise<void>
+  setSourcePdf(source: Source, file: File, pageHtml: string[]): Promise<void>
 
   createQuote(sourceId: string, page: number, quoteText: string, annotation: string): Promise<QuoteBankEntry>
   listQuotes(): Promise<QuoteBankEntry[]>
@@ -91,6 +93,7 @@ export interface Device {
   sync(onProgress?: (message: string) => void): Promise<SyncResult>
   forceFullResync(onProgress?: (message: string) => void): Promise<SyncResult>
   discardLocalChanges(collections: ('essays' | 'nodes' | 'sources' | 'quotes' | 'graveyard' | 'bookmarks')[]): Promise<void>
+  sweepOrphanedRemoteBlobs(onProgress?: (message: string) => void): Promise<SweepResult>
 }
 
 export async function newDevice(config = DEFAULT_CONFIG): Promise<Device> {
@@ -171,6 +174,8 @@ export async function newDevice(config = DEFAULT_CONFIG): Promise<Device> {
     listSources: () => withStorageAsync(() => sourcesRepoMod.listSources()),
     getSourcePdfBlob: (source) => withStorageAsync(() => sourcesRepoMod.getSourcePdfBlob(source)),
     removeSourcePdf: (source) => withStorageAsync(() => sourcesRepoMod.removeSourcePdf(source)),
+    deleteSource: (id) => withStorageAsync(() => sourcesRepoMod.deleteSource(id)),
+    setSourcePdf: (source, file, pageHtml) => withStorageAsync(() => sourcesRepoMod.setSourcePdf(source, file, pageHtml)),
 
     createQuote: (sourceId, page, quoteText, annotation) => withStorageAsync(() => quoteBankRepoMod.addQuoteToBank(sourceId, page, quoteText, annotation)),
     listQuotes: () => withStorageAsync(() => quoteBankRepoMod.listQuoteBank()),
@@ -195,6 +200,7 @@ export async function newDevice(config = DEFAULT_CONFIG): Promise<Device> {
         return syncEngineMod.runSyncPass(onProgress)
       }),
     discardLocalChanges: (collections) => withStorageAsync(() => syncEngineMod.discardLocalChanges(collections)),
+    sweepOrphanedRemoteBlobs: (onProgress) => withStorageAsync(() => syncEngineMod.sweepOrphanedRemoteBlobs(onProgress)),
   }
   return device
 }

@@ -9,7 +9,7 @@ import { onAuthChange, signInWithGoogle, signOutOfGoogle } from '../../sync/fire
 import { getAccountMeta, setAccountMeta, wipeRemoteAccountData, type AccountMeta } from '../../sync/accountMeta'
 import { computeKeyFingerprint, importKeyFromBundle, isKeyBundle, type KeyBundle } from '../../lib/crypto'
 import { isAutoSyncEnabled, setAutoSyncEnabled, syncNow } from '../../sync/autoSync'
-import { discardLocalChanges, resetSyncState, type SyncResult } from '../../sync/syncEngine'
+import { discardLocalChanges, resetSyncState, sweepOrphanedRemoteBlobs, type SyncResult } from '../../sync/syncEngine'
 import { bundleToQrDataUrl } from '../../sync/qr'
 import { downloadBlob } from '../../lib/download'
 
@@ -596,6 +596,35 @@ function AccountPanel({ uid, onKeyForgotten }: { uid: string; onKeyForgotten: ()
     }
   }
 
+  /**
+   * The manual, full-reconciliation counterpart to the cleanup the regular
+   * sync pass already does for its own tracked deletions (see
+   * `syncEngine.ts`'s own `sweepOrphanedRemoteBlobs` doc comment) — reads
+   * every blob id actually sitting in this account's Firestore project and
+   * deletes whatever none of this device's own local sources reference
+   * anymore. Safe to run anytime (it only ever deletes a remote blob no
+   * local source points to), but real, permanent deletion of someone's
+   * data in Firestore nonetheless, hence the confirmation.
+   */
+  async function handleSweep() {
+    if (
+      !confirm(
+        "Scan this account's entire Firestore project for PDFs no longer referenced by any source on this device, and delete them? This can't be undone. Safe to run anytime — nothing still in use gets touched — but worth running from whichever device has the most complete, up-to-date library, since a source missing here (not yet synced to this device) would look orphaned even though it's still valid elsewhere.",
+      )
+    )
+      return
+    setStatus({ kind: 'running', message: 'Starting sweep…' })
+    try {
+      const result = await sweepOrphanedRemoteBlobs((message) => setStatus({ kind: 'running', message }))
+      const hadErrors = result.errors.length > 0
+      const parts = [`removed ${result.deleted} orphaned PDF${result.deleted === 1 ? '' : 's'}`]
+      if (hadErrors) parts.push(`${result.errors.length} failed — try again`)
+      setStatus({ kind: hadErrors ? 'error' : 'ok', message: `${hadErrors ? '' : '✓ '}Sweep complete — ${parts.join(', ')}.` })
+    } catch (err) {
+      setStatus({ kind: 'error', message: err instanceof Error ? err.message : String(err) })
+    }
+  }
+
   async function handleShowQr() {
     const bundle = exportBundleFor(uid)
     if (!bundle) return
@@ -692,17 +721,28 @@ function AccountPanel({ uid, onKeyForgotten }: { uid: string; onKeyForgotten: ()
           </button>
         </div>
       </div>
+
+      <div className="sync-reset-box" style={{ marginTop: 12 }}>
+        <p className="muted" style={{ marginTop: 0 }}>
+          Every ordinary sync already deletes a PDF's old cloud copy when you remove or replace it here — but if this account's Firestore usage looks bigger than what you'd expect from your local library (e.g. from syncing
+          before that cleanup existed, or restoring an old backup), this does a full one-time scan for anything left over and removes it:
+        </p>
+        <button className="btn btn-sm btn-ghost btn-danger" disabled={status.kind === 'running'} onClick={handleSweep}>
+          Sweep orphaned PDFs from the cloud
+        </button>
+      </div>
     </div>
   )
 }
 
 function summarize(result: SyncResult): string {
-  const { pushed, pulled } = result
+  const { pushed, pulled, deletedBlobs } = result
   const pushedTotal = Object.values(pushed).reduce((a, b) => a + b, 0)
   const pulledTotal = Object.values(pulled).reduce((a, b) => a + b, 0)
-  if (pushedTotal === 0 && pulledTotal === 0) return '✓ Already up to date.'
+  if (pushedTotal === 0 && pulledTotal === 0 && deletedBlobs === 0) return '✓ Already up to date.'
   const parts: string[] = []
   if (pushedTotal) parts.push(`sent ${pushedTotal} change${pushedTotal === 1 ? '' : 's'}`)
   if (pulledTotal) parts.push(`received ${pulledTotal} change${pulledTotal === 1 ? '' : 's'}`)
+  if (deletedBlobs) parts.push(`removed ${deletedBlobs} deleted PDF${deletedBlobs === 1 ? '' : 's'} from the cloud`)
   return `✓ Synced — ${parts.join(', ')}.`
 }

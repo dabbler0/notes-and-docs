@@ -1,4 +1,5 @@
 import { backend } from '../storage'
+import { deleteBlobTracked } from '../storage/pendingBlobDeletions'
 import { id } from '../lib/id'
 import { displayAuthors, displayTitle } from '../lib/bibtex'
 import { gzipCompress, gzipDecompress } from '../lib/compression'
@@ -263,17 +264,20 @@ export async function updateSourceContent(source: Source, pageHtml: string[]): P
  * propagate the deletion to other devices (see the `deleted` field note on
  * the Source type) — but the local PDF copy is removed for real right away,
  * same as before, since there's no reason to keep it taking up space on
- * *this* device once its source is gone. The content record is left as is
- * (same known gap as the PDF blob's own orphaned remote copy — see the
- * module doc comment on `syncEngine.ts`), and the now-orphaned encrypted
- * copies in Storage (if this ever synced) are left behind too; cleaning
- * those up remotely isn't implemented, a known gap for this rudimentary a
- * sync setup.
+ * *this* device once its source is gone. `deleteBlobTracked` also records
+ * it for the next sync pass to delete remotely (see
+ * `storage/pendingBlobDeletions.ts`) — this used to leave the blob's
+ * encrypted remote copy behind forever, a real source of a Firestore
+ * project outgrowing what's actually stored locally. The `sourceContent`
+ * record is still left as is for now (a much smaller leftover — the
+ * source's own extracted text, not a multi-megabyte PDF), same unaddressed
+ * gap `syncEngine.ts`'s own module doc comment describes for a document's
+ * now-unused `encChunks`.
  */
 export async function deleteSource(sourceId: string): Promise<void> {
   const source = await getSource(sourceId)
   if (!source) return
-  if (source.pdfBlobId) await backend.blobs.delete(source.pdfBlobId)
+  if (source.pdfBlobId) await deleteBlobTracked(source.pdfBlobId)
   source.deleted = true
   await updateSource(source)
 }
@@ -331,7 +335,7 @@ export async function setSourcePdf(source: Source, file: File, pageHtml: string[
   source.pdfFileName = file.name
   source.textOnly = false
   await updateSourceContent(source, pageHtml)
-  if (oldBlobId) await backend.blobs.delete(oldBlobId)
+  if (oldBlobId) await deleteBlobTracked(oldBlobId)
 }
 
 /**
@@ -351,7 +355,7 @@ export async function stageOcrPreview(file: File): Promise<string> {
 
 /** Discards a blob staged by `stageOcrPreview` that the user chose not to keep. */
 export async function discardOcrPreview(blobId: string): Promise<void> {
-  await backend.blobs.delete(blobId)
+  await deleteBlobTracked(blobId)
 }
 
 /**
@@ -365,7 +369,7 @@ export async function commitOcrPreview(source: Source, blobId: string, fileName:
   source.pdfFileName = fileName
   source.textOnly = false
   await updateSourceContent(source, pageHtml)
-  if (oldBlobId) await backend.blobs.delete(oldBlobId)
+  if (oldBlobId) await deleteBlobTracked(oldBlobId)
 }
 
 /** Detaches a source's PDF entirely, reverting it to BibTeX + comment only. */
@@ -376,7 +380,7 @@ export async function removeSourcePdf(source: Source): Promise<void> {
   source.pdfFileName = undefined
   source.textOnly = false
   await updateSourceContent(source, [])
-  await backend.blobs.delete(oldBlobId)
+  await deleteBlobTracked(oldBlobId)
 }
 
 /**
@@ -397,7 +401,7 @@ export async function convertSourceToTextOnly(source: Source): Promise<void> {
   source.pdfBlobId = undefined
   source.textOnly = true
   await updateSource(source)
-  await backend.blobs.delete(oldBlobId)
+  await deleteBlobTracked(oldBlobId)
 }
 
 /** Whether a source has anything (a PDF, or its extracted text kept on its

@@ -9,7 +9,7 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { newDevice, newDeviceSignedIn, type Device } from '../../test/deviceHarness'
-import { __failNextWriteTo, __resetFakeCloud } from '../../test/fakeFirestore'
+import { __failNextWriteTo, __getFakeCloud, __resetFakeCloud } from '../../test/fakeFirestore'
 import { generateKeyBundle, isKeyBundle } from '../../lib/crypto'
 
 beforeEach(() => {
@@ -674,5 +674,128 @@ describe('autoSync (the 30s polling loop)', () => {
     const result = await device.sync()
     expect(result.pushed.essays).toBe(1)
     expect(essay.title).toBe('Auto essay')
+  })
+})
+
+describe('orphaned remote blob cleanup', () => {
+  function smallPdf(byte = 7): File {
+    return new File([new Uint8Array([byte, byte, byte])], 'paper.pdf', { type: 'application/pdf' })
+  }
+
+  it("deletes a blob's remote copy (manifest + chunks) on the next sync after its source is deleted locally", async () => {
+    const a = await newDeviceSignedIn('orphan1@example.com')
+    await a.createLocalKey()
+    await a.sync()
+    const source = await a.createSource({ type: 'article', key: 'x', fields: {} }, { pdfFile: smallPdf() })
+    const pushResult = await a.sync()
+    expect(pushResult.pushed.blobs).toBe(1)
+    const blobId = source.pdfBlobId!
+    expect(__getFakeCloud().has(`accounts/${a.uid}/blobs/${blobId}`)).toBe(true)
+
+    await a.deleteSource(source.id)
+    const deleteResult = await a.sync()
+
+    expect(deleteResult.deletedBlobs).toBe(1)
+    expect(__getFakeCloud().has(`accounts/${a.uid}/blobs/${blobId}`)).toBe(false)
+    expect(__getFakeCloud().has(`accounts/${a.uid}/blobs/${blobId}/chunks/0`)).toBe(false)
+  })
+
+  it("deletes the old blob's remote copy when a source's PDF is replaced, keeping the new one", async () => {
+    const a = await newDeviceSignedIn('orphan2@example.com')
+    await a.createLocalKey()
+    await a.sync()
+    const source = await a.createSource({ type: 'article', key: 'x', fields: {} }, { pdfFile: smallPdf(1) })
+    await a.sync()
+    const oldBlobId = source.pdfBlobId!
+
+    const fresh = (await a.getSource(source.id))!
+    await a.setSourcePdf(fresh, smallPdf(2), ['replaced'])
+    const result = await a.sync()
+
+    expect(result.deletedBlobs).toBe(1)
+    expect(__getFakeCloud().has(`accounts/${a.uid}/blobs/${oldBlobId}`)).toBe(false)
+    expect(__getFakeCloud().has(`accounts/${a.uid}/blobs/${fresh.pdfBlobId}`)).toBe(true)
+  })
+
+  it('never touches a blob still referenced by a non-deleted source', async () => {
+    const a = await newDeviceSignedIn('orphan3@example.com')
+    await a.createLocalKey()
+    await a.sync()
+    const source = await a.createSource({ type: 'article', key: 'x', fields: {} }, { pdfFile: smallPdf() })
+    await a.sync()
+    const result = await a.sync() // nothing new deleted
+    expect(result.deletedBlobs).toBe(0)
+    expect(__getFakeCloud().has(`accounts/${a.uid}/blobs/${source.pdfBlobId}`)).toBe(true)
+  })
+
+  it('retries a deletion that failed on an earlier pass instead of forgetting it', async () => {
+    const a = await newDeviceSignedIn('orphan4@example.com')
+    await a.createLocalKey()
+    await a.sync()
+    const source = await a.createSource({ type: 'article', key: 'x', fields: {} }, { pdfFile: smallPdf() })
+    await a.sync()
+    const blobId = source.pdfBlobId!
+    await a.deleteSource(source.id)
+
+    __failNextWriteTo((path) => path === `accounts/${a.uid}/blobs/${blobId}`)
+    await expect(a.sync()).rejects.toThrow()
+    expect(__getFakeCloud().has(`accounts/${a.uid}/blobs/${blobId}`)).toBe(true) // still there — this pass's delete failed
+
+    const retry = await a.sync()
+    expect(retry.deletedBlobs).toBe(1)
+    expect(__getFakeCloud().has(`accounts/${a.uid}/blobs/${blobId}`)).toBe(false)
+  })
+
+  describe('sweepOrphanedRemoteBlobs (the manual full-reconciliation button)', () => {
+    it('deletes a remote blob with no matching local source at all', async () => {
+      const a = await newDeviceSignedIn('sweep1@example.com')
+      await a.createLocalKey()
+      await a.sync()
+      const source = await a.createSource({ type: 'article', key: 'x', fields: {} }, { pdfFile: smallPdf() })
+      await a.sync()
+      const blobId = source.pdfBlobId!
+
+      // Simulates exactly the gap this whole feature exists for: a source
+      // tombstoned *without* going through deleteSource/deleteBlobTracked
+      // (e.g. a 'replace'-mode backup restore from before this PDF was
+      // added would leave the same shape — a non-existent or tombstoned
+      // local source, but no record on the regular pending-deletion
+      // to-do list for its old blob). `deleteSource` itself tombstones
+      // without clearing `pdfBlobId` too (see its own doc comment), so
+      // plain `updateSource` reproduces that shape directly.
+      await a.updateSource({ ...source, deleted: true })
+
+      const result = await a.sweepOrphanedRemoteBlobs()
+      expect(result.deleted).toBe(1)
+      expect(result.errors).toEqual([])
+      expect(__getFakeCloud().has(`accounts/${a.uid}/blobs/${blobId}`)).toBe(false)
+    })
+
+    it('leaves a blob referenced by a non-deleted source untouched', async () => {
+      const a = await newDeviceSignedIn('sweep2@example.com')
+      await a.createLocalKey()
+      await a.sync()
+      const source = await a.createSource({ type: 'article', key: 'x', fields: {} }, { pdfFile: smallPdf() })
+      await a.sync()
+
+      const result = await a.sweepOrphanedRemoteBlobs()
+      expect(result.deleted).toBe(0)
+      expect(__getFakeCloud().has(`accounts/${a.uid}/blobs/${source.pdfBlobId}`)).toBe(true)
+    })
+
+    it("clears the orphan from the regular pending-deletion list too, so the next ordinary sync doesn't redo the same work", async () => {
+      const a = await newDeviceSignedIn('sweep3@example.com')
+      await a.createLocalKey()
+      await a.sync()
+      const source = await a.createSource({ type: 'article', key: 'x', fields: {} }, { pdfFile: smallPdf() })
+      await a.sync()
+      await a.deleteSource(source.id) // records it as pending, but sweep gets to it first
+
+      const swept = await a.sweepOrphanedRemoteBlobs()
+      expect(swept.deleted).toBe(1)
+
+      const syncResult = await a.sync()
+      expect(syncResult.deletedBlobs).toBe(0) // nothing left to redo
+    })
   })
 })
