@@ -47,6 +47,18 @@ describe('computeQuoteRangesPerItem', () => {
   it('returns an empty map when there are no quotes at all', () => {
     expect(computeQuoteRangesPerItem([item('Hello', 700)], []).size).toBe(0)
   })
+
+  it("tags a margin annotation's range with kind: 'annotation'", () => {
+    const items = [item('Hello world.', 700)]
+    const ranges = computeQuoteRangesPerItem(items, [{ quoteText: 'world', annotation: 'a note to self', kind: 'annotation' }])
+    expect(ranges.get(0)).toEqual([{ start: 6, end: 11, kind: 'annotation', title: 'a note to self' }])
+  })
+
+  it("defaults a quote with no kind at all to 'quote' (pre-migration data)", () => {
+    const items = [item('Hello world.', 700)]
+    const ranges = computeQuoteRangesPerItem(items, [{ quoteText: 'world', annotation: '' }])
+    expect(ranges.get(0)?.[0].kind).toBe('quote')
+  })
 })
 
 describe('renderHighlightedSpan', () => {
@@ -86,5 +98,13 @@ describe('renderHighlightedSpan', () => {
     renderHighlightedSpan(span, 'hit here', [{ start: 0, end: 3, kind: 'search-active' }])
     const mark = span.querySelector('mark')!
     expect(mark.className.split(' ').sort()).toEqual(['pdf-search-hit', 'pdf-search-hit-active'])
+  })
+
+  it('wraps a margin-annotation range in its own distinct class', () => {
+    const span = document.createElement('span')
+    renderHighlightedSpan(span, 'Hello world', [{ start: 6, end: 11, kind: 'annotation', title: 'a note' }])
+    const mark = span.querySelector('mark')!
+    expect(mark.className).toBe('pdf-annotation-hit')
+    expect(mark.title).toBe('a note')
   })
 })

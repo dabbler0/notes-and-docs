@@ -11,7 +11,7 @@ import { describeOcrError, looksLikeScannedPdf, ocrImage, ocrPdf, reOcrPdf } fro
 import { useSourceStorageBytes } from '../../lib/useSourceStorageBytes'
 import { useIsMobile } from '../../lib/useIsMobile'
 import { commitOcrPreview, convertSourceToTextOnly, deleteSource, discardOcrPreview, getSource, getSourcePdfBlob, removeSourcePdf, setSourcePdf, stageOcrPreview, touchSourceViewed, updateSource, updateSourceContent } from '../../models/sourcesRepo'
-import { addQuoteToBank, deleteQuoteFromBank, listQuotesForSource } from '../../models/quoteBankRepo'
+import { addMarginAnnotation, addQuoteToBank, deleteQuoteFromBank, listMarginAnnotationsForSource, listQuotesForSource } from '../../models/quoteBankRepo'
 import { Icon } from '../Icon'
 import type { QuoteBankEntry, Source } from '../../models/types'
 
@@ -87,7 +87,11 @@ export function SourceWorkspace({
   // QuoteInsertDialog's manual-entry path already uses.
   const [manualPage, setManualPage] = useState(0)
   const [savingQuote, setSavingQuote] = useState(false)
-  const [quoteSaved, setQuoteSaved] = useState(false)
+  // Which kind the hand-typed form's own "Added!" confirmation is for —
+  // `null` means neither button is mid-confirmation. Two buttons (one per
+  // `QuoteBankEntryKind`) share this one form, so this needs to say *which*
+  // one just saved, not just whether something did.
+  const [savedKind, setSavedKind] = useState<'quote' | 'annotation' | null>(null)
   // Only meaningful once there's actually a PDF to choose between viewing
   // modes for — a text-only source (no pdfBlobId) always reads as text,
   // whatever this says.
@@ -99,6 +103,16 @@ export function SourceWorkspace({
   // Source-shaped object pointing at the staged blob (see previewSource).
   const [ocrPreview, setOcrPreview] = useState<{ blobId: string; fileName: string; pageHtml: string[] } | null>(null)
   const [quotes, setQuotes] = useState<QuoteBankEntry[]>([])
+  const [annotations, setAnnotations] = useState<QuoteBankEntry[]>([])
+  // Fed to `ReaderMode` for its own span-highlighting, which wants both
+  // kinds at once (each in its own color) even though they're never shown
+  // together in a *list* anywhere in this component. Memoized so this
+  // array's own identity only changes when the quotes or annotations
+  // actually do — handing `ReaderMode` a fresh array on every unrelated
+  // re-render (e.g. a keystroke in the comment field) would retrigger its
+  // text page's iframe-rebuild effect every time, the same flash bug fixed
+  // elsewhere in this file's own history.
+  const quoteBankEntries = useMemo(() => [...quotes, ...annotations], [quotes, annotations])
   const storageBytes = useSourceStorageBytes(source ?? ({ id: sourceId } as Source))
 
   // Once the real source loads (or changes identity), seed every local
@@ -355,24 +369,32 @@ export function SourceWorkspace({
     onChanged()
   }
 
-  async function saveQuoteToBank() {
+  /** Shared by both hand-typed-quote buttons — see `ReaderMode`'s own
+   * `handleSaveSelection` for the drag-selection path's identical split. */
+  async function saveToBank(kind: 'quote' | 'annotation') {
     if (!pendingQuote.trim() || !source) return
     setSavingQuote(true)
     try {
-      await addQuoteToBank(source.id, hasViewer ? page : manualPage, pendingQuote.trim(), quoteAnnotation.trim())
+      const save = kind === 'annotation' ? addMarginAnnotation : addQuoteToBank
+      await save(source.id, hasViewer ? page : manualPage, pendingQuote.trim(), quoteAnnotation.trim())
       setPendingQuote('')
       setQuoteAnnotation('')
       setManualPage(0)
-      setQuoteSaved(true)
+      setSavedKind(kind)
       refreshQuotes()
-      setTimeout(() => setQuoteSaved(false), 1500)
+      setTimeout(() => setSavedKind(null), 1500)
     } finally {
       setSavingQuote(false)
     }
   }
 
+  /** Refreshes both of this source's own lists — its quote-bank quotes and
+   * its margin annotations — kept as one function since nearly everything
+   * that invalidates one (a save or delete from either `ReaderMode`'s own
+   * selection bar or this component's two panels) invalidates both. */
   function refreshQuotes() {
     listQuotesForSource(sourceId).then(setQuotes)
+    listMarginAnnotationsForSource(sourceId).then(setAnnotations)
   }
 
   /** Jumps the reader straight to a quote's own page — the Quotes panel's
@@ -664,32 +686,52 @@ export function SourceWorkspace({
     </div>
   )
 
+  /** Shared by the Quotes and Margin annotations sections below — the two
+   * lists are otherwise identical in every interactive respect (click a
+   * card to jump to its page, Remove to delete it), only ever differing in
+   * which entries they're given and which empty-state message/card color
+   * applies. */
+  function entryList(list: QuoteBankEntry[], emptyMessage: string, cardClassName?: string) {
+    if (list.length === 0) return <p className="empty-state">{emptyMessage}</p>
+    // Redundant with the component-level `if (!source) return` above in
+    // practice (nothing calls this before that's already passed) — just
+    // satisfying the type checker, which can't carry that narrowing across
+    // a nested function declaration like this one.
+    if (!source) return null
+    return (
+      <div className="quote-bank-list">
+        {list.map((q) => (
+          <div className="card quote-bank-card quote-bank-card-clickable" key={q.id} onClick={() => handleViewQuote(q)}>
+            <blockquote className={`quote-bank-text${cardClassName ? ` ${cardClassName}` : ''}`}>“{q.quoteText}”</blockquote>
+            {q.annotation && <p className="quote-bank-annotation">{q.annotation}</p>}
+            <div className="card-meta">{citationPage(source, q.page) ? `p. ${citationPage(source, q.page)}` : `Page ${q.page}`}</div>
+            <div className="quote-bank-actions">
+              <button
+                type="button"
+                className="btn btn-ghost btn-sm"
+                onClick={(ev) => {
+                  ev.stopPropagation()
+                  handleDeleteQuote(q.id)
+                }}
+              >
+                Remove
+              </button>
+            </div>
+          </div>
+        ))}
+      </div>
+    )
+  }
+
   const quotesPanel = (
     <div className="source-quotes-panel">
-      {quotes.length === 0 ? (
-        <p className="empty-state">No quotes saved from this source yet — highlight some text in the reader and add it to the quote bank.</p>
-      ) : (
-        <div className="quote-bank-list">
-          {quotes.map((q) => (
-            <div className="card quote-bank-card quote-bank-card-clickable" key={q.id} onClick={() => handleViewQuote(q)}>
-              <blockquote className="quote-bank-text">“{q.quoteText}”</blockquote>
-              {q.annotation && <p className="quote-bank-annotation">{q.annotation}</p>}
-              <div className="card-meta">{citationPage(source, q.page) ? `p. ${citationPage(source, q.page)}` : `Page ${q.page}`}</div>
-              <div className="quote-bank-actions">
-                <button
-                  type="button"
-                  className="btn btn-ghost btn-sm"
-                  onClick={(ev) => {
-                    ev.stopPropagation()
-                    handleDeleteQuote(q.id)
-                  }}
-                >
-                  Remove
-                </button>
-              </div>
-            </div>
-          ))}
-        </div>
+      <h4 className="source-quotes-panel-heading">Quotes{quotes.length > 0 ? ` (${quotes.length})` : ''}</h4>
+      {entryList(quotes, 'No quotes saved from this source yet — highlight some text in the reader and add it to the quote bank.')}
+      <h4 className="source-quotes-panel-heading">Margin annotations{annotations.length > 0 ? ` (${annotations.length})` : ''}</h4>
+      {entryList(
+        annotations,
+        'No margin annotations on this source yet — highlight some text in the reader and save it as an annotation. Unlike quotes, these stay with the source: they never show up in the quote bank or when inserting quotes into an essay.',
+        'quote-bank-text-annotation',
       )}
     </div>
   )
@@ -712,7 +754,7 @@ export function SourceWorkspace({
               <Icon name="file" /> Edit
             </button>
             <button className="btn btn-sm" onClick={() => setMobilePanel('quotes')}>
-              <Icon name="quote" /> Quotes{quotes.length > 0 ? ` (${quotes.length})` : ''}
+              <Icon name="quote" /> Quotes{quotes.length + annotations.length > 0 ? ` (${quotes.length + annotations.length})` : ''}
             </button>
           </>
         )}
@@ -759,7 +801,7 @@ export function SourceWorkspace({
                   onPageChange={handlePageChange}
                   mode={displaySource!.pdfBlobId && viewMode === 'pdf' ? 'pdf' : 'text'}
                   onModeChange={setViewMode}
-                  quotes={quotes}
+                  quotes={quoteBankEntries}
                   onQuoteSaved={refreshQuotes}
                   onFullscreen={ocrPreview ? undefined : () => setReaderMode(true)}
                 />
@@ -767,10 +809,10 @@ export function SourceWorkspace({
             ) : (
               <div className="source-no-viewer">
                 <p className="muted" style={{ marginTop: 0 }}>
-                  No PDF attached — this source is BibTeX + comment only. You can still add a quote by typing it in, or attach an image below to OCR it.
+                  No PDF attached — this source is BibTeX + comment only. You can still add a quote or margin annotation by typing it in, or attach an image below to OCR it.
                 </p>
                 <div className="field">
-                  <label>Add to quote bank</label>
+                  <label>Add to quote bank or margin annotations</label>
                   <textarea rows={4} value={pendingQuote} onInput={(e) => setPendingQuote((e.target as HTMLTextAreaElement).value)} placeholder="Type or paste a quote here, or attach an image below to OCR it" />
                   <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginTop: 6, flexWrap: 'wrap' }}>
                     <label className="btn btn-ghost btn-sm" style={{ cursor: pdfBusy ? 'default' : 'pointer' }}>
@@ -796,10 +838,15 @@ export function SourceWorkspace({
                       style={{ width: 160, flexShrink: 0 }}
                     />
                   </div>
-                  <input style={{ marginTop: 6 }} placeholder="Annotation (optional) — why this quote is worth keeping" value={quoteAnnotation} onInput={(e) => setQuoteAnnotation((e.target as HTMLInputElement).value)} />
-                  <button className="btn btn-ghost btn-sm" style={{ marginTop: 6 }} disabled={!pendingQuote.trim() || savingQuote} onClick={saveQuoteToBank}>
-                    {quoteSaved ? 'Added!' : '+ Add to quote bank'}
-                  </button>
+                  <input style={{ marginTop: 6 }} placeholder="Note (optional) — why this is worth keeping, or what it's about" value={quoteAnnotation} onInput={(e) => setQuoteAnnotation((e.target as HTMLInputElement).value)} />
+                  <div style={{ display: 'flex', gap: 8, marginTop: 6 }}>
+                    <button className="btn btn-ghost btn-sm" disabled={!pendingQuote.trim() || savingQuote} onClick={() => saveToBank('quote')}>
+                      {savedKind === 'quote' ? 'Added!' : '+ Add to quote bank'}
+                    </button>
+                    <button className="btn btn-ghost btn-sm" disabled={!pendingQuote.trim() || savingQuote} onClick={() => saveToBank('annotation')}>
+                      {savedKind === 'annotation' ? 'Added!' : '+ Save as margin annotation'}
+                    </button>
+                  </div>
                 </div>
               </div>
             )}
@@ -810,7 +857,7 @@ export function SourceWorkspace({
           (showQuotesPanel ? (
             <div className="comments-panel-shell">
               <div className="right-panel-tabs">
-                <span style={{ fontWeight: 700, fontSize: 13, paddingLeft: 4 }}>Quotes{quotes.length > 0 ? ` (${quotes.length})` : ''}</span>
+                <span style={{ fontWeight: 700, fontSize: 13, paddingLeft: 4 }}>Quotes &amp; annotations</span>
                 <div className="spacer" />
                 <button className="btn btn-ghost btn-sm" onClick={() => setShowQuotesPanel(false)} title="Collapse panel">
                   ›
@@ -827,7 +874,7 @@ export function SourceWorkspace({
 
       {mobilePanel && (
         <Modal onClose={() => setMobilePanel(null)}>
-          <h2 style={{ marginTop: 0 }}>{mobilePanel === 'ops' ? 'Edit source' : `Quotes${quotes.length > 0 ? ` (${quotes.length})` : ''}`}</h2>
+          <h2 style={{ marginTop: 0 }}>{mobilePanel === 'ops' ? 'Edit source' : 'Quotes & annotations'}</h2>
           {mobilePanel === 'ops' ? opsPanel : quotesPanel}
         </Modal>
       )}
@@ -840,7 +887,7 @@ export function SourceWorkspace({
           onPageChange={handlePageChange}
           mode={displaySource.pdfBlobId && viewMode === 'pdf' ? 'pdf' : 'text'}
           onModeChange={setViewMode}
-          quotes={quotes}
+          quotes={quoteBankEntries}
           onQuoteSaved={refreshQuotes}
           onClose={() => setReaderMode(false)}
         />

@@ -9,5 +9,6 @@
  */
 import type { Migration } from './migrations'
 import { sourcesMigrations } from '../models/sourcesMigrations'
+import { quoteBankMigrations } from '../models/quoteBankMigrations'
 
-export const ALL_MIGRATIONS: Migration[] = [...sourcesMigrations]
+export const ALL_MIGRATIONS: Migration[] = [...sourcesMigrations, ...quoteBankMigrations]

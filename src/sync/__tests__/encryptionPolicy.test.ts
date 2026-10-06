@@ -238,3 +238,40 @@ describe('migrating remote source data through the source-content-split chain (v
     expect(pulled?.pageHtml).toEqual(['<p>Old inline page one.</p>', '<p>Old inline page two.</p>'])
   })
 })
+
+describe('migrating remote quote data through the quote-kind backfill (version 6)', () => {
+  it("backfills kind: 'quote' (as plaintext metadata, not under _enc) on an old remote quote doc that predates margin annotations", async () => {
+    const { bundle, cryptoKey } = await generateKeyBundle()
+    const a = await newDeviceSignedIn('oldquoteshape@example.com')
+    await a.importLocalKey(bundle)
+    await a.sync() // bootstraps meta at the current version — reset below to simulate an account that's already past every other migration, but predates the quote-kind backfill
+    await a.setAccountMeta((await a.getAccountMeta())!.keyFingerprint, 5)
+
+    // A real account pushed from a device running the previous version of
+    // this app — already encrypted under the current field policy, but
+    // from before `kind` existed at all, so there's no such field anywhere
+    // on the doc, encrypted or not.
+    const now = 4_000_000
+    const enc = await encryptJson(cryptoKey, { quoteText: 'an old quoted excerpt', annotation: 'why it mattered', page: 7 })
+    __getFakeCloud().set(`accounts/${a.uid}/quotes/quote1`, { id: 'quote1', sourceId: 'source1', createdAt: now, updatedAt: now, _enc: enc })
+
+    await a.sync()
+
+    const after = rawRemoteDoc(a.uid!, 'quotes', 'quote1')
+    expect(after.kind).toBe('quote') // backfilled, as plaintext — not one of quotes' sensitive fields
+    expect(after.updatedAt).toBe(now) // migration must never look like a new edit
+    expect(after._enc).toBeDefined()
+    const decoded = await decryptJson<Record<string, unknown>>(cryptoKey, after._enc as EncryptedField)
+    expect(decoded.quoteText).toBe('an old quoted excerpt') // untouched by the migration
+
+    const schemaDoc = rawRemoteDoc(a.uid!, '__meta', 'schemaVersion')
+    expect(schemaDoc.version).toBe(CURRENT_REMOTE_SCHEMA_VERSION)
+
+    // And a second device, pulling fresh, sees it as a normal, usable quote.
+    const b = await newDeviceSignedIn('oldquoteshape@example.com')
+    await b.importLocalKey(bundle)
+    await b.sync()
+    const pulled = await b.listQuotes()
+    expect(pulled.map((q) => ({ quoteText: q.quoteText, kind: q.kind }))).toEqual([{ quoteText: 'an old quoted excerpt', kind: 'quote' }])
+  })
+})

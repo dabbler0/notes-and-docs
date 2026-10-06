@@ -114,18 +114,50 @@ export interface Source {
 }
 
 /**
- * A quote saved out of a source's PDF independently of any essay — browsed
- * and searched on its own (the "Quotes" tab) and, from there, reused across
- * as many essays as you like via the quote-insertion dialog's "From the
- * quote bank" tab, rather than being tied to wherever it first got quoted.
+ * `'quote'` — kept as a preparation for insertion into an essay, for
+ * others to eventually read: browsed and searched on its own (the global
+ * "Quotes" tab) and, from there, reused across as many essays as you like
+ * via the quote-insertion dialog's "From the quote bank" tab, rather than
+ * being tied to wherever it first got quoted.
+ *
+ * `'annotation'` — a margin annotation: a note to yourself while reading,
+ * never meant for the quote bank or essay insertion. Shown only from the
+ * source it came from (`SourceWorkspace`'s own "Margin annotations"
+ * panel), and deliberately excluded from `listQuoteBank`/the global Quotes
+ * tab/the quote-insertion dialog — see those call sites' own doc comments.
+ *
+ * Absent on an entry saved before this distinction existed; every read
+ * path treats a missing `kind` as `'quote'` (see `quoteBankRepo.ts`'s own
+ * doc comments) — the formal migration (`quoteBankMigrations.ts`) backfills
+ * it explicitly too, but the defensive default means nothing actually
+ * depends on that migration having already run (an old backup restored
+ * later, or a remote account mid-migration, still behaves correctly).
+ */
+export type QuoteBankEntryKind = 'quote' | 'annotation'
+
+/**
+ * A highlighted excerpt saved out of a source, independent of any essay —
+ * either a `'quote'` (see `QuoteBankEntryKind`'s own doc comment) or an
+ * `'annotation'`. Both are otherwise the same shape and get the same
+ * interaction model in `SourceWorkspace`/`ReaderMode` (select text in the
+ * source, see it highlighted, optionally attach a free-text note, browse a
+ * list, jump back to the page) — only `kind` and which lists/dialogs each
+ * one is allowed to show up in differ.
  */
 export interface QuoteBankEntry {
   id: string
   sourceId: string
   page: number
   quoteText: string
-  /** Free-text note about why this quote was worth keeping. */
+  /** Free-text note — why this quote was worth keeping, or what this
+   * margin annotation is actually about. */
   annotation: string
+  /** See `QuoteBankEntryKind`'s own doc comment. Optional only because an
+   * entry saved before this field existed may not have it yet on disk —
+   * every read path defaults a missing value to `'quote'`, so nothing
+   * outside `quoteBankRepo.ts`/the migration should ever need to do that
+   * itself. */
+  kind?: QuoteBankEntryKind
   createdAt: number
   updatedAt: number
   /** Tombstone — see the note on Source.deleted. */

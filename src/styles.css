@@ -359,6 +359,14 @@ select {
   padding-left: 10px;
 }
 
+/* A margin annotation's own card — same shape as a quote-bank quote's, just
+   a distinct border color (matching its reader-highlight color) so the two
+   are easy to tell apart at a glance in SourceWorkspace's two side-by-side
+   panels. */
+.quote-bank-text-annotation {
+  border-left-color: #5b8fc1;
+}
+
 .quote-bank-annotation {
   margin: 0;
   font-size: 13px;
@@ -1580,6 +1588,21 @@ select {
   gap: 12px;
 }
 
+.source-quotes-panel-heading {
+  margin: 0 0 10px;
+  font-size: 12.5px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+  color: var(--ink-dim);
+}
+
+.source-quotes-panel-heading:not(:first-child) {
+  margin-top: 22px;
+  padding-top: 18px;
+  border-top: 1px solid var(--border);
+}
+
 .graveyard-panel {
   position: relative;
   width: 300px;
@@ -1912,6 +1935,20 @@ select {
 }
 
 .pdf-text-layer mark.pdf-quote-hit.pdf-search-hit-active {
+  background: rgba(255, 152, 0, 0.75);
+}
+
+.pdf-text-layer mark.pdf-annotation-hit {
+  background: rgba(91, 143, 193, 0.42);
+  color: transparent;
+  cursor: help;
+}
+
+.pdf-text-layer mark.pdf-annotation-hit.pdf-search-hit {
+  background: rgba(255, 213, 79, 0.55);
+}
+
+.pdf-text-layer mark.pdf-annotation-hit.pdf-search-hit-active {
   background: rgba(255, 152, 0, 0.75);
 }
 

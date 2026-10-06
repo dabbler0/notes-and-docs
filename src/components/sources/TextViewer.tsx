@@ -33,6 +33,7 @@ p:last-child { margin-bottom: 0; }
 mark.text-search-hit { background: rgba(255, 213, 79, 0.65); color: inherit; border-radius: 2px; }
 mark.text-search-hit-active { background: rgba(255, 152, 0, 0.85); }
 mark.quote-span-hit { background: rgba(123, 178, 116, 0.38); color: inherit; border-radius: 2px; cursor: help; }
+mark.annotation-span-hit { background: rgba(91, 143, 193, 0.38); color: inherit; border-radius: 2px; cursor: help; }
 `
 
 
@@ -299,9 +300,11 @@ function joinTextNodesWithPositions(container: HTMLElement): { text: string; nod
 
 /**
  * Wraps every occurrence of each of `quotes`' own `quoteText` in
- * `container`'s text with a `<mark class="quote-span-hit">`, carrying the
- * quote's own annotation (if any) as the mark's `title`, so hovering it
- * shows the annotation as a native tooltip. Meant to run *before*
+ * `container`'s text with a `<mark>` — `class="quote-span-hit"` for a
+ * quote-bank quote, `class="annotation-span-hit"` for a margin annotation
+ * (its own distinct highlight color — see `IFRAME_STYLE` above), carrying
+ * the entry's own annotation/note (if any) as the mark's `title`, so
+ * hovering it shows that text as a native tooltip. Meant to run *before*
  * `applySearchHighlights` in the same pass (see `TextViewer`'s own effect):
  * a search hit landing inside an already-quote-highlighted span just nests
  * a second `<mark>` inside this one, which is harmless both semantically
@@ -324,10 +327,10 @@ function joinTextNodesWithPositions(container: HTMLElement): { text: string; nod
  * quote's highlighting only ever needs to redo it when the quote list or
  * page content itself actually changes.
  */
-export function applyQuoteHighlights(doc: Document, container: HTMLElement, quotes: { quoteText: string; annotation: string }[]) {
+export function applyQuoteHighlights(doc: Document, container: HTMLElement, quotes: { quoteText: string; annotation: string; kind?: 'quote' | 'annotation' }[]) {
   if (quotes.length === 0) return
   const { text, nodeSpans } = joinTextNodesWithPositions(container)
-  const rangesByNode = new Map<Text, { start: number; end: number; title?: string }[]>()
+  const rangesByNode = new Map<Text, { start: number; end: number; title?: string; kind: 'quote' | 'annotation' }[]>()
   for (const quote of quotes) {
     const regex = buildSearchRegex(quote.quoteText)
     if (!regex) continue
@@ -346,7 +349,7 @@ export function applyQuoteHighlights(doc: Document, container: HTMLElement, quot
         const localEnd = Math.min(span.end - span.start, matchEnd - span.start)
         if (localEnd <= localStart) continue
         const existing = rangesByNode.get(span.node) ?? []
-        existing.push({ start: localStart, end: localEnd, title: quote.annotation || undefined })
+        existing.push({ start: localStart, end: localEnd, title: quote.annotation || undefined, kind: quote.kind ?? 'quote' })
         rangesByNode.set(span.node, existing)
       }
     }
@@ -362,7 +365,7 @@ export function applyQuoteHighlights(doc: Document, container: HTMLElement, quot
       if (start >= range.end) continue
       if (start > cursor) frag.appendChild(doc.createTextNode(nodeText.slice(cursor, start)))
       const mark = doc.createElement('mark')
-      mark.className = 'quote-span-hit'
+      mark.className = range.kind === 'annotation' ? 'annotation-span-hit' : 'quote-span-hit'
       if (range.title) mark.title = range.title
       mark.textContent = nodeText.slice(start, range.end)
       frag.appendChild(mark)

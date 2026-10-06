@@ -69,5 +69,14 @@ export type SyncedCollection = (typeof SYNCED_COLLECTIONS)[number]
  *     as local migration version 3: nothing about listing/pulling a
  *     library's worth of bibliographic metadata should also have to move
  *     everyone's extracted text around with it.
+ * 6 — a `quotes` record's new `kind` field (`'quote'` vs. `'annotation'` —
+ *     see `QuoteBankEntryKind`'s own doc comment in `models/types.ts`)
+ *     backfilled to `'quote'` on every entry that predates margin
+ *     annotations, same transform as local migration version 4 in
+ *     `models/quoteBankMigrations.ts`. `kind` is plaintext metadata, not
+ *     one of `quotes`' sensitive fields, so this is the one migration here
+ *     that isn't itself about the encryption policy — just keeping the
+ *     on-disk shape honest, the same reasoning version 3-5 above give for
+ *     a source's own shape history.
  */
-export const CURRENT_REMOTE_SCHEMA_VERSION = 5
+export const CURRENT_REMOTE_SCHEMA_VERSION = 6

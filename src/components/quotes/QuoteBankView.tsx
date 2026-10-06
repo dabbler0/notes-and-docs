@@ -11,7 +11,12 @@ import { Icon } from '../Icon'
  * Everything saved to the quote bank from a source's detail view, browsable
  * and searchable on its own — independent of any essay, since a quote
  * worth keeping is worth keeping before you know which draft (if any) it
- * ends up in. "View in source" jumps back to the page it was quoted from —
+ * ends up in. `listQuoteBank` already excludes margin annotations (notes
+ * to yourself while reading, never meant for an essay — see
+ * `QuoteBankEntryKind`'s own doc comment in `models/types.ts`); those only
+ * ever show up from the source they were made on, in `SourceWorkspace`'s
+ * own "Margin annotations" panel. "View in source" jumps back to the page
+ * it was quoted from —
  * the original PDF, or its extracted text if that's all the source has
  * (see `hasQuotableText` in `sourcesRepo.ts`) — but only when there's
  * still something there to jump back to: a plain BibTeX-only source has
@@ -62,7 +67,7 @@ export function QuoteBankView() {
         <h1>Quotes</h1>
         <div className="search-bar">
           <Icon name="search" className="muted-icon" />
-          <input placeholder="Search quotes and annotations…" value={query} onInput={(e) => setQuery((e.target as HTMLInputElement).value)} />
+          <input placeholder="Search quotes…" value={query} onInput={(e) => setQuery((e.target as HTMLInputElement).value)} />
         </div>
       </div>
 

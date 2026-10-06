@@ -40,11 +40,11 @@ function joinItemsWithPositions(items: SelectableTextItem[]): { text: string; sp
   return { text, spans }
 }
 
-/** One highlighted sub-range of a single text item's own `str` — `start`/`end` are local offsets into that item's string, not the page's joined text. */
+/** One highlighted sub-range of a single text item's own `str` — `start`/`end` are local offsets into that item's string, not the page's joined text. `'quote'` and `'annotation'` are the two `QuoteBankEntryKind`s (see that type's own doc comment), each with their own mark color. */
 export interface ItemHighlightRange {
   start: number
   end: number
-  kind: 'quote' | 'search' | 'search-active'
+  kind: 'quote' | 'annotation' | 'search' | 'search-active'
   title?: string
 }
 
@@ -58,7 +58,7 @@ export interface ItemHighlightRange {
  * item's own list of quote ranges; an item with nothing to highlight is
  * simply absent.
  */
-export function computeQuoteRangesPerItem(items: SelectableTextItem[], quotes: { quoteText: string; annotation: string }[]): Map<number, ItemHighlightRange[]> {
+export function computeQuoteRangesPerItem(items: SelectableTextItem[], quotes: { quoteText: string; annotation: string; kind?: 'quote' | 'annotation' }[]): Map<number, ItemHighlightRange[]> {
   const result = new Map<number, ItemHighlightRange[]>()
   if (quotes.length === 0) return result
   const { text, spans } = joinItemsWithPositions(items)
@@ -81,7 +81,7 @@ export function computeQuoteRangesPerItem(items: SelectableTextItem[], quotes: {
         const localEnd = Math.min(span.end - span.start, matchEnd - span.start)
         if (localEnd <= localStart) continue
         const existing = result.get(idx) ?? []
-        existing.push({ start: localStart, end: localEnd, kind: 'quote', title: quote.annotation || undefined })
+        existing.push({ start: localStart, end: localEnd, kind: quote.kind ?? 'quote', title: quote.annotation || undefined })
         result.set(idx, existing)
       }
     }
@@ -129,6 +129,9 @@ export function renderHighlightedSpan(span: HTMLElement, str: string, ranges: It
       if (r.kind === 'quote') {
         classes.add('pdf-quote-hit')
         if (r.title) title = r.title
+      } else if (r.kind === 'annotation') {
+        classes.add('pdf-annotation-hit')
+        if (r.title) title = r.title
       } else if (r.kind === 'search-active') {
         classes.add('pdf-search-hit')
         classes.add('pdf-search-hit-active')
@@ -162,7 +165,7 @@ export function renderPdfTextLayer(
   layer: HTMLElement,
   content: { items: unknown[] },
   viewport: { transform: number[] },
-  opts: { searchQuery: string; isActivePage: boolean; activeIndexInPage: number | null; quotes: { quoteText: string; annotation: string }[] },
+  opts: { searchQuery: string; isActivePage: boolean; activeIndexInPage: number | null; quotes: { quoteText: string; annotation: string; kind?: 'quote' | 'annotation' }[] },
 ): SelectableTextItem[] {
   layer.innerHTML = ''
   const query = opts.searchQuery.trim().toLowerCase()

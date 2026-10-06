@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks'
 import { getSourcePdfBlob } from '../../models/sourcesRepo'
-import { addQuoteToBank } from '../../models/quoteBankRepo'
+import { addMarginAnnotation, addQuoteToBank } from '../../models/quoteBankRepo'
 import { addBookmark, bookmarkDisplayLabel, deleteBookmark, listBookmarksForSource } from '../../models/bookmarkRepo'
 import { loadPdf, renderPageToCanvas, type PdfDoc } from '../../lib/pdf'
 import { reconstructSelectedText, type SelectableTextItem } from '../../lib/pdfSelection'
@@ -76,13 +76,16 @@ export function ReaderMode({
   page: number
   onPageChange: (page: number) => void
   mode: 'pdf' | 'text'
-  /** This source's saved quotes, for highlighting the spans they came
-   * from — owned by the caller (`SourceWorkspace`'s own `quotes` state,
-   * the same list its right-hand panel shows) rather than fetched again
-   * in here, so an add *or delete* made anywhere else shows up here too.
-   * A second, independent copy fetched internally used to go stale the
-   * moment a quote was deleted from that panel — the highlight stuck
-   * around in the reader until the next full remount. */
+  /** This source's saved quote-bank quotes *and* margin annotations
+   * together (see `QuoteBankEntryKind`'s own doc comment), for
+   * highlighting the spans they came from — each in its own color via its
+   * own `kind` (see `applyQuoteHighlights`/`computeQuoteRangesPerItem`).
+   * Owned by the caller (`SourceWorkspace`'s own merged list, fed by its
+   * two separate panels) rather than fetched again in here, so an add *or
+   * delete* made anywhere else shows up here too. A second, independent
+   * copy fetched internally used to go stale the moment an entry was
+   * deleted from one of those panels — the highlight stuck around in the
+   * reader until the next full remount. */
   quotes: QuoteBankEntry[]
   /** Lets this draw its own PDF/text toggle (in the page bar, next to the
    * two-page one) instead of the caller needing a separate, more obtrusive
@@ -90,12 +93,12 @@ export function ReaderMode({
    * fullscreen usage doesn't need one; `SourceWorkspace`'s embedded one
    * does, and is the actual motivation for this prop existing at all). */
   onModeChange?: (mode: 'pdf' | 'text') => void
-  /** Fires after a quote saved from in here actually lands in the quote
-   * bank — this component already tracks its own quote-saving state (the
-   * bottom bar, shown once a selection is made) entirely internally, but a
-   * caller showing its *own* separate list of this source's quotes
-   * elsewhere (`SourceWorkspace`'s right-hand panel) has no other way to
-   * know to refresh it. */
+  /** Fires after a quote *or* a margin annotation saved from in here
+   * actually lands — this component already tracks its own saving state
+   * (the bottom bar, shown once a selection is made) entirely internally,
+   * but a caller showing its *own* separate lists of this source's quotes
+   * and annotations elsewhere (`SourceWorkspace`'s right-hand panels) has
+   * no other way to know to refresh them. */
   onQuoteSaved?: () => void
   /** Only meaningful (and only ever called) in the default, non-embedded
    * fullscreen mode — embedded mode has no "exit," so omit it there. */
@@ -294,11 +297,16 @@ export function ReaderMode({
     [],
   )
 
-  async function handleSaveQuote() {
+  /** Shared by both buttons in the quote-saving bar — `kind` is the only
+   * thing that differs between "save this selection to the quote bank" and
+   * "save it as a margin annotation" (see `QuoteBankEntryKind`'s own doc
+   * comment for what that distinction actually means). */
+  async function handleSaveSelection(kind: 'quote' | 'annotation') {
     if (!pendingQuote.trim()) return
     setSavingQuote(true)
     try {
-      await addQuoteToBank(source.id, pendingQuotePage || page, pendingQuote.trim(), quoteAnnotation.trim())
+      const save = kind === 'annotation' ? addMarginAnnotation : addQuoteToBank
+      await save(source.id, pendingQuotePage || page, pendingQuote.trim(), quoteAnnotation.trim())
       clearSelection()
       setQuoteAnnotation('')
       onQuoteSaved?.()
@@ -491,8 +499,11 @@ export function ReaderMode({
             onInput={(e) => setQuoteAnnotation((e.target as HTMLInputElement).value)}
             onKeyDown={(e) => e.stopPropagation()}
           />
-          <button className="btn btn-primary btn-sm" disabled={savingQuote} onClick={handleSaveQuote}>
+          <button className="btn btn-primary btn-sm" disabled={savingQuote} onClick={() => handleSaveSelection('quote')}>
             {savingQuote ? 'Saving…' : '+ Add to quote bank'}
+          </button>
+          <button className="btn btn-ghost btn-sm" disabled={savingQuote} onClick={() => handleSaveSelection('annotation')}>
+            {savingQuote ? 'Saving…' : '+ Save as annotation'}
           </button>
           <button className="btn btn-ghost btn-sm" onClick={clearSelection}>
             Dismiss

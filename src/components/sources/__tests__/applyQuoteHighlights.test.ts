@@ -72,4 +72,29 @@ describe('applyQuoteHighlights', () => {
     expect(marks[0].getAttribute('title')).toBe('why this mattered')
     expect(marks[1].getAttribute('title')).toBe('why this mattered')
   })
+
+  it("wraps a margin annotation in its own distinct class (not quote-span-hit)", () => {
+    const doc = makeDoc('<p>a note-worthy phrase here.</p>')
+    applyQuoteHighlights(doc, doc.body, [{ quoteText: 'note-worthy phrase', annotation: 'remember this', kind: 'annotation' }])
+    expect(doc.body.querySelector('mark.quote-span-hit')).toBeNull()
+    const mark = doc.body.querySelector('mark.annotation-span-hit')!
+    expect(mark).not.toBeNull()
+    expect(mark.getAttribute('title')).toBe('remember this')
+  })
+
+  it('tells a quote and an annotation apart on the same page, even where their text overlaps', () => {
+    const doc = makeDoc('<p>Quoted text and noted text both matter.</p>')
+    applyQuoteHighlights(doc, doc.body, [
+      { quoteText: 'Quoted text', annotation: '', kind: 'quote' },
+      { quoteText: 'noted text', annotation: '', kind: 'annotation' },
+    ])
+    expect(doc.body.querySelector('mark.quote-span-hit')?.textContent).toBe('Quoted text')
+    expect(doc.body.querySelector('mark.annotation-span-hit')?.textContent).toBe('noted text')
+  })
+
+  it("defaults to quote-span-hit when kind is absent (pre-migration data)", () => {
+    const doc = makeDoc('<p>Some text with a notable phrase inside it.</p>')
+    applyQuoteHighlights(doc, doc.body, [{ quoteText: 'notable phrase', annotation: '' }])
+    expect(doc.body.querySelector('mark.quote-span-hit')).not.toBeNull()
+  })
 })
