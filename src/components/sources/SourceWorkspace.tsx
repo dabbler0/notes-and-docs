@@ -496,6 +496,15 @@ export function SourceWorkspace({
       ) : (
         <p className="pane-content" style={{ margin: 0, fontSize: 13.5, lineHeight: 1.5 }}>
           {formatCitation(source.bibtex)}
+          {source.bibtex.fields.url && (
+            <>
+              {' '}
+              <a className="citation-url-link" href={source.bibtex.fields.url} target="_blank" rel="noopener noreferrer" title={source.bibtex.fields.url}>
+                <Icon name="link" size={12} />
+                View online
+              </a>
+            </>
+          )}
         </p>
       )}
 

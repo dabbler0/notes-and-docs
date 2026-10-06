@@ -1478,6 +1478,19 @@ select {
   box-sizing: border-box;
 }
 
+.citation-url-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  color: var(--accent);
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.citation-url-link:hover {
+  text-decoration: underline;
+}
+
 /* "Other actions" (re-extract/re-OCR/convert-to-text/EPUB export) — the
    less-common PDF operations, tucked behind one toggle instead of sitting
    in the ops panel permanently. Same panel chrome as `.history-dropdown`,
