@@ -45,6 +45,7 @@ export type IconName =
   | 'fullscreen'
   | 'chevron-left'
   | 'chevron-right'
+  | 'trash'
 
 const STROKE = { fill: 'none', stroke: 'currentColor', strokeWidth: 2, strokeLinecap: 'round' as const, strokeLinejoin: 'round' as const }
 
@@ -351,6 +352,16 @@ export function Icon({ name, size = 18, className }: { name: IconName; size?: nu
       return (
         <svg {...props} {...STROKE}>
           <polyline points="9 4 17 12 9 20" />
+        </svg>
+      )
+    case 'trash':
+      return (
+        <svg {...props} {...STROKE}>
+          <polyline points="4 7 20 7" />
+          <path d="M9 7V5a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2v2" />
+          <path d="M6 7l1 13a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-13" />
+          <line x1="10" y1="11" x2="10" y2="17" />
+          <line x1="14" y1="11" x2="14" y2="17" />
         </svg>
       )
   }

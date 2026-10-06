@@ -128,6 +128,31 @@ export function displayTitle(entry: BibtexEntry): string {
   return entry.fields.title || entry.key
 }
 
+/**
+ * A single-paragraph, human-readable rendering of a BibTeX entry — "Jane
+ * Tester (2024). A Test PDF Document. Journal of Examples, 12(3), 45-67."
+ * — for showing in place of the raw `@article{…}` source everywhere that
+ * source isn't actually being edited (see `formatBibtex`, which this is
+ * deliberately not: that one round-trips back through `parseBibtex`, this
+ * one never needs to be parsed, only read). Not tied to any particular
+ * citation style (APA, MLA, …) — just author/year/title/venue in a plain,
+ * legible order, degrading gracefully as fields go missing (an entry with
+ * only a title still renders as just the title, not a sentence of empty
+ * punctuation).
+ */
+export function formatCitation(entry: BibtexEntry): string {
+  const f = entry.fields
+  const sentences: string[] = []
+  const authorYear = [f.author, f.year ? `(${f.year})` : ''].filter(Boolean).join(' ')
+  if (authorYear) sentences.push(authorYear)
+  sentences.push(f.title || entry.key)
+  const venue = f.journal || f.booktitle
+  const venueBits = [venue, f.volume ? (f.number ? `${f.volume}(${f.number})` : f.volume) : '', f.pages ? `pp. ${f.pages}` : ''].filter(Boolean)
+  if (venueBits.length > 0) sentences.push(venueBits.join(', '))
+  else if (f.publisher) sentences.push(f.publisher)
+  return sentences.join('. ') + '.'
+}
+
 export function displayAuthors(entry: BibtexEntry): string {
   return entry.fields.author || ''
 }

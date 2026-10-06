@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'preact/hooks'
 import { Modal } from '../Modal'
 import { ReaderMode } from './ReaderMode'
-import { displayAuthors, displayTitle, citationPage, formatBibtex, parseBibtex } from '../../lib/bibtex'
+import { displayAuthors, displayTitle, citationPage, formatBibtex, formatCitation, parseBibtex } from '../../lib/bibtex'
 import { downloadBlob, filenameFor } from '../../lib/download'
 import { EpubExportDialog } from './EpubExportDialog'
 import { loadPdf } from '../../lib/pdf'
@@ -72,6 +72,8 @@ export function SourceWorkspace({
   const [editingBibtex, setEditingBibtex] = useState(false)
   const [bibtexText, setBibtexText] = useState('')
   const [bibtexError, setBibtexError] = useState('')
+  const [editingPageOffset, setEditingPageOffset] = useState(false)
+  const [showOtherActions, setShowOtherActions] = useState(false)
   const [pdfBusy, setPdfBusy] = useState(false)
   const [pdfStatus, setPdfStatus] = useState('')
   const [showEpubDialog, setShowEpubDialog] = useState(false)
@@ -440,10 +442,23 @@ export function SourceWorkspace({
     )
   }
 
+  // Everything under "Other actions" is a less-common PDF-maintenance
+  // operation (re-derive something already derived once, rather than
+  // change what's actually stored) — tucked behind one toggle instead of
+  // sitting in the ops panel permanently, same reasoning as the rendered
+  // citation/page-offset summary just above: routine viewing shouldn't
+  // have to scroll past things that are rarely touched. Closes itself
+  // after any item is actually clicked, same as a native <select> would.
+  const otherActions = source.pdfBlobId || source.pageCount > 0
+  const runOtherAction = (fn: () => void) => () => {
+    setShowOtherActions(false)
+    fn()
+  }
+
   const opsPanel = (
     <div className="source-ops-panel">
       <div className="field-header-row">
-        <h4>BibTeX</h4>
+        <h4>Citation</h4>
         {!editingBibtex && (
           <button type="button" className="btn btn-ghost btn-sm" onClick={startEditingBibtex}>
             Edit
@@ -464,40 +479,53 @@ export function SourceWorkspace({
           </div>
         </>
       ) : (
-        <pre className="pane-content" style={{ whiteSpace: 'pre-wrap', fontFamily: 'ui-monospace, monospace', fontSize: 12.5 }}>
-          {formatBibtex(source.bibtex)}
-        </pre>
+        <p className="pane-content" style={{ margin: 0, fontSize: 13.5, lineHeight: 1.5 }}>
+          {formatCitation(source.bibtex)}
+        </p>
       )}
 
       <div className="field" style={{ marginTop: 14 }}>
-        <label>Comment / notes</label>
-        <textarea rows={4} value={comment} onInput={(e) => setComment((e.target as HTMLTextAreaElement).value)} onBlur={saveComment} />
-      </div>
-
-      <div className="field" style={{ marginTop: 14 }}>
-        <label>Page numbering in citations</label>
-        <label className="muted" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-          <input type="checkbox" checked={noPageNumbers} onChange={(e) => handleNoPageNumbersChanged((e.target as HTMLInputElement).checked)} />
-          No page numbers of its own — never show one in citations
-        </label>
-        {!noPageNumbers && (
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 8, flexWrap: 'wrap' }}>
-            <span className="muted">Page offset</span>
-            <input
-              type="number"
-              placeholder="0"
-              value={pageOffset !== 0 ? String(pageOffset) : ''}
-              onInput={(e) => setPageOffset(Number((e.target as HTMLInputElement).value) || 0)}
-              onBlur={savePageOffset}
-              style={{ width: 70, flexShrink: 0 }}
-            />
-          </div>
-        )}
-        {!noPageNumbers && pageOffset !== 0 && (
-          <p className="muted" style={{ marginTop: 4, marginBottom: 0 }}>
-            {pageOffset > 0
-              ? `A positive offset is for pages before the document's own page 1 (a cover, a title page): a quote taken from page ${pageOffset + 1} of the PDF will cite as page 1, and so on.`
-              : `A negative offset is for a work (like a journal article) whose PDF starts already numbered higher than 1: a quote taken from page 1 of the PDF will cite as page ${1 - pageOffset}, and so on.`}
+        <div className="field-header-row">
+          <label style={{ marginBottom: 0 }}>Page numbering</label>
+          {!editingPageOffset && (
+            <button type="button" className="btn btn-ghost btn-sm" onClick={() => setEditingPageOffset(true)}>
+              Edit
+            </button>
+          )}
+        </div>
+        {editingPageOffset ? (
+          <>
+            <label className="muted" style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 6 }}>
+              <input type="checkbox" checked={noPageNumbers} onChange={(e) => handleNoPageNumbersChanged((e.target as HTMLInputElement).checked)} />
+              No page numbers of its own — never show one in citations
+            </label>
+            {!noPageNumbers && (
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 8, flexWrap: 'wrap' }}>
+                <span className="muted">Page offset</span>
+                <input
+                  type="number"
+                  placeholder="0"
+                  value={pageOffset !== 0 ? String(pageOffset) : ''}
+                  onInput={(e) => setPageOffset(Number((e.target as HTMLInputElement).value) || 0)}
+                  onBlur={savePageOffset}
+                  style={{ width: 70, flexShrink: 0 }}
+                />
+              </div>
+            )}
+            {!noPageNumbers && pageOffset !== 0 && (
+              <p className="muted" style={{ marginTop: 4, marginBottom: 0 }}>
+                {pageOffset > 0
+                  ? `A positive offset is for pages before the document's own page 1 (a cover, a title page): a quote taken from page ${pageOffset + 1} of the PDF will cite as page 1, and so on.`
+                  : `A negative offset is for a work (like a journal article) whose PDF starts already numbered higher than 1: a quote taken from page 1 of the PDF will cite as page ${1 - pageOffset}, and so on.`}
+              </p>
+            )}
+            <button type="button" className="btn btn-ghost btn-sm" style={{ marginTop: 8 }} onClick={() => setEditingPageOffset(false)}>
+              Done
+            </button>
+          </>
+        ) : (
+          <p className="muted" style={{ margin: 0 }}>
+            {noPageNumbers ? 'No page numbers in citations' : pageOffset === 0 ? 'No offset' : `Offset ${pageOffset > 0 ? '+' : ''}${pageOffset}`}
           </p>
         )}
       </div>
@@ -508,9 +536,9 @@ export function SourceWorkspace({
       <p className="muted" style={{ marginTop: 0 }}>
         {storageBytes == null ? '' : source.pdfBlobId ? `Stored as a PDF — ${formatBytes(storageBytes)}` : source.textOnly ? `Stored as extracted text only — ${formatBytes(storageBytes)}` : 'No file attached.'}
       </p>
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 6, alignItems: 'flex-start' }}>
-        <label className="btn btn-ghost btn-sm" style={{ cursor: pdfBusy || ocrPreview ? 'default' : 'pointer' }}>
-          {source.pdfBlobId ? 'Replace PDF' : 'Add PDF'}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+        <label className="btn btn-ghost btn-sm icon-btn-toolbar" title={source.pdfBlobId ? 'Replace PDF' : 'Add PDF'} style={{ cursor: pdfBusy || ocrPreview ? 'default' : 'pointer' }}>
+          <Icon name="import" />
           <input
             type="file"
             accept="application/pdf"
@@ -524,51 +552,60 @@ export function SourceWorkspace({
           />
         </label>
         {source.pdfBlobId && (
-          <button type="button" className="btn btn-ghost btn-sm" disabled={pdfBusy || !!ocrPreview} onClick={handleDownloadPdf}>
-            Download PDF
+          <button type="button" className="btn btn-ghost btn-sm icon-btn-toolbar" title="Download PDF" disabled={pdfBusy || !!ocrPreview} onClick={handleDownloadPdf}>
+            <Icon name="export" />
           </button>
         )}
         {source.pdfBlobId && (
-          <button type="button" className="btn btn-ghost btn-sm" disabled={pdfBusy || !!ocrPreview} onClick={handleRemovePdf}>
-            Remove PDF
+          <button type="button" className="btn btn-ghost btn-sm icon-btn-toolbar" title="Remove PDF" disabled={pdfBusy || !!ocrPreview} onClick={handleRemovePdf}>
+            <Icon name="trash" />
           </button>
         )}
-        {source.pdfBlobId && (
-          <button type="button" className="btn-link-muted" disabled={pdfBusy || !!ocrPreview} onClick={() => handleReExtractText({ includeImages: true })} title="Re-run text extraction against this PDF, with images — useful if it was added before an improvement to how text gets extracted">
-            Re-extract text
-          </button>
-        )}
-        {source.pdfBlobId && (
-          <button type="button" className="btn-link-muted" disabled={pdfBusy || !!ocrPreview} onClick={() => handleReExtractText({ includeImages: false })} title="Re-extract text without images, for a smaller result">
-            Re-extract (no images)
-          </button>
-        )}
-        {source.pdfBlobId && !isScanned && (
-          <button
-            type="button"
-            className="btn-link-muted"
-            disabled={pdfBusy || !!ocrPreview}
-            onClick={handleReOcr}
-            title="Run OCR again — e.g. if the existing text (from a previous OCR pass, or the PDF's own) has a lot of mistakes. You'll get to compare the new result before deciding whether to keep it."
-          >
-            Re-run OCR
-          </button>
-        )}
-        {source.pdfBlobId && source.pageCount > 0 && (
-          <button type="button" className="btn-link-muted" disabled={pdfBusy || !!ocrPreview} onClick={handleConvertToTextOnly}>
-            Discard PDF, keep text only
-          </button>
-        )}
-        {source.pageCount > 0 && (
-          <button
-            type="button"
-            className="btn-link-muted"
-            disabled={pdfBusy || !!ocrPreview}
-            onClick={() => setShowEpubDialog(true)}
-            title="Experimental: best-effort-guesses headings, footnotes, and running headers/footers from the extracted text and builds a sectioned EPUB you can skip around in on an e-reader — with a review step to confirm or correct the guesses first. Older sources extracted before layout extraction have no font size or position to guess from, so detection is weaker for them."
-          >
-            Download as EPUB (experimental)
-          </button>
+        {otherActions && (
+          <div style={{ position: 'relative' }}>
+            <button type="button" className="btn btn-ghost btn-sm" disabled={pdfBusy || !!ocrPreview} onClick={() => setShowOtherActions((v) => !v)}>
+              Other actions ▾
+            </button>
+            {showOtherActions && (
+              <div className="ops-dropdown">
+                {source.pdfBlobId && (
+                  <button type="button" className="ops-dropdown-item" onClick={runOtherAction(() => handleReExtractText({ includeImages: true }))} title="Re-run text extraction against this PDF, with images — useful if it was added before an improvement to how text gets extracted">
+                    Re-extract text
+                  </button>
+                )}
+                {source.pdfBlobId && (
+                  <button type="button" className="ops-dropdown-item" onClick={runOtherAction(() => handleReExtractText({ includeImages: false }))} title="Re-extract text without images, for a smaller result">
+                    Re-extract (no images)
+                  </button>
+                )}
+                {source.pdfBlobId && !isScanned && (
+                  <button
+                    type="button"
+                    className="ops-dropdown-item"
+                    onClick={runOtherAction(handleReOcr)}
+                    title="Run OCR again — e.g. if the existing text (from a previous OCR pass, or the PDF's own) has a lot of mistakes. You'll get to compare the new result before deciding whether to keep it."
+                  >
+                    Re-run OCR
+                  </button>
+                )}
+                {source.pdfBlobId && source.pageCount > 0 && (
+                  <button type="button" className="ops-dropdown-item" onClick={runOtherAction(handleConvertToTextOnly)}>
+                    Discard PDF, keep text only
+                  </button>
+                )}
+                {source.pageCount > 0 && (
+                  <button
+                    type="button"
+                    className="ops-dropdown-item"
+                    onClick={runOtherAction(() => setShowEpubDialog(true))}
+                    title="Experimental: best-effort-guesses headings, footnotes, and running headers/footers from the extracted text and builds a sectioned EPUB you can skip around in on an e-reader — with a review step to confirm or correct the guesses first. Older sources extracted before layout extraction have no font size or position to guess from, so detection is weaker for them."
+                  >
+                    Download as EPUB (experimental)
+                  </button>
+                )}
+              </div>
+            )}
+          </div>
         )}
       </div>
       {isScanned && (
@@ -581,6 +618,11 @@ export function SourceWorkspace({
         </p>
       )}
       {pdfStatus && <p className="muted">{pdfStatus}</p>}
+
+      <div className="field" style={{ marginTop: 18 }}>
+        <label>Comment / notes</label>
+        <textarea rows={4} value={comment} onInput={(e) => setComment((e.target as HTMLTextAreaElement).value)} onBlur={saveComment} />
+      </div>
 
       <button className="btn btn-danger btn-sm" style={{ marginTop: 18 }} onClick={handleDelete}>
         Delete source
