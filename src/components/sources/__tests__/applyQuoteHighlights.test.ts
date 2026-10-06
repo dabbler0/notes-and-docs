@@ -40,15 +40,36 @@ describe('applyQuoteHighlights', () => {
     expect(doc.body.querySelector('mark')).toBeNull()
   })
 
-  it('does not highlight across a <br> — same known per-text-node limitation applySearchHighlights already has', () => {
+  it('highlights a quote that spans a <br> — the common case for layout-extracted text, where every line is its own node', () => {
     const doc = makeDoc('<p>wraps across a<br>line break here.</p>')
     applyQuoteHighlights(doc, doc.body, [{ quoteText: 'across a line break', annotation: '' }])
-    expect(doc.body.querySelector('mark')).toBeNull()
+    const marks = doc.body.querySelectorAll('mark.quote-span-hit')
+    expect(marks).toHaveLength(2)
+    expect(marks[0].textContent).toBe('across a')
+    expect(marks[1].textContent).toBe('line break')
+    expect(doc.body.textContent).toBe('wraps across aline break here.')
   })
 
-  it('still highlights the part of a quote that stays within one text node even when the whole quote crosses a <br>', () => {
+  it('highlights a quote spanning two separate layout-mode spans (no <br> between them)', () => {
+    const doc = makeDoc('<span>first run</span><span> second run</span>')
+    applyQuoteHighlights(doc, doc.body, [{ quoteText: 'first run second run', annotation: '' }])
+    const marks = doc.body.querySelectorAll('mark.quote-span-hit')
+    expect(marks).toHaveLength(2)
+    expect(marks[0].textContent).toBe('first run')
+    expect(marks[1].textContent).toBe(' second run')
+  })
+
+  it('spanning quote crossing a <p>/<div> paragraph boundary is still matched (not split by the inserted blank-line separator, since buildSearchRegex is whitespace-tolerant)', () => {
+    const doc = makeDoc('<p>End of one paragraph</p><p>start of the next.</p>')
+    applyQuoteHighlights(doc, doc.body, [{ quoteText: 'paragraph start of the next', annotation: '' }])
+    expect(doc.body.querySelectorAll('mark.quote-span-hit')).toHaveLength(2)
+  })
+
+  it('carries the annotation onto every mark produced by a cross-node match', () => {
     const doc = makeDoc('<p>wraps across a<br>line break here.</p>')
-    applyQuoteHighlights(doc, doc.body, [{ quoteText: 'wraps across a', annotation: '' }])
-    expect(doc.body.querySelector('mark.quote-span-hit')?.textContent).toBe('wraps across a')
+    applyQuoteHighlights(doc, doc.body, [{ quoteText: 'across a line break', annotation: 'why this mattered' }])
+    const marks = doc.body.querySelectorAll('mark.quote-span-hit')
+    expect(marks[0].getAttribute('title')).toBe('why this mattered')
+    expect(marks[1].getAttribute('title')).toBe('why this mattered')
   })
 })

@@ -261,11 +261,45 @@ export function TextViewer({
 }
 
 /**
+ * Walks `container`'s text the same way `htmlToPlainText` does — a `<br>`
+ * becomes `\n`, a `<p>`/`<div>` boundary becomes `\n\n`, `<img>` contributes
+ * nothing — but instead of just returning the joined string, also records
+ * each actual DOM `Text` node's own `[start, end)` range within it. This is
+ * what lets `applyQuoteHighlights` find a saved quote that spans more than
+ * one text node (layout-mode extraction gives every line its own
+ * `<span>`, so this is the *common* case for anything longer than a few
+ * words, not an edge case) and still know exactly which node(s), and which
+ * part of each, to wrap in `<mark>` — mirroring how `pdfTextLayer.ts`'s
+ * `computeQuoteRangesPerItem` does the equivalent for the PDF text layer's
+ * own, much finer-grained per-word items.
+ */
+function joinTextNodesWithPositions(container: HTMLElement): { text: string; nodeSpans: { node: Text; start: number; end: number }[] } {
+  let text = ''
+  const nodeSpans: { node: Text; start: number; end: number }[] = []
+  const visit = (node: Node) => {
+    if (node.nodeType === Node.TEXT_NODE) {
+      const start = text.length
+      text += (node as Text).data
+      nodeSpans.push({ node: node as Text, start, end: text.length })
+      return
+    }
+    if (node.nodeType !== Node.ELEMENT_NODE) return
+    const el = node as Element
+    if (el.tagName === 'BR') {
+      text += '\n'
+      return
+    }
+    if (el.tagName === 'IMG') return
+    Array.from(el.childNodes).forEach(visit)
+    if (el.tagName === 'P' || el.tagName === 'DIV') text += '\n\n'
+  }
+  Array.from(container.childNodes).forEach(visit)
+  return { text, nodeSpans }
+}
+
+/**
  * Wraps every occurrence of each of `quotes`' own `quoteText` in
- * `container`'s text with a `<mark class="quote-span-hit">`, same direct-DOM
- * approach as `applySearchHighlights` right below (reusing the same
- * whitespace-tolerant `buildSearchRegex` — a saved quote's exact text
- * behaves exactly like a literal, non-regex search query), carrying the
+ * `container`'s text with a `<mark class="quote-span-hit">`, carrying the
  * quote's own annotation (if any) as the mark's `title`, so hovering it
  * shows the annotation as a native tooltip. Meant to run *before*
  * `applySearchHighlights` in the same pass (see `TextViewer`'s own effect):
@@ -278,51 +312,64 @@ export function TextViewer({
  * reliably exist anywhere in `container`'s text at all, so there's no
  * reason to pay for matching it here.
  *
- * Matches within one DOM text node at a time, the same known limitation
- * `applySearchHighlights` documents on itself: a quote that spans a `<br>`
- * or an element boundary (crossing into a new text node) isn't found here,
- * even though it's exactly the same text a person actually highlighted —
- * fixing that would mean matching across the whole container's text first
- * and then mapping the match back onto possibly-several text nodes, which
- * search highlighting doesn't do either.
+ * Matches across `container`'s *whole* joined text (via
+ * `joinTextNodesWithPositions`), not one DOM text node at a time — a quote
+ * that spans a `<br>` or an element boundary (crossing into a new text
+ * node) is still found and highlighted, same as a search hit spanning more
+ * than one PDF text item already is in PDF mode (`computeQuoteRangesPerItem`).
+ * `applySearchHighlights` right below still only matches within one node at
+ * a time — the same known limitation this function used to have too — since
+ * a live, keystroke-by-keystroke search query re-running this heavier,
+ * whole-container join on every change is worth avoiding, where a saved
+ * quote's highlighting only ever needs to redo it when the quote list or
+ * page content itself actually changes.
  */
 export function applyQuoteHighlights(doc: Document, container: HTMLElement, quotes: { quoteText: string; annotation: string }[]) {
+  if (quotes.length === 0) return
+  const { text, nodeSpans } = joinTextNodesWithPositions(container)
+  const rangesByNode = new Map<Text, { start: number; end: number; title?: string }[]>()
   for (const quote of quotes) {
     const regex = buildSearchRegex(quote.quoteText)
     if (!regex) continue
-    const walker = doc.createTreeWalker(container, NodeFilter.SHOW_TEXT)
-    const textNodes: Text[] = []
-    let n: Node | null
-    while ((n = walker.nextNode())) textNodes.push(n as Text)
-
-    for (const node of textNodes) {
-      const text = node.data
-      regex.lastIndex = 0
-      const matches: { index: number; length: number }[] = []
-      let m: RegExpExecArray | null
-      while ((m = regex.exec(text)) !== null) {
-        if (m[0].length === 0) {
-          regex.lastIndex++
-          continue
-        }
-        matches.push({ index: m.index, length: m[0].length })
+    regex.lastIndex = 0
+    let m: RegExpExecArray | null
+    while ((m = regex.exec(text)) !== null) {
+      if (m[0].length === 0) {
+        regex.lastIndex++
+        continue
       }
-      if (matches.length === 0) continue
-
-      const frag = doc.createDocumentFragment()
-      let cursor = 0
-      for (const match of matches) {
-        if (match.index > cursor) frag.appendChild(doc.createTextNode(text.slice(cursor, match.index)))
-        const mark = doc.createElement('mark')
-        mark.className = 'quote-span-hit'
-        if (quote.annotation) mark.title = quote.annotation
-        mark.textContent = text.slice(match.index, match.index + match.length)
-        frag.appendChild(mark)
-        cursor = match.index + match.length
+      const matchStart = m.index
+      const matchEnd = m.index + m[0].length
+      for (const span of nodeSpans) {
+        if (span.end <= matchStart || span.start >= matchEnd) continue
+        const localStart = Math.max(0, matchStart - span.start)
+        const localEnd = Math.min(span.end - span.start, matchEnd - span.start)
+        if (localEnd <= localStart) continue
+        const existing = rangesByNode.get(span.node) ?? []
+        existing.push({ start: localStart, end: localEnd, title: quote.annotation || undefined })
+        rangesByNode.set(span.node, existing)
       }
-      if (cursor < text.length) frag.appendChild(doc.createTextNode(text.slice(cursor)))
-      node.parentNode?.replaceChild(frag, node)
     }
+  }
+
+  for (const [node, ranges] of rangesByNode) {
+    ranges.sort((a, b) => a.start - b.start)
+    const nodeText = node.data
+    const frag = doc.createDocumentFragment()
+    let cursor = 0
+    for (const range of ranges) {
+      const start = Math.max(range.start, cursor)
+      if (start >= range.end) continue
+      if (start > cursor) frag.appendChild(doc.createTextNode(nodeText.slice(cursor, start)))
+      const mark = doc.createElement('mark')
+      mark.className = 'quote-span-hit'
+      if (range.title) mark.title = range.title
+      mark.textContent = nodeText.slice(start, range.end)
+      frag.appendChild(mark)
+      cursor = range.end
+    }
+    if (cursor < nodeText.length) frag.appendChild(doc.createTextNode(nodeText.slice(cursor)))
+    node.parentNode?.replaceChild(frag, node)
   }
 }
 
