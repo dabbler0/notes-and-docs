@@ -893,8 +893,16 @@ select {
      without creating that block formatting context. */
   display: inline-block;
   width: 100%;
-  margin: 16px 0;
+  margin: 8px 0;
   text-align: center;
+}
+
+/* KaTeX's own default (`margin: 1em 0`) is additional to `.math-block`'s
+   own margin just above — doubling up on vertical space around every
+   full-line equation — so it's zeroed out here and left to that one rule
+   instead. */
+.node-content span.math-block .katex-display {
+  margin: 0;
 }
 
 .math-rendered {
