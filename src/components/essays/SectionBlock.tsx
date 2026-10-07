@@ -3,9 +3,12 @@ import { createPortal } from 'preact/compat'
 import { commentIdsInContent, commitNewVersion, deleteFootnote, deleteNodeOnly, findCommentById, headVersion, nodeComments, nodeFootnotes, revertToVersion, saveNode, updateFootnoteContent } from '../../models/essaysRepo'
 import { deleteComment, promoteComment, toggleCommentDisplayMode } from './commentActions'
 import { CommentCard } from './CommentsPanel'
+import { MathBody } from './MathBody'
 import { parseSegments, reconstructContent } from '../../lib/childMarkers'
 import { FrozenPreview } from './FrozenPreview'
 import { Icon } from '../Icon'
+import { id as newId } from '../../lib/id'
+import { escapeHtml } from '../../lib/html'
 import type { Comment, EssayNode, Footnote, NodeVersion } from '../../models/types'
 
 const HEADING_SIZES = [21, 18, 16.5, 15, 14.5]
@@ -102,6 +105,12 @@ export function SectionBlock({
   // here rather than in `InlineCommentBody` itself; see that component's
   // own doc comment on its `open` prop for why.
   const [expandedInlineComments, setExpandedInlineComments] = useState<Set<string>>(new Set())
+  // Same idea, same reason, for equations (`MathBody`) — keyed by each
+  // marker's own `data-math-id` rather than a comment id. A freshly-typed
+  // `$$`/`\[` shortcut (see `autoMathify` below) adds its own brand-new
+  // marker's id here immediately, so it opens straight into editing rather
+  // than needing a second click right after being created.
+  const [expandedMath, setExpandedMath] = useState<Set<string>>(new Set())
 
   useEffect(() => {
     setTitle(node.title)
@@ -171,8 +180,18 @@ export function SectionBlock({
     // Re-derive the current marker elements *after* the innerHTML syncs
     // above — an unfocused shard just got fresh ones (its old ones, and
     // whatever was portal-mounted into them, are gone the instant
-    // innerHTML was reassigned), a focused one kept its originals.
-    setInlineMarkers(wrapperRef.current ? (Array.from(wrapperRef.current.querySelectorAll(':scope > .node-content .inline-comment-marker[data-comment-id]')) as HTMLElement[]) : [])
+    // innerHTML was reassigned), a focused one kept its originals. Covers
+    // both kinds of plain-inline-content marker this file portal-mounts
+    // into: an inline comment's own `.inline-comment-marker` and an
+    // equation's `.math-inline`/`.math-block` (see MathBody.tsx) — each
+    // marker's own id (`data-comment-id`/`data-math-id`) is part of the
+    // serialized HTML itself, so it survives a resync even though the
+    // element object is brand new.
+    setInlineMarkers(
+      wrapperRef.current
+        ? (Array.from(wrapperRef.current.querySelectorAll(':scope > .node-content .inline-comment-marker[data-comment-id], :scope > .node-content .math-inline[data-math-id], :scope > .node-content .math-block[data-math-id]')) as HTMLElement[])
+        : [],
+    )
   }, [node, node.draftContent, segments])
 
   useEffect(() => {
@@ -217,9 +236,84 @@ export function SectionBlock({
 
   function handleShardInput(e: Event) {
     autoListify(e as InputEvent)
+    autoFormatEmphasis(e as InputEvent)
+    autoMathify(e as InputEvent)
     const html = reconstructContent(node.id)
     if (html != null) setDirty(html !== head.content)
     scheduleSave()
+  }
+
+  /**
+   * Typing `$$` creates an inline equation, `\[` a full-line one — the
+   * equation counterpart to `autoListify`'s "- "/"1. " list shortcuts,
+   * triggered the same way (checked on every `input` event, only actually
+   * firing when the just-typed character completes one of the two
+   * triggers). Unlike `autoListify`, this can't stay a pure DOM-only
+   * function: the brand-new marker needs to show up in `inlineMarkers`
+   * (so `MathBody` actually portal-mounts into it) and start pre-opened
+   * in `expandedMath` (so it's ready to type LaTeX into immediately,
+   * rather than needing a second click right after creating it) —
+   * both of those are this component's own state, so this has to be a
+   * closure over it rather than a free function like its sibling.
+   *
+   * Deliberately does *not* go through `persist`/`reload` the way
+   * inserting a citation or footnote from the toolbar does — this fires
+   * mid-keystroke, while the user is still actively typing, and a reload
+   * round-trip here risks exactly the kind of stale-content/focus hiccup
+   * the module doc comment above (on the resync effect) already goes out
+   * of its way to avoid elsewhere. Appending straight to `inlineMarkers`
+   * state is enough: the marker is already live, real DOM, the moment
+   * it's inserted.
+   */
+  function autoMathify(e: InputEvent | undefined) {
+    if (!e || e.inputType !== 'insertText') return
+    const sel = window.getSelection()
+    if (!sel || !sel.isCollapsed || sel.rangeCount === 0) return
+    const range = sel.getRangeAt(0)
+    const cursorNode = range.startContainer
+    const cursorOffset = range.startOffset
+    if (cursorNode.nodeType !== Node.TEXT_NODE) return
+    const shard = (cursorNode.parentElement as HTMLElement | null)?.closest<HTMLElement>('.node-content')
+    if (!shard) return
+    const textNode = cursorNode as Text
+    const text = textNode.data
+
+    let displayMode: boolean
+    if (e.data === '$' && text.slice(cursorOffset - 2, cursorOffset) === '$$') {
+      displayMode = false
+    } else if (e.data === '[' && text.slice(cursorOffset - 2, cursorOffset) === '\\[') {
+      displayMode = true
+    } else {
+      return
+    }
+
+    // Strip the two trigger characters back out of the text node they
+    // were just typed into, splitting it in two around where the marker
+    // goes — same shape as autoListify's own marker-text removal, just a
+    // real element going in rather than execCommand reformatting the line.
+    const before = text.slice(0, cursorOffset - 2)
+    const after = text.slice(cursorOffset)
+    textNode.data = before
+    const afterNode = document.createTextNode(after)
+    const parent = textNode.parentNode!
+    parent.insertBefore(afterNode, textNode.nextSibling)
+
+    const mathId = newId()
+    const marker = document.createElement('span')
+    marker.className = displayMode ? 'math-block' : 'math-inline'
+    marker.setAttribute('data-math-id', mathId)
+    marker.setAttribute('data-latex', '')
+    marker.setAttribute('contenteditable', 'false')
+    parent.insertBefore(marker, afterNode)
+
+    const newRange = document.createRange()
+    newRange.setStart(afterNode, 0)
+    newRange.collapse(true)
+    sel.removeAllRanges()
+    sel.addRange(newRange)
+
+    setInlineMarkers((prev) => [...prev, marker])
+    setExpandedMath((prev) => new Set(prev).add(mathId))
   }
 
   async function saveTitle() {
@@ -484,27 +578,62 @@ export function SectionBlock({
             {liveEditor}
             {inlineMarkers.map((el) => {
               const commentId = el.getAttribute('data-comment-id')
-              const comment = commentId ? findCommentById(node, commentId) : undefined
-              if (!comment) return null
-              return createPortal(
-                <InlineCommentBody
-                  key={comment.id}
-                  node={node}
-                  comment={comment}
-                  open={expandedInlineComments.has(comment.id)}
-                  onOpen={() => setExpandedInlineComments((prev) => new Set(prev).add(comment.id))}
-                  onClose={() =>
-                    setExpandedInlineComments((prev) => {
-                      if (!prev.has(comment.id)) return prev
-                      const next = new Set(prev)
-                      next.delete(comment.id)
-                      return next
-                    })
-                  }
-                  onChanged={onTitleChanged}
-                />,
-                el,
-              )
+              const mathId = el.getAttribute('data-math-id')
+              if (commentId) {
+                const comment = findCommentById(node, commentId)
+                if (!comment) return null
+                return createPortal(
+                  <InlineCommentBody
+                    key={comment.id}
+                    node={node}
+                    comment={comment}
+                    open={expandedInlineComments.has(comment.id)}
+                    onOpen={() => setExpandedInlineComments((prev) => new Set(prev).add(comment.id))}
+                    onClose={() =>
+                      setExpandedInlineComments((prev) => {
+                        if (!prev.has(comment.id)) return prev
+                        const next = new Set(prev)
+                        next.delete(comment.id)
+                        return next
+                      })
+                    }
+                    onChanged={onTitleChanged}
+                  />,
+                  el,
+                )
+              }
+              if (mathId) {
+                return createPortal(
+                  <MathBody
+                    key={mathId}
+                    marker={el}
+                    displayMode={el.classList.contains('math-block')}
+                    open={expandedMath.has(mathId)}
+                    onOpen={() => setExpandedMath((prev) => new Set(prev).add(mathId))}
+                    onClose={() =>
+                      setExpandedMath((prev) => {
+                        if (!prev.has(mathId)) return prev
+                        const next = new Set(prev)
+                        next.delete(mathId)
+                        return next
+                      })
+                    }
+                    onCommitted={() => el.dispatchEvent(new Event('input', { bubbles: true }))}
+                    onRemoved={() => {
+                      setInlineMarkers((prev) => prev.filter((m) => m !== el))
+                      setExpandedMath((prev) => {
+                        if (!prev.has(mathId)) return prev
+                        const next = new Set(prev)
+                        next.delete(mathId)
+                        return next
+                      })
+                      el.dispatchEvent(new Event('input', { bubbles: true }))
+                    }}
+                  />,
+                  el,
+                )
+              }
+              return null
             })}
           </div>
       </div>
@@ -966,4 +1095,89 @@ function autoListify(e: InputEvent | undefined) {
   sel.addRange(newRange)
 
   document.execCommand(isOrdered ? 'insertOrderedList' : 'insertUnorderedList')
+}
+
+/** `_` -> italic (`<em>`), `*` -> bold (`<strong>`) — same "checked on every
+ * `input` event, only actually fires on the exact keystroke that completes
+ * the shortcut" shape as `autoListify` above, just matching a pair of
+ * delimiters within the current text node instead of a line-leading marker.
+ * `EMPHASIS_TAGS` maps each trigger character straight to the tag it
+ * produces — `inlineHtmlToMarkdown`/`inlineHtmlToLatex` in `lib/export.ts`
+ * already treat `<em>`/`<strong>` as first-class formatting (the same tags
+ * the toolbar's own Bold/Italic buttons produce via `execCommand`), so
+ * nothing downstream needs to know this came from typing rather than a
+ * toolbar click. */
+const EMPHASIS_TAGS: Record<string, 'em' | 'strong'> = { _: 'em', '*': 'strong' }
+
+function autoFormatEmphasis(e: InputEvent | undefined) {
+  if (!e || e.inputType !== 'insertText' || !e.data) return
+  const tag = EMPHASIS_TAGS[e.data]
+  if (!tag) return
+  const delim = e.data
+  const sel = window.getSelection()
+  if (!sel || !sel.isCollapsed || sel.rangeCount === 0) return
+  const range = sel.getRangeAt(0)
+  const cursorNode = range.startContainer
+  const cursorOffset = range.startOffset
+  if (cursorNode.nodeType !== Node.TEXT_NODE) return
+  const shard = (cursorNode.parentElement as HTMLElement | null)?.closest<HTMLElement>('.node-content')
+  if (!shard) return
+  const textNode = cursorNode as Text
+  const text = textNode.data
+
+  // Search backward, within this one text node, for the nearest matching
+  // delimiter that could be this pair's *opening* one — left-flanking
+  // (immediately preceded by whitespace or the start of the node) the same
+  // way real Markdown emphasis requires, specifically so an ordinary
+  // word like `snake_case_name` (an opening `_` immediately preceded by a
+  // word character) never triggers this. The just-typed delimiter itself
+  // (at `cursorOffset - 1`) is excluded from the search range — matching
+  // *it* as its own "opening" would turn it into an empty pair.
+  const beforeClosing = text.slice(0, cursorOffset - 1)
+  let openIdx = -1
+  for (let i = beforeClosing.length - 1; i >= 0; i--) {
+    if (beforeClosing[i] !== delim) continue
+    const precedingChar = i > 0 ? beforeClosing[i - 1] : ''
+    if (precedingChar && !/\s/.test(precedingChar)) continue
+    openIdx = i
+    break
+  }
+  if (openIdx === -1) return
+
+  const content = beforeClosing.slice(openIdx + 1)
+  // Empty, or starting/ending in whitespace — not a real pair (the
+  // closing-side half of the same left-flanking rule above: `_ this_` or
+  // `_this _` isn't real emphasis, just a stray delimiter).
+  if (!content || /^\s|\s$/.test(content)) return
+
+  // Replaces the matched `delim`+content+`delim` span via `execCommand`
+  // rather than splicing the DOM by hand: Chromium tracks where the *next*
+  // keystroke should land internally, tied to its own typing/undo session
+  // for this contenteditable, and a manual `insertBefore` splice (however
+  // carefully its replacement Selection is restored afterward, immediately
+  // or deferred) doesn't update that internal tracking — the next character
+  // the user types keeps landing wherever that stale position is instead
+  // of obeying the Selection this code just set, with no way found to
+  // force a resync short of ending the typing session (e.g. a blur/focus
+  // round-trip, wrong here since the shard never actually loses focus).
+  // `execCommand` is itself part of that same native editing/typing
+  // machinery, so replacing through it keeps the session intact.
+  //
+  // The trailing zero-width space (`​`) right after the closing tag
+  // exists for the same reason, one layer up: this trigger always fires
+  // with the just-typed delimiter at the very end of the text node (there
+  // can't be anything *after* it yet), so with nothing there for
+  // `execCommand` to land the caret "after" the new element *into*, it
+  // settles *inside* the element instead — and every further keystroke
+  // keeps landing inside it too, same failure as above, since by then it's
+  // no longer a fresh insertion `execCommand` is placing but ordinary
+  // continued typing. A real, non-empty text node right after the element
+  // gives native typing somewhere real to land; `reconstructContent`
+  // strips this character back out before anything persists it.
+  const selectRange = document.createRange()
+  selectRange.setStart(textNode, openIdx)
+  selectRange.setEnd(textNode, cursorOffset)
+  sel.removeAllRanges()
+  sel.addRange(selectRange)
+  document.execCommand('insertHTML', false, `<${tag}>${escapeHtml(content)}</${tag}>\u200B`)
 }

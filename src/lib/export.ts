@@ -10,6 +10,7 @@
 import { parseSegments } from './childMarkers'
 import { escapeHtml } from './html'
 import { formatBibtex } from './bibtex'
+import { renderMathHtml } from './math'
 import { nodeFootnotes } from '../models/essaysRepo'
 import type { Essay, EssayNode, Source } from '../models/types'
 
@@ -30,6 +31,9 @@ function inlineHtmlToMarkdown(node: Node, fnCtx: MarkdownFootnoteCtx): string {
   const inner = () => Array.from(el.childNodes).map((n) => inlineHtmlToMarkdown(n, fnCtx)).join('')
   if (tag === 'sup' && el.classList.contains('footnote-ref')) {
     return renderMarkdownFootnoteRef(el.getAttribute('data-footnote-id'), fnCtx)
+  }
+  if (tag === 'span' && el.classList.contains('math-inline')) {
+    return `$${el.getAttribute('data-latex') ?? ''}$`
   }
   switch (tag) {
     case 'b':
@@ -65,7 +69,14 @@ function renderMarkdownFootnoteRef(footnoteId: string | null, fnCtx: MarkdownFoo
 }
 
 function mdEscapeText(s: string): string {
-  return s.replace(/([*_[\]\\])/g, '\\$1')
+  // `$` is escaped here too, alongside the usual Markdown-significant
+  // characters — essayToMarkdown's own equation markers use bare `$...$`/
+  // `$$...$$` (see inlineHtmlToMarkdown/htmlToMarkdownBlocks), so an
+  // ordinary dollar amount typed as plain prose ("it costs $5") has to be
+  // escaped the same way a literal `*` or `_` already is, or it would read
+  // back as unintended inline math the moment markdownToHtml parses it
+  // again for the PDF export path.
+  return s.replace(/([*_$[\]\\])/g, '\\$1')
 }
 
 /** Splits one node-content shard's HTML into a list of Markdown "blocks" (paragraphs, blockquotes) to join with blank lines. */
@@ -98,6 +109,17 @@ function htmlToMarkdownBlocks(html: string, fnCtx: MarkdownFootnoteCtx): string[
           .map((l) => `> ${l}`)
           .join('\n'),
       )
+      return
+    }
+    // A full-line equation is a `<span>` (see MathBody.tsx's own doc
+    // comment on why neither kind of equation marker is ever a real block
+    // element), so this has to be checked *before* the generic "walk a
+    // div/p's own children" branch below would otherwise treat it as one —
+    // emitted as its own standalone `$$...$$` block, same convention
+    // Pandoc/GitHub/Obsidian all already use for Markdown display math.
+    if (tag === 'span' && el.classList.contains('math-block')) {
+      flush()
+      blocks.push(`$$\n${el.getAttribute('data-latex') ?? ''}\n$$`)
       return
     }
     if (tag === 'div' || tag === 'p') {
@@ -148,7 +170,7 @@ export function essayToMarkdown(essay: Essay, nodeMap: Map<string, EssayNode>): 
 // ---- Markdown -> printable HTML (for "export to PDF") ----------------
 
 function inlineMarkdownToHtml(text: string): string {
-  // mdEscapeText() backslash-escapes literal *, _, [, ], \ so a stray
+  // mdEscapeText() backslash-escapes literal *, _, $, [, ], \ so a stray
   // character in ordinary typed text can't be mistaken for real markdown
   // syntax — but the naive bold/italic/link patterns below don't know
   // that, and would happily match a "*" they find sitting right after a
@@ -156,16 +178,31 @@ function inlineMarkdownToHtml(text: string): string {
   // *before* running those patterns, and put the literal character back
   // afterward, once nothing can misread it.
   const escaped: string[] = []
-  const withPlaceholders = text.replace(/\\([*_[\]\\])/g, (_, ch: string) => {
+  const withPlaceholders = text.replace(/\\([*_$[\]\\])/g, (_, ch: string) => {
     escaped.push(ch)
     return ` ${escaped.length - 1} `
   })
-  return escapeHtml(withPlaceholders)
+
+  // Same placeholder trick, for the exact same reason, one pass earlier:
+  // an equation's own raw LaTeX source routinely contains *, _, [, ], or \
+  // characters of its own that would otherwise be misread as real
+  // Markdown syntax by the patterns below — rendered via KaTeX immediately
+  // (real, final HTML — `renderMathHtml` never needs a second pass) and
+  // substituted back in at the very end, after `escapeHtml` runs, so its
+  // own `<span>` markup survives instead of becoming literal text.
+  const mathSpans: string[] = []
+  const withMathPlaceholders = withPlaceholders.replace(/\$([^$\n]+)\$/g, (_, latex: string) => {
+    mathSpans.push(renderMathHtml(latex, false))
+    return `\u0000${mathSpans.length - 1}\u0000`
+  })
+
+  return escapeHtml(withMathPlaceholders)
     .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
     .replace(/\*(.+?)\*/g, '<em>$1</em>')
     .replace(/\[(.+?)\]\((.+?)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>')
     .replace(/\[\^([^\]]+)\]/g, (_, label: string) => `<sup class="print-footnote-ref"><a href="#fn-${label}">${footnoteDisplayNumber(label)}</a></sup>`)
     .replace(/ (\d+) /g, (_, i: string) => escaped[Number(i)])
+    .replace(/\u0000(\d+)\u0000/g, (_, i: string) => mathSpans[Number(i)])
 }
 
 /** essayToMarkdown()'s own footnote labels are always `fn<n>` — pull the number back out for display so a footnote reads as a plain "1" rather than the internal label text; anything else (a hand-written .md file using its own label scheme) just shows the raw label instead of guessing. */
@@ -179,6 +216,10 @@ export function markdownToHtml(md: string): string {
   const out: string[] = []
   const footnoteDefs: string[] = []
   let paragraph: string[] = []
+  // Non-null while inside a `$$` ... `$$` display-math block — collects
+  // its raw LaTeX lines until the closing `$$`, same two-states-per-line
+  // shape the rest of this loop already uses for everything else.
+  let mathBlockLines: string[] | null = null
   const flush = () => {
     if (paragraph.length) {
       out.push(`<p>${inlineMarkdownToHtml(paragraph.join(' '))}</p>`)
@@ -186,6 +227,20 @@ export function markdownToHtml(md: string): string {
     }
   }
   for (const line of md.split('\n')) {
+    if (mathBlockLines !== null) {
+      if (line.trim() === '$$') {
+        out.push(renderMathHtml(mathBlockLines.join('\n'), true))
+        mathBlockLines = null
+      } else {
+        mathBlockLines.push(line)
+      }
+      continue
+    }
+    if (line.trim() === '$$') {
+      flush()
+      mathBlockLines = []
+      continue
+    }
     const footnoteDef = line.match(/^\[\^([^\]]+)\]:\s*(.*)$/)
     if (footnoteDef) {
       flush()
@@ -218,6 +273,11 @@ export function markdownToHtml(md: string): string {
     }
     paragraph.push(line.trim())
   }
+  // An unterminated `$$` block (shouldn't happen from essayToMarkdown's
+  // own output, which always closes what it opens, but this is also the
+  // path a hand-edited .md file could reach) still renders rather than
+  // silently dropping whatever text it held.
+  if (mathBlockLines !== null) out.push(renderMathHtml(mathBlockLines.join('\n'), true))
   flush()
   if (footnoteDefs.length > 0) out.push('<hr>', `<ol class="print-footnotes">${footnoteDefs.join('')}</ol>`)
   return out.join('\n')
@@ -271,6 +331,13 @@ function inlineHtmlToLatex(node: Node, ctx: LatexCtx): string {
       .trim()
     return `\\footnote{${contentLatex}}`
   }
+  if (tag === 'span' && el.classList.contains('math-inline')) {
+    // The one export format where an equation marker round-trips back to
+    // exactly the syntax it most likely came from — its own raw LaTeX
+    // source, never passed through texEscape (that's for literal prose
+    // text, not already-valid LaTeX).
+    return `$${el.getAttribute('data-latex') ?? ''}$`
+  }
   switch (tag) {
     case 'b':
     case 'strong':
@@ -310,6 +377,15 @@ function htmlToLatexBlocks(html: string, ctx: LatexCtx): string[] {
       flush()
       const inner = Array.from(el.childNodes).map((n) => inlineHtmlToLatex(n, ctx)).join('').trim()
       blocks.push(`\\begin{quote}\n${inner}\n\\end{quote}`)
+      return
+    }
+    // See htmlToMarkdownBlocks's own matching case — a full-line equation
+    // is a `<span>`, checked before the generic div/p recursion would
+    // otherwise treat it as one. `\[...\]` is the exact syntax the editor's
+    // own `\[` shortcut uses to create one in the first place.
+    if (tag === 'span' && el.classList.contains('math-block')) {
+      flush()
+      blocks.push(`\\[\n${el.getAttribute('data-latex') ?? ''}\n\\]`)
       return
     }
     if (tag === 'div' || tag === 'p') {

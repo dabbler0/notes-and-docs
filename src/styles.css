@@ -875,6 +875,68 @@ select {
   font-style: italic;
 }
 
+/* An equation marker (`.math-inline`/`.math-block`, see MathBody.tsx) is
+   always literally a `<span>` — `.math-block`'s own full-line look comes
+   entirely from `display: block` here, not from a different element. */
+.node-content span.math-inline {
+  display: inline-block;
+  vertical-align: middle;
+}
+
+.node-content span.math-block {
+  /* `inline-block`, not `block` — a genuine block box here very reliably
+     makes Chromium resolve a click or a programmatically-restored caret
+     placed right after this span to the *start of the whole shard*
+     instead, confirmed by reproducing it with a real, non-synthetic
+     mouse click rather than just a scripted Range. `inline-block` at
+     `width: 100%` keeps the exact same "full line, centered" look
+     without creating that block formatting context. */
+  display: inline-block;
+  width: 100%;
+  margin: 16px 0;
+  text-align: center;
+}
+
+.math-rendered {
+  cursor: pointer;
+  border-radius: 4px;
+  padding: 1px 4px;
+}
+
+.math-rendered:hover {
+  background: var(--surface-2);
+}
+
+.math-rendered-empty {
+  display: inline-block;
+  color: var(--ink-dim);
+  font-style: italic;
+  font-size: 0.85em;
+  border: 1px dashed var(--border);
+  padding: 2px 8px;
+  border-radius: 4px;
+}
+
+.math-editor-input {
+  display: inline-block;
+  font-family: ui-monospace, 'SF Mono', Consolas, monospace;
+  font-size: 13.5px;
+  width: 320px;
+  max-width: 100%;
+  vertical-align: middle;
+  border: 1px solid var(--accent);
+  border-radius: 6px;
+  padding: 4px 8px;
+  resize: vertical;
+  background: var(--yellow);
+  color: var(--ink);
+}
+
+.math-editor-block .math-editor-input {
+  display: block;
+  margin: 0 auto;
+}
+
 .node-content mark.comment-anchor {
   background: var(--pink);
   border-radius: 3px;

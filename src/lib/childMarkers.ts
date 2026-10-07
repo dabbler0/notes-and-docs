@@ -112,7 +112,15 @@ export function reconstructContent(nodeId: string, opts?: { replace?: Map<string
   const parts: string[] = []
   for (const child of Array.from(wrapper.children)) {
     if (child.classList.contains('node-content')) {
-      parts.push((child as HTMLElement).innerHTML)
+      // `autoFormatEmphasis` (SectionBlock.tsx) leaves a zero-width space
+      // right after a freshly-inserted `<strong>`/`<em>` — purely so the
+      // browser's own native typing has a real, non-empty text node to
+      // land in right there, immediately after the element it just
+      // inserted, rather than inside it. Nothing downstream (saved
+      // content, exports, search) has any use for that character once
+      // it's served its one purpose at insert time, so it's stripped here
+      // rather than carried into anything persisted.
+      parts.push((child as HTMLElement).innerHTML.replace(/\u200B/g, ''))
     } else if (child.hasAttribute('data-node-id')) {
       const cid = child.getAttribute('data-node-id')!
       parts.push(opts?.replace?.get(cid) ?? markerHtml(cid))

@@ -6,6 +6,15 @@ import { collectUsedSourceIds, essayToLatex, essayToMarkdown, markdownToHtml, so
 import { downloadBlob, filenameFor } from '../../lib/download'
 import { escapeHtml } from '../../lib/html'
 import type { Essay, EssayNode } from '../../models/types'
+// Raw CSS text (Vite's `?inline` query), not the ordinary side-effect
+// import `main.tsx` uses — the print-preview window below is a whole
+// separate document (`win.document.write(...)`), which has no access to
+// this page's own stylesheets at all, so an equation rendered into it by
+// `markdownToHtml` (via `renderMathHtml`) needs KaTeX's own CSS inlined
+// into *that* document's own `<style>` directly, fonts and all, same
+// "nothing loaded at runtime from anywhere else" reasoning the rest of
+// this app's own build already follows.
+import katexCss from 'katex/dist/katex.min.css?inline'
 
 export function ExportDialog({ essay, nodeMap, onClose }: { essay: Essay; nodeMap: Map<string, EssayNode>; onClose: () => void }) {
   const [citeCommand, setCiteCommand] = useState<'\\cite' | '\\footcite'>('\\cite')
@@ -32,10 +41,11 @@ export function ExportDialog({ essay, nodeMap, onClose }: { essay: Essay; nodeMa
         return
       }
       win.document.write(
-        `<!doctype html><html><head><title>${escapeHtml(essay.title)}</title><meta charset="utf-8"><style>
+        `<!doctype html><html><head><title>${escapeHtml(essay.title)}</title><meta charset="utf-8"><style>${katexCss}</style><style>
           body { font-family: Georgia, 'Times New Roman', serif; max-width: 720px; margin: 40px auto; line-height: 1.6; color: #1a1a1a; padding: 0 20px; }
           h1, h2, h3, h4, h5, h6 { font-family: system-ui, sans-serif; }
           blockquote { border-left: 3px solid #999; margin: 1em 0; padding-left: 1em; color: #444; }
+          .katex-display { margin: 1em 0; }
           @media print { body { margin: 0; max-width: none; } }
         </style></head><body>${bodyHtml}</body></html>`,
       )

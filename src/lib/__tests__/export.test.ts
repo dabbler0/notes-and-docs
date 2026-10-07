@@ -99,3 +99,55 @@ describe('footnotes in the printable HTML rendering (PDF export path)', () => {
     expect(html).toContain('<li id="fn-fn1">The footnote text.</li>')
   })
 })
+
+describe('LaTeX equations in Markdown export', () => {
+  it('exports an inline equation as $...$ and a block one as a $$ fence', () => {
+    const root = makeNode({
+      id: 'root',
+      draftContent:
+        '<p>The formula <span class="math-inline" data-math-id="m1" data-latex="E=mc^2"></span> is famous.</p>' +
+        '<div><span class="math-block" data-math-id="m2" data-latex="\\int_0^1 x\\,dx"></span></div>',
+    })
+    const md = essayToMarkdown(makeEssay('root'), new Map([['root', root]]))
+    expect(md).toContain('The formula $E=mc^2$ is famous.')
+    expect(md).toContain('$$\n\\int_0^1 x\\,dx\n$$')
+  })
+
+  it('escapes a literal dollar sign in ordinary prose so it round-trips as plain text', () => {
+    const root = makeNode({ id: 'root', draftContent: '<p>Price is $5 today.</p>' })
+    const md = essayToMarkdown(makeEssay('root'), new Map([['root', root]]))
+    expect(md).toContain('Price is \\$5 today.')
+    const html = markdownToHtml(md)
+    expect(html).toContain('Price is $5 today.')
+  })
+})
+
+describe('LaTeX equations in the printable HTML rendering (PDF export path)', () => {
+  it('renders both an inline and a block equation through KaTeX', () => {
+    const root = makeNode({
+      id: 'root',
+      draftContent:
+        '<p>The formula <span class="math-inline" data-math-id="m1" data-latex="E=mc^2"></span> is famous.</p>' +
+        '<div><span class="math-block" data-math-id="m2" data-latex="x^2"></span></div>',
+    })
+    const md = essayToMarkdown(makeEssay('root'), new Map([['root', root]]))
+    const html = markdownToHtml(md)
+    expect(html).toContain('class="katex"')
+    expect(html).toContain('katex-display')
+    expect(html).not.toContain('$E=mc^2$')
+  })
+})
+
+describe('LaTeX equations in the LaTeX export', () => {
+  it('exports an inline equation as $...$ and a block one as \\[...\\]', () => {
+    const root = makeNode({
+      id: 'root',
+      draftContent:
+        '<p>The formula <span class="math-inline" data-math-id="m1" data-latex="E=mc^2"></span> is famous.</p>' +
+        '<div><span class="math-block" data-math-id="m2" data-latex="x^2"></span></div>',
+    })
+    const tex = essayToLatex(makeEssay('root'), new Map([['root', root]]), new Map())
+    expect(tex).toContain('The formula $E=mc^2$ is famous.')
+    expect(tex).toContain('\\[\nx^2\n\\]')
+  })
+})
