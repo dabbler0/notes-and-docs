@@ -120,7 +120,7 @@ export function reconstructContent(nodeId: string, opts?: { replace?: Map<string
       // content, exports, search) has any use for that character once
       // it's served its one purpose at insert time, so it's stripped here
       // rather than carried into anything persisted.
-      parts.push((child as HTMLElement).innerHTML.replace(/\u200B/g, ''))
+      parts.push(emptyMathMarkers(child as HTMLElement).innerHTML.replace(/\u200B/g, ''))
     } else if (child.hasAttribute('data-node-id')) {
       const cid = child.getAttribute('data-node-id')!
       parts.push(opts?.replace?.get(cid) ?? markerHtml(cid))
@@ -134,6 +134,33 @@ export function reconstructContent(nodeId: string, opts?: { replace?: Map<string
 
 function cssEscape(s: string): string {
   return typeof CSS !== 'undefined' && CSS.escape ? CSS.escape(s) : s.replace(/["\\]/g, '\\$&')
+}
+
+/**
+ * Strips a `.math-inline`/`.math-block` marker's own children (the live
+ * KaTeX output `MathBody` portal-mounts into it, see `SectionBlock.tsx`)
+ * before its ancestor's `innerHTML` gets taken for saving. Unlike an
+ * `.inline-comment-marker`, which is always serialized by a dedicated
+ * string-building function (`inlineCommentMarkerHtml` in essaysRepo.ts)
+ * and so starts out empty on every load, a math marker's rendered content
+ * is read straight out of the live, already-portal-populated DOM here —
+ * so without this, the equation's rendered HTML gets baked into
+ * `draftContent` right alongside its `data-latex` attribute. That becomes
+ * visible the next time this node loads fresh: `parseSegments` puts that
+ * baked-in markup back as the marker's *starting* children, and
+ * `MathBody`'s own portal then mounts its own freshly-rendered copy
+ * alongside it rather than replacing it, since Preact never created those
+ * original children and has no record of them to diff against — doubling
+ * every equation. Operates on a clone, never the live marker itself,
+ * since removing a *mounted* portal's target children out from under
+ * Preact would be exactly the same kind of DOM-ownership mismatch in
+ * reverse.
+ */
+function emptyMathMarkers(shard: HTMLElement): HTMLElement {
+  if (!shard.querySelector('.math-inline, .math-block')) return shard
+  const clone = shard.cloneNode(true) as HTMLElement
+  for (const marker of Array.from(clone.querySelectorAll('.math-inline, .math-block'))) marker.replaceChildren()
+  return clone
 }
 
 /**
