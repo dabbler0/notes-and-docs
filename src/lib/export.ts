@@ -42,6 +42,13 @@ function inlineHtmlToMarkdown(node: Node, fnCtx: MarkdownFootnoteCtx): string {
     case 'i':
     case 'em':
       return `*${inner()}*`
+    case 'u':
+      // Markdown has no native underline syntax — passed through as raw
+      // inline HTML instead (which every Markdown flavor this app cares
+      // about, and `inlineMarkdownToHtml` itself below, treats as literal
+      // passthrough rather than something to escape), the same way a
+      // hand-written .md file would mark up underlined text.
+      return `<u>${inner()}</u>`
     case 'br':
       return '  \n'
     case 'a': {
@@ -122,6 +129,21 @@ function htmlToMarkdownBlocks(html: string, fnCtx: MarkdownFootnoteCtx): string[
       blocks.push(`$$\n${el.getAttribute('data-latex') ?? ''}\n$$`)
       return
     }
+    // The toolbar's own "Bulleted list"/"Numbered list" buttons (and the
+    // `- `/`1. ` editor shortcuts in `autoListify`) both go through
+    // `execCommand('insert(Un)orderedList')`, which produces real
+    // `<ul>`/`<ol>`/`<li>` elements — checked before the div/p branch
+    // below for the same reason the math-block one above is, so a list
+    // never gets misread as a plain paragraph and has its items silently
+    // run together with no bullets or numbers (confirmed: that's exactly
+    // what happened before this check existed, since the generic `default`
+    // case at the bottom just recurses into any unrecognized element's
+    // inline content).
+    if (tag === 'ul' || tag === 'ol') {
+      flush()
+      blocks.push(listToMarkdown(el, fnCtx, 0))
+      return
+    }
     if (tag === 'div' || tag === 'p') {
       flush()
       Array.from(el.childNodes).forEach(walk)
@@ -137,6 +159,28 @@ function htmlToMarkdownBlocks(html: string, fnCtx: MarkdownFootnoteCtx): string[
   Array.from(doc.body.childNodes).forEach(walk)
   flush()
   return blocks
+}
+
+/** `<ul>`/`<ol>` -> one `- `/`1. ` line per `<li>`, recursing into a nested list right under its own parent item at one deeper indent (CommonMark's own two-space-per-level convention) — the editor itself has no indent/outdent gesture to ever actually produce one, but pasted content can, and a nested list silently flattened into its parent's level reads as structurally wrong rather than just "not indented." */
+function listToMarkdown(listEl: HTMLElement, fnCtx: MarkdownFootnoteCtx, depth: number): string {
+  const ordered = listEl.tagName.toLowerCase() === 'ol'
+  const indent = '  '.repeat(depth)
+  const lines: string[] = []
+  let n = 1
+  for (const li of Array.from(listEl.children)) {
+    if (li.tagName.toLowerCase() !== 'li') continue
+    const nested: HTMLElement[] = []
+    const inlineParts: string[] = []
+    for (const child of Array.from(li.childNodes)) {
+      const childTag = child.nodeType === Node.ELEMENT_NODE ? (child as HTMLElement).tagName.toLowerCase() : ''
+      if (childTag === 'ul' || childTag === 'ol') nested.push(child as HTMLElement)
+      else inlineParts.push(inlineHtmlToMarkdown(child, fnCtx))
+    }
+    const marker = ordered ? `${n++}.` : '-'
+    lines.push(`${indent}${marker} ${inlineParts.join('').trim()}`)
+    for (const nestedList of nested) lines.push(listToMarkdown(nestedList, fnCtx, depth + 1))
+  }
+  return lines.join('\n')
 }
 
 export function essayToMarkdown(essay: Essay, nodeMap: Map<string, EssayNode>): string {
@@ -170,6 +214,18 @@ export function essayToMarkdown(essay: Essay, nodeMap: Map<string, EssayNode>): 
 // ---- Markdown -> printable HTML (for "export to PDF") ----------------
 
 function inlineMarkdownToHtml(text: string): string {
+  // `<u>...</u>` is inlineHtmlToMarkdown's own raw-HTML passthrough for
+  // underline (Markdown has no native syntax for it) — pulled out and
+  // recursively re-rendered (so bold/italic/etc. can still nest inside an
+  // underlined run) into its own placeholder *first*, before anything else
+  // below gets a chance to either escape its angle brackets into literal
+  // text or have its own regexes reach across the tag boundary.
+  const underlineSpans: string[] = []
+  const withoutUnderline = text.replace(/<u>([\s\S]*?)<\/u>/g, (_, inner: string) => {
+    underlineSpans.push(`<u>${inlineMarkdownToHtml(inner)}</u>`)
+    return `\u0001${underlineSpans.length - 1}\u0001`
+  })
+
   // mdEscapeText() backslash-escapes literal *, _, $, [, ], \ so a stray
   // character in ordinary typed text can't be mistaken for real markdown
   // syntax — but the naive bold/italic/link patterns below don't know
@@ -178,7 +234,7 @@ function inlineMarkdownToHtml(text: string): string {
   // *before* running those patterns, and put the literal character back
   // afterward, once nothing can misread it.
   const escaped: string[] = []
-  const withPlaceholders = text.replace(/\\([*_$[\]\\])/g, (_, ch: string) => {
+  const withPlaceholders = withoutUnderline.replace(/\\([*_$[\]\\])/g, (_, ch: string) => {
     escaped.push(ch)
     return ` ${escaped.length - 1} `
   })
@@ -203,6 +259,7 @@ function inlineMarkdownToHtml(text: string): string {
     .replace(/\[\^([^\]]+)\]/g, (_, label: string) => `<sup class="print-footnote-ref"><a href="#fn-${label}">${footnoteDisplayNumber(label)}</a></sup>`)
     .replace(/ (\d+) /g, (_, i: string) => escaped[Number(i)])
     .replace(/\u0000(\d+)\u0000/g, (_, i: string) => mathSpans[Number(i)])
+    .replace(/\u0001(\d+)\u0001/g, (_, i: string) => underlineSpans[Number(i)])
 }
 
 /** essayToMarkdown()'s own footnote labels are always `fn<n>` — pull the number back out for display so a footnote reads as a plain "1" rather than the internal label text; anything else (a hand-written .md file using its own label scheme) just shows the raw label instead of guessing. */
@@ -220,11 +277,28 @@ export function markdownToHtml(md: string): string {
   // its raw LaTeX lines until the closing `$$`, same two-states-per-line
   // shape the rest of this loop already uses for everything else.
   let mathBlockLines: string[] | null = null
+  // Mirrors `listToMarkdown`'s own output on the way back: one entry per
+  // currently-open `<ul>`/`<ol>`, indent-deepest last, so a line can close
+  // exactly the levels it's stepping back out of (or none, to keep adding
+  // to the list already open at its own depth) before anything new gets
+  // pushed to `out`.
+  let listStack: { tag: 'ul' | 'ol'; indent: number }[] = []
+  const closeListsTo = (indent: number) => {
+    while (listStack.length && listStack[listStack.length - 1].indent > indent) out.push(`</${listStack.pop()!.tag}>`)
+  }
   const flush = () => {
     if (paragraph.length) {
       out.push(`<p>${inlineMarkdownToHtml(paragraph.join(' '))}</p>`)
       paragraph = []
     }
+  }
+  // Every other block type ends whatever list was open, same as a blank
+  // line does in real Markdown — `flush()` alone only ever deals with an
+  // in-progress paragraph, so every branch below but the list one itself
+  // calls this instead.
+  const endBlock = () => {
+    flush()
+    closeListsTo(-1)
   }
   for (const line of md.split('\n')) {
     if (mathBlockLines !== null) {
@@ -237,25 +311,25 @@ export function markdownToHtml(md: string): string {
       continue
     }
     if (line.trim() === '$$') {
-      flush()
+      endBlock()
       mathBlockLines = []
       continue
     }
     const footnoteDef = line.match(/^\[\^([^\]]+)\]:\s*(.*)$/)
     if (footnoteDef) {
-      flush()
+      endBlock()
       footnoteDefs.push(`<li id="fn-${footnoteDef[1]}">${inlineMarkdownToHtml(footnoteDef[2])}</li>`)
       continue
     }
     const heading = line.match(/^(#{1,6})\s+(.*)$/)
     if (heading) {
-      flush()
+      endBlock()
       const level = heading[1].length
       out.push(`<h${level}>${inlineMarkdownToHtml(heading[2])}</h${level}>`)
       continue
     }
     if (/^>\s?/.test(line)) {
-      flush()
+      endBlock()
       out.push(`<blockquote>${inlineMarkdownToHtml(line.replace(/^>\s?/, ''))}</blockquote>`)
       continue
     }
@@ -264,11 +338,33 @@ export function markdownToHtml(md: string): string {
       // definitions — meaningless as a paragraph on its own; the <hr>
       // below already marks that transition visually once footnoteDefs
       // actually has anything in it.
+      endBlock()
+      continue
+    }
+    // `listToMarkdown`'s own output, one line per `<li>` — `- ` for an
+    // unordered list, `<number>. ` for an ordered one, indented two
+    // spaces per nesting level. The list stays open (no `endBlock()`)
+    // across consecutive list lines, even ones that step back out to a
+    // shallower level, since that's still the *same* list picking back up
+    // — only something that isn't a list line at all, or a blank line,
+    // actually ends it.
+    const listItem = line.match(/^(\s*)(-|\d+\.)\s+(.*)$/)
+    if (listItem) {
       flush()
+      const indent = Math.round(listItem[1].length / 2)
+      const tag = listItem[2] === '-' ? 'ul' : 'ol'
+      closeListsTo(indent)
+      const top = listStack[listStack.length - 1]
+      if (!top || top.indent < indent || top.tag !== tag) {
+        if (top && top.indent === indent) out.push(`</${listStack.pop()!.tag}>`)
+        out.push(`<${tag}>`)
+        listStack.push({ tag, indent })
+      }
+      out.push(`<li>${inlineMarkdownToHtml(listItem[3])}</li>`)
       continue
     }
     if (line.trim() === '') {
-      flush()
+      endBlock()
       continue
     }
     paragraph.push(line.trim())
@@ -278,7 +374,7 @@ export function markdownToHtml(md: string): string {
   // path a hand-edited .md file could reach) still renders rather than
   // silently dropping whatever text it held.
   if (mathBlockLines !== null) out.push(renderMathHtml(mathBlockLines.join('\n'), true))
-  flush()
+  endBlock()
   if (footnoteDefs.length > 0) out.push('<hr>', `<ol class="print-footnotes">${footnoteDefs.join('')}</ol>`)
   return out.join('\n')
 }
@@ -345,6 +441,8 @@ function inlineHtmlToLatex(node: Node, ctx: LatexCtx): string {
     case 'i':
     case 'em':
       return `\\textit{${inner()}}`
+    case 'u':
+      return `\\underline{${inner()}}`
     case 'br':
       return '\\\\\n'
     case 'a': {
@@ -354,6 +452,26 @@ function inlineHtmlToLatex(node: Node, ctx: LatexCtx): string {
     default:
       return inner()
   }
+}
+
+/** `<ul>`/`<ol>` -> `itemize`/`enumerate`, one `\item` per `<li>` — see `listToMarkdown`'s own doc comment for the nested-list caveat, which applies identically here. */
+function listToLatex(listEl: HTMLElement, ctx: LatexCtx): string {
+  const env = listEl.tagName.toLowerCase() === 'ol' ? 'enumerate' : 'itemize'
+  const items: string[] = []
+  for (const li of Array.from(listEl.children)) {
+    if (li.tagName.toLowerCase() !== 'li') continue
+    const nested: HTMLElement[] = []
+    const inlineParts: string[] = []
+    for (const child of Array.from(li.childNodes)) {
+      const childTag = child.nodeType === Node.ELEMENT_NODE ? (child as HTMLElement).tagName.toLowerCase() : ''
+      if (childTag === 'ul' || childTag === 'ol') nested.push(child as HTMLElement)
+      else inlineParts.push(inlineHtmlToLatex(child, ctx))
+    }
+    let item = `\\item ${inlineParts.join('').trim()}`
+    for (const nestedList of nested) item += `\n${listToLatex(nestedList, ctx)}`
+    items.push(item)
+  }
+  return `\\begin{${env}}\n${items.join('\n')}\n\\end{${env}}`
 }
 
 function htmlToLatexBlocks(html: string, ctx: LatexCtx): string[] {
@@ -386,6 +504,13 @@ function htmlToLatexBlocks(html: string, ctx: LatexCtx): string[] {
     if (tag === 'span' && el.classList.contains('math-block')) {
       flush()
       blocks.push(`\\[\n${el.getAttribute('data-latex') ?? ''}\n\\]`)
+      return
+    }
+    // See htmlToMarkdownBlocks's own matching case for why this has to be
+    // checked ahead of the generic div/p recursion below.
+    if (tag === 'ul' || tag === 'ol') {
+      flush()
+      blocks.push(listToLatex(el, ctx))
       return
     }
     if (tag === 'div' || tag === 'p') {
