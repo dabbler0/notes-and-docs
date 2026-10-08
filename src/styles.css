@@ -1160,21 +1160,21 @@ select {
   border-left-color: var(--border);
 }
 
-/* A node's own *trailing* text shard — the run after its last embedded
-   child, parseSegments()'s last segment and so always .section-body's
-   last child here — is exactly where more of that node's own text goes.
-   A last child that's itself a last child, arbitrarily deep, stacks
-   several such shards (one per level, each at its own indentation) at
-   what looks like one and the same spot — each is a real, separately
-   clickable line and land text correctly (see handleDocMissClick's own
-   comment in EssayWorkspace.tsx for the click-routing half of this), so
-   a hover-only outline, same as every other editable shard already gets,
-   is enough to reveal them without a permanent box sitting in the
-   document at rest. Sized/boxed here (not just relying on the plain
-   .leaf-outline rule above) so the root's own trailing shard — which
-   isn't .leaf-outline at all — gets the same hover affordance too, not
-   just nested ones. */
-.node-content:empty:last-child {
+/* Any text shard with nothing in it — the gap between two sibling
+   subsections, or the run after a node's own last one, same treatment
+   either way (see `empty-gap`'s own doc comment in SectionBlock.tsx for
+   why this is driven by the segment's actual HTML rather than the CSS
+   `:empty` pseudo-class, and why *every* such gap gets this, not just a
+   node's own trailing one — the previous `:last-child`-only version of
+   this rule is exactly what made an intervening gap between two
+   subsections look like it had no clickable space at all). A node's own
+   trailing shard, stacked arbitrarily deep when it's itself the last
+   child of a last child, each at its own indentation, is still a real,
+   separately clickable line (see handleDocMissClick's own comment in
+   EssayWorkspace.tsx for the click-routing half of this) — a hover-only
+   outline is enough to reveal any of them without a permanent box sitting
+   in the document at rest. */
+.node-content.empty-gap {
   border: 1px dashed transparent;
   border-radius: var(--radius-sm);
   box-sizing: border-box;
@@ -1182,13 +1182,13 @@ select {
   transition: border-color 0.15s ease;
 }
 
-.node-content.leaf-outline:empty:last-child {
+.node-content.leaf-outline.empty-gap {
   margin-left: 0;
   padding-left: 12px;
 }
 
-.node-content:empty:last-child:hover,
-.node-content:empty:last-child:focus {
+.node-content.empty-gap:hover,
+.node-content.empty-gap:focus {
   border-color: var(--border);
 }
 

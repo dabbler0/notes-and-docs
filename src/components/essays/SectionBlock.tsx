@@ -435,7 +435,20 @@ export function SectionBlock({
         seg.kind === 'text' ? (
           <div
             key={`text-${i}`}
-            className={`node-content${isRoot ? '' : ' leaf-outline'}`}
+            // `empty-gap` is driven by the segment's own parsed HTML, not
+            // the CSS `:empty` pseudo-class a previous version of this
+            // rule relied on — `:empty` stops matching the instant a
+            // browser leaves so much as a stray `<br>` or whitespace text
+            // node behind in an outwardly-blank shard (common after
+            // typing then deleting something there), silently dropping
+            // the "click here to add a sibling section" hint for exactly
+            // the shards that most need it, and only for *some* of them,
+            // which is what made this look random rather than a
+            // comprehensible bug. Driven by segment data instead, it's
+            // never wrong about which gaps are empty — see the CSS rule
+            // itself for why this also needs to apply to *every* empty
+            // gap, not just a node's own trailing one.
+            className={`node-content${isRoot ? '' : ' leaf-outline'}${seg.html.trim() ? '' : ' empty-gap'}`}
             contentEditable={!commentMode}
             onFocus={(e) => onActivate(node.id, e.currentTarget as HTMLDivElement)}
             onMouseUp={(e) => {
