@@ -6,6 +6,7 @@ import { EssaysView } from './components/essays/EssaysView'
 import { SyncSettingsDialog } from './components/sync/SyncSettingsDialog'
 import { BackupDialog } from './components/backup/BackupDialog'
 import { ConfirmHost } from './components/ConfirmDialog'
+import { PromptHost } from './components/PromptDialog'
 import { startAutoSyncLoop } from './sync/autoSync'
 import { detectHostingConfig, getStoredFirebaseConfig, setFirebaseConfig } from './sync/firebaseConfig'
 import { Icon } from './components/Icon'
@@ -75,6 +76,7 @@ export function App() {
       {showSync && <SyncSettingsDialog onClose={() => setShowSync(false)} />}
       {showBackup && <BackupDialog onClose={() => setShowBackup(false)} />}
       <ConfirmHost />
+      <PromptHost />
     </div>
   )
 }

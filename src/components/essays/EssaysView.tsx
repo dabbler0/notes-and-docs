@@ -2,6 +2,7 @@ import { useEffect, useState } from 'preact/hooks'
 import { archiveEssay, createEssay, deleteEssay, listEssays, unarchiveEssay } from '../../models/essaysRepo'
 import { onSyncApplied } from '../../sync/syncEvents'
 import { confirmDialog } from '../../lib/confirm'
+import { promptDialog } from '../../lib/prompt'
 import { Icon } from '../Icon'
 import type { Essay } from '../../models/types'
 import { EssayWorkspace } from './EssayWorkspace'
@@ -27,9 +28,16 @@ export function EssaysView() {
   }, [])
 
   async function handleCreate() {
-    const title = prompt('Title for the new essay/paper?') ?? ''
-    if (title.trim() === '' && title !== '') return
-    const essay = await createEssay(title || 'Untitled essay')
+    // `window.prompt()`'s own Cancel and "OK with nothing typed" both came
+    // back as the same empty string, so the old version here couldn't
+    // actually distinguish them — only a *whitespace-only* title blocked
+    // creation, Cancel included, which read as "wait, it made one anyway?"
+    // more than as an intentional default. A real dialog can tell them
+    // apart: Cancel (null) now genuinely cancels, and a blank or
+    // whitespace-only title both just fall back to "Untitled essay".
+    const title = await promptDialog('Title for the new essay/paper?', { placeholder: 'Untitled essay', confirmLabel: 'Create' })
+    if (title === null) return
+    const essay = await createEssay(title.trim() || 'Untitled essay')
     await reload()
     setOpenId(essay.id)
   }
