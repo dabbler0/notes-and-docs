@@ -1,4 +1,5 @@
 /** DOM Range helpers used by the editor's citation/quote-insert/split/move actions. */
+import { emptyMathMarkers } from './math'
 
 /** Formatting-related CSS properties `stripInlineFormatting` strips off an inline `style` attribute — deliberately not *every* style property, since this app never has a legitimate reason to leave, say, a layout property on pasted text either, but naming only the formatting-facing ones documents intent rather than "whatever happens to be in a pasted style attribute." */
 const FORMATTING_STYLE_PROPS = ['font-family', 'font-size', 'font-weight', 'font-style', 'color', 'background-color', 'text-decoration', 'line-height', 'letter-spacing']
@@ -87,7 +88,14 @@ export function extractRangeHtml(range: Range): string {
   const frag = range.extractContents()
   const div = document.createElement('div')
   div.appendChild(frag)
-  return div.innerHTML
+  // The extracted fragment can carry a `.math-inline`/`.math-block`
+  // equation marker straight out of the live, already-rendered editor —
+  // `emptyMathMarkers` (lib/math.ts) strips its baked-in rendered children
+  // back out before this becomes a saved string (this function's one job),
+  // same reasoning as `reconstructContent`'s own call to it: a marker
+  // persisted with its rendered children still attached duplicates the
+  // equation the next time whatever this string lands in loads fresh.
+  return emptyMathMarkers(div).innerHTML
 }
 
 export function plainTextOfRange(range: Range): string {

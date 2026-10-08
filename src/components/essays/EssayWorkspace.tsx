@@ -7,6 +7,7 @@ import { escapeAttr, escapeHtml } from '../../lib/html'
 import { id } from '../../lib/id'
 import { buildParentMap, isPlaceholderTitle, placeholderTitle } from '../../lib/treeNumbering'
 import { getChildIds, reconstructContent, markerHtml, type MarkerPlacement } from '../../lib/childMarkers'
+import { emptyMathMarkers } from '../../lib/math'
 import type { Essay, EssayNode, Source } from '../../models/types'
 import { Icon } from '../Icon'
 import { SectionBlock } from './SectionBlock'
@@ -349,7 +350,12 @@ export function EssayWorkspace({ essayId, onBack }: { essayId: string; onBack: (
     const range = sel.getRangeAt(0)
     const div = document.createElement('div')
     div.appendChild(range.cloneContents())
-    const html = div.innerHTML
+    // The clone can carry a `.math-inline`/`.math-block` equation marker
+    // straight out of the live, already-rendered editor — strip its
+    // baked-in rendered children back out before this becomes the saved
+    // graveyard string, same reasoning as `extractRangeHtml`'s own call to
+    // `emptyMathMarkers` right below in lib/selection.ts.
+    const html = emptyMathMarkers(div).innerHTML
     if (!html.trim()) return
     range.deleteContents()
     sel.removeAllRanges()

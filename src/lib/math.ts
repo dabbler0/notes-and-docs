@@ -23,3 +23,34 @@ import katex from 'katex'
 export function renderMathHtml(latex: string, displayMode: boolean): string {
   return katex.renderToString(latex, { displayMode, throwOnError: false, strict: false })
 }
+
+/**
+ * Strips a `.math-inline`/`.math-block` marker's own children — the live
+ * KaTeX output `MathBody` portal-mounts into it (SectionBlock.tsx) —
+ * wherever a chunk of the live, already-rendered editor DOM is about to be
+ * turned into an HTML *string*: saved as `draftContent`
+ * (`childMarkers.ts`'s `reconstructContent`), carved into a new
+ * subsection's own content (`extractRangeHtml` in `lib/selection.ts`, used
+ * by "split into subsection" / moving a selection into a child), or cut to
+ * the graveyard (`sendSelectionToGraveyard` in EssayWorkspace.tsx).
+ *
+ * Without this, a marker's *rendered* children end up baked into the saved
+ * string right alongside its `data-latex` attribute. That's invisible until
+ * the content loads fresh somewhere: `parseSegments` puts the baked-in
+ * markup back as the marker's *starting* children, and `MathBody`'s own
+ * portal then mounts its own freshly-rendered copy alongside it rather than
+ * replacing it, since Preact never created those original children and has
+ * no record of them to diff against — visibly duplicating the equation.
+ *
+ * Takes and returns a plain DOM subtree (never the live, mounted editor
+ * itself — always either a disconnected clone, as `reconstructContent`
+ * passes, or a fragment already extracted/cloned out of the live DOM, as
+ * `extractRangeHtml` and the graveyard both pass) since clearing a
+ * *mounted* portal's target children out from under Preact would be the
+ * same kind of DOM-ownership mismatch in reverse.
+ */
+export function emptyMathMarkers<T extends Element>(root: T): T {
+  if (!root.querySelector('.math-inline, .math-block')) return root
+  for (const marker of Array.from(root.querySelectorAll('.math-inline, .math-block'))) marker.replaceChildren()
+  return root
+}

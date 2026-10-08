@@ -238,6 +238,7 @@ export function SectionBlock({
     autoListify(e as InputEvent)
     autoFormatEmphasis(e as InputEvent)
     autoMathify(e as InputEvent)
+    dedupeMathMarkerIds(e as InputEvent)
     const html = reconstructContent(node.id)
     if (html != null) setDirty(html !== head.content)
     scheduleSave()
@@ -1180,4 +1181,34 @@ function autoFormatEmphasis(e: InputEvent | undefined) {
   sel.removeAllRanges()
   sel.addRange(selectRange)
   document.execCommand('insertHTML', false, `<${tag}>${escapeHtml(content)}</${tag}>\u200B`)
+}
+
+/**
+ * Pasting a selection that includes a live `.math-inline`/`.math-block`
+ * marker copies that marker's `data-math-id` attribute verbatim \u2014 it's
+ * plain, ordinary DOM content as far as the browser's own clipboard
+ * handling is concerned, same as any other inline element a rich-text
+ * paste carries over \u2014 landing two markers that share one id anywhere in
+ * the document. `MathBody`'s own `key={mathId}` portal (`SectionBlock`'s
+ * own render, right above `inlineMarkers.map`) and `expandedMath`
+ * open/close bookkeeping both assume that id is unique, so a collision
+ * breaks click-to-edit on both copies the moment either section holding
+ * one next resyncs from a fresh `draftContent` (confirmed live: reloading
+ * a document with two same-id equations left both uneditable).
+ *
+ * Reassigns a fresh id to every *repeat* occurrence of an id already seen
+ * earlier in document order, scanning the whole document rather than just
+ * this shard \u2014 a paste can just as easily land a duplicate in a different
+ * section than the one it was copied from. Only runs on a paste-shaped
+ * `inputType`, since a full-document marker scan on every single keystroke
+ * would be checking for something that can only actually happen here.
+ */
+function dedupeMathMarkerIds(e: InputEvent | undefined) {
+  if (!e || !e.inputType?.startsWith('insertFromPaste')) return
+  const seen = new Set<string>()
+  for (const marker of Array.from(document.querySelectorAll<HTMLElement>('.math-inline[data-math-id], .math-block[data-math-id]'))) {
+    const mathId = marker.getAttribute('data-math-id')!
+    if (seen.has(mathId)) marker.setAttribute('data-math-id', newId())
+    else seen.add(mathId)
+  }
 }
