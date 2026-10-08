@@ -41,6 +41,52 @@ export function markerHtml(childId: string): string {
 
 export type Segment = { kind: 'text'; html: string } | { kind: 'child'; childId: string }
 
+/**
+ * Whether `html` has nothing a reader would actually see — used to decide
+ * whether a text segment between/after subsections gets the "click here
+ * to add a sibling" gap styling (SectionBlock.tsx's own `empty-gap`
+ * class). A plain `html.trim() === ''` check isn't enough: "split into
+ * subsection" (`extractAroundRange` in lib/selection.ts) routinely leaves
+ * a now-empty wrapper `<div>` behind — Chrome wraps every line but the
+ * first of a multi-line shard in its own `<div>` by default, and
+ * extracting just that div's *text* into a new subsection, without also
+ * removing the div itself, leaves a literal `<div></div>` sitting in the
+ * segment — confirmed live: splitting two consecutive lines into two
+ * sibling subsections back to back, with nothing typed in between, leaves
+ * exactly this behind as the segment between (and after) them. That
+ * string is non-empty, so the naive check missed it, which is what made
+ * the "no space to add a sibling" bug look random rather than tied to a
+ * specific, reproducible editing sequence.
+ *
+ * Recurses through wrapper elements (a `<div>`/`<p>` is only as empty as
+ * what's inside it) and treats a bare `<br>` as not real content either,
+ * same as the plain-string check already effectively did for a shard
+ * whose only DOM residue is one stray line-break node. An equation marker
+ * (`.math-inline`/`.math-block`) is the one element kind this *doesn't*
+ * recurse into — it's deliberately saved with no children of its own (see
+ * `emptyMathMarkers` in lib/math.ts), so "no text inside" is completely
+ * normal for one and never means "nothing here."
+ */
+export function isEffectivelyEmptyHtml(html: string): boolean {
+  if (!html || !html.trim()) return true
+  const doc = new DOMParser().parseFromString(html, 'text/html')
+  return isEmptyNode(doc.body)
+}
+
+function isEmptyNode(node: Node): boolean {
+  for (const child of Array.from(node.childNodes)) {
+    if (child.nodeType === Node.TEXT_NODE) {
+      if ((child.textContent ?? '').trim() !== '') return false
+    } else if (child.nodeType === Node.ELEMENT_NODE) {
+      const el = child as Element
+      if (el.tagName === 'BR') continue
+      if (el.hasAttribute('data-latex') || el.hasAttribute('data-child-id')) return false
+      if (!isEmptyNode(el)) return false
+    }
+  }
+  return true
+}
+
 /** All child ids referenced by `html`, in document order. */
 export function getChildIds(html: string): string[] {
   if (!html) return []
