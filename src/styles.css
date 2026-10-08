@@ -588,6 +588,22 @@ select {
   background: var(--surface);
 }
 
+.word-count-table {
+  border-collapse: collapse;
+  width: 100%;
+}
+
+.word-count-table td {
+  padding: 8px 12px 8px 0;
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+}
+
+.word-count-table td:first-child {
+  white-space: normal;
+  width: 100%;
+}
+
 /* --- comment widget (context popover, not a modal) --- */
 
 .comment-widget {

@@ -17,6 +17,7 @@ import { GraveyardPanel } from './GraveyardPanel'
 import { CitationPickerDialog } from './CitationPickerDialog'
 import { QuoteInsertDialog } from './QuoteInsertDialog'
 import { ExportDialog } from './ExportDialog'
+import { WordCountDialog } from './WordCountDialog'
 import { Modal } from '../Modal'
 import { useIsMobile } from '../../lib/useIsMobile'
 
@@ -48,6 +49,7 @@ export function EssayWorkspace({ essayId, onBack }: { essayId: string; onBack: (
   const [showCitation, setShowCitation] = useState(false)
   const [showQuoteDialog, setShowQuoteDialog] = useState(false)
   const [showLink, setShowLink] = useState(false)
+  const [showWordCount, setShowWordCount] = useState(false)
   const [showExport, setShowExport] = useState(false)
   const [pendingComment, setPendingComment] = useState<{
     nodeId: string
@@ -215,14 +217,14 @@ export function EssayWorkspace({ essayId, onBack }: { essayId: string; onBack: (
     el.dispatchEvent(new InputEvent('input', { bubbles: true }))
   }
 
-  async function insertCitation(source: Source) {
+  async function insertCitation(source: Source, page?: number) {
     setShowCitation(false)
     const range = savedRange.current
     const el = activeEditorEl.current
     const node = activeNode()
     if (!range || !el || !node) return
     el.focus()
-    insertHtmlAtRange(range, `${citationHtml(source)}&nbsp;`)
+    insertHtmlAtRange(range, `${citationHtml(source, { page })}&nbsp;`)
     await persistActiveNode(node)
     reload()
   }
@@ -564,6 +566,9 @@ export function EssayWorkspace({ essayId, onBack }: { essayId: string; onBack: (
         <button className={`btn btn-ghost btn-sm toolbar-toggle${commentMode ? ' active' : ''}`} onClick={toggleCommentMode}>
           <Icon name="comment" /> <span className="btn-label">{commentMode ? 'Commenting…' : 'Comment mode'}</span>
         </button>
+        <button className="btn btn-ghost btn-sm" title="Word count" onClick={() => setShowWordCount(true)}>
+          <Icon name="word-count" /> <span className="btn-label">Word count</span>
+        </button>
         <button className="btn btn-ghost btn-sm" onClick={() => setShowExport(true)}>
           <Icon name="export" /> <span className="btn-label">Export</span>
         </button>
@@ -812,6 +817,7 @@ export function EssayWorkspace({ essayId, onBack }: { essayId: string; onBack: (
       {showQuoteDialog && <QuoteInsertDialog onClose={() => setShowQuoteDialog(false)} onInsertBlock={insertQuote} onInsertInline={insertInlineQuote} />}
       {showLink && <CitationPickerDialog title="Link to a source" requireUrl onClose={() => setShowLink(false)} onSelect={insertSourceLink} />}
       {showExport && <ExportDialog essay={essay} nodeMap={nodeMap} onClose={() => setShowExport(false)} />}
+      {showWordCount && <WordCountDialog rootNode={rootNode} activeNode={activeNode()} nodeMap={nodeMap} onClose={() => setShowWordCount(false)} />}
     </div>
   )
 }

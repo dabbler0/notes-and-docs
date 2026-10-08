@@ -46,6 +46,7 @@ export type IconName =
   | 'chevron-left'
   | 'chevron-right'
   | 'trash'
+  | 'word-count'
 
 const STROKE = { fill: 'none', stroke: 'currentColor', strokeWidth: 2, strokeLinecap: 'round' as const, strokeLinejoin: 'round' as const }
 
@@ -362,6 +363,18 @@ export function Icon({ name, size = 18, className }: { name: IconName; size?: nu
           <path d="M6 7l1 13a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-13" />
           <line x1="10" y1="11" x2="10" y2="17" />
           <line x1="14" y1="11" x2="14" y2="17" />
+        </svg>
+      )
+    case 'word-count':
+      // A plain "#" (the same shorthand most word processors' own word-count
+      // tool uses) — same real-digits-not-font-illusion reasoning as
+      // 'list-ol' above, rather than relying on a font to render a glyph
+      // crisply at 16px CSS size.
+      return (
+        <svg {...props} {...STROKE}>
+          <text x="12" y="17" fontSize="17" fontFamily="Arial, Helvetica, sans-serif" fontWeight="700" textAnchor="middle" fill="currentColor" stroke="none" strokeWidth="0">
+            #
+          </text>
         </svg>
       )
   }
