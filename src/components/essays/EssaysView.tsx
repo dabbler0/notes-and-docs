@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'preact/hooks'
 import { archiveEssay, createEssay, deleteEssay, listEssays, unarchiveEssay } from '../../models/essaysRepo'
 import { onSyncApplied } from '../../sync/syncEvents'
+import { confirmDialog } from '../../lib/confirm'
 import { Icon } from '../Icon'
 import type { Essay } from '../../models/types'
 import { EssayWorkspace } from './EssayWorkspace'
@@ -35,7 +36,7 @@ export function EssaysView() {
 
   async function handleDelete(id: string, e: Event) {
     e.stopPropagation()
-    if (!confirm('Delete this essay and all its sections/versions?')) return
+    if (!(await confirmDialog('Delete this essay and all its sections/versions?', { confirmLabel: 'Delete', danger: true }))) return
     await deleteEssay(id)
     reload()
   }

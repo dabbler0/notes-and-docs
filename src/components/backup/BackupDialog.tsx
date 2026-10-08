@@ -3,6 +3,7 @@ import { Modal } from '../Modal'
 import { Icon } from '../Icon'
 import { backupFileName, exportBackup, restoreBackup, type RestoreResult } from '../../lib/backup'
 import { downloadBlob } from '../../lib/download'
+import { confirmDialog } from '../../lib/confirm'
 
 type Status = { kind: 'idle' | 'busy' | 'ok' | 'error'; message: string }
 
@@ -23,7 +24,7 @@ export function BackupDialog({ onClose }: { onClose: () => void }) {
   }
 
   async function handleFileChosen(file: File) {
-    if (mode === 'replace' && !confirm('This replaces ALL local data on this device with the contents of this backup file, and cannot be undone. Continue?')) {
+    if (mode === 'replace' && !(await confirmDialog('This replaces ALL local data on this device with the contents of this backup file, and cannot be undone. Continue?', { confirmLabel: 'Replace everything', danger: true }))) {
       if (fileInputRef.current) fileInputRef.current.value = ''
       return
     }

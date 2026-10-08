@@ -9,6 +9,7 @@ import { FrozenPreview } from './FrozenPreview'
 import { Icon } from '../Icon'
 import { id as newId } from '../../lib/id'
 import { escapeHtml } from '../../lib/html'
+import { confirmDialog } from '../../lib/confirm'
 import type { Comment, EssayNode, Footnote, NodeVersion } from '../../models/types'
 
 const HEADING_SIZES = [21, 18, 16.5, 15, 14.5]
@@ -333,7 +334,7 @@ export function SectionBlock({
   async function demoteChild(childId: string) {
     const child = nodeMap.get(childId)
     if (!child) return
-    if (!confirm(`Fold "${child.title}" back into this section? Its text stays, but it stops being its own subsection.`)) return
+    if (!(await confirmDialog(`Fold "${child.title}" back into this section? Its text stays, but it stops being its own subsection.`, { confirmLabel: 'Fold in' }))) return
     window.clearTimeout(saveTimer.current)
     const html = reconstructContent(node.id, { replace: new Map([[childId, child.draftContent]]) })
     if (html != null) await persist(html)
@@ -951,7 +952,7 @@ function InlineCommentBody({
   onChanged: () => void
 }) {
   async function handleDelete(n: EssayNode, commentId: string) {
-    if (!confirm('Delete this comment, and everything replied or commented on it?')) return
+    if (!(await confirmDialog('Delete this comment, and everything replied or commented on it?', { confirmLabel: 'Delete', danger: true }))) return
     await deleteComment(n, commentId)
     onClose()
     onChanged()

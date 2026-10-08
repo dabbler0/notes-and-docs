@@ -12,6 +12,7 @@ import { isAutoSyncEnabled, setAutoSyncEnabled, syncNow } from '../../sync/autoS
 import { discardLocalChanges, resetSyncState, sweepOrphanedRemoteBlobs, type SyncResult } from '../../sync/syncEngine'
 import { bundleToQrDataUrl } from '../../sync/qr'
 import { downloadBlob } from '../../lib/download'
+import { confirmDialog } from '../../lib/confirm'
 
 type SyncStatus = { kind: 'idle' | 'running' | 'ok' | 'error'; message: string }
 
@@ -83,8 +84,8 @@ export function SyncSettingsDialog({ onClose }: { onClose: () => void }) {
             {stored!.source === 'manual' && (
               <button
                 className="btn btn-sm btn-ghost btn-danger"
-                onClick={() => {
-                  if (!confirm('Disconnect this Firebase project? Your local encryption key is kept, but syncing stops until you reconnect a project.')) return
+                onClick={async () => {
+                  if (!(await confirmDialog('Disconnect this Firebase project? Your local encryption key is kept, but syncing stops until you reconnect a project.', { confirmLabel: 'Disconnect', danger: true }))) return
                   clearFirebaseConfig()
                   setStored(null)
                 }}
@@ -429,7 +430,7 @@ function KeyMismatch({ uid, meta, onResolved }: { uid: string; meta: AccountMeta
 
   async function handleReset() {
     if (resetConfirmText.trim().toUpperCase() !== 'RESET') return
-    if (!confirm("This permanently deletes ALL of this account's data from Firestore — every other device relying on the current key loses access to it entirely, forever. This cannot be undone. Continue?")) return
+    if (!(await confirmDialog("This permanently deletes ALL of this account's data from Firestore — every other device relying on the current key loses access to it entirely, forever. This cannot be undone. Continue?", { confirmLabel: 'Delete everything', danger: true }))) return
     setBusy(true)
     setError('')
     try {
@@ -559,9 +560,10 @@ function AccountPanel({ uid, onKeyForgotten }: { uid: string; onKeyForgotten: ()
 
   async function handleForceResync() {
     if (
-      !confirm(
+      !(await confirmDialog(
         "Re-check every remote item against this device's local copy, ignoring what's already been synced before? This is safe (it can't lose data — anything already up to date here is simply skipped again) but re-reads everything, which counts against your Firestore quota faster than a normal sync.",
-      )
+        { confirmLabel: 'Re-check everything' },
+      ))
     )
       return
     resetSyncState()
@@ -580,9 +582,10 @@ function AccountPanel({ uid, onKeyForgotten }: { uid: string; onKeyForgotten: ()
    */
   async function handleDiscardLocalChanges(collections: ('sources' | 'essays')[], label: string) {
     if (
-      !confirm(
+      !(await confirmDialog(
         `Discard local ${label} changes? Any edits made here that haven't already synced successfully are abandoned — the next sync will pull down whatever's on the server instead, overwriting them. Use this only if uploading is stuck and you just want to get downloads moving again.`,
-      )
+        { confirmLabel: 'Discard changes', danger: true },
+      ))
     )
       return
     setStatus({ kind: 'running', message: `Discarding local ${label} changes…` })
@@ -608,9 +611,10 @@ function AccountPanel({ uid, onKeyForgotten }: { uid: string; onKeyForgotten: ()
    */
   async function handleSweep() {
     if (
-      !confirm(
+      !(await confirmDialog(
         "Scan this account's entire Firestore project for PDFs no longer referenced by any source on this device, and delete them? This can't be undone. Safe to run anytime — nothing still in use gets touched — but worth running from whichever device has the most complete, up-to-date library, since a source missing here (not yet synced to this device) would look orphaned even though it's still valid elsewhere.",
-      )
+        { confirmLabel: 'Scan and delete', danger: true },
+      ))
     )
       return
     setStatus({ kind: 'running', message: 'Starting sweep…' })
@@ -638,8 +642,8 @@ function AccountPanel({ uid, onKeyForgotten }: { uid: string; onKeyForgotten: ()
     downloadBlob(new Blob([JSON.stringify(bundle, null, 2)], { type: 'application/json' }), 'marginal-account-key.json')
   }
 
-  function handleForgetKey() {
-    if (!confirm("Forget this device's copy of the encryption key? Local data is kept exactly as is — this device just can't sync until you import the key again. You'll stay signed into Google.")) return
+  async function handleForgetKey() {
+    if (!(await confirmDialog("Forget this device's copy of the encryption key? Local data is kept exactly as is — this device just can't sync until you import the key again. You'll stay signed into Google.", { confirmLabel: 'Forget key', danger: true }))) return
     forgetLocalKey(uid)
     onKeyForgotten()
   }

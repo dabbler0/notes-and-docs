@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'preact/hooks'
 import { commentChildren, setCommentResolved, topLevelComments, updateCommentBody, addComment } from '../../models/essaysRepo'
 import { deleteComment, toggleCommentDisplayMode } from './commentActions'
 import { id } from '../../lib/id'
+import { confirmDialog } from '../../lib/confirm'
 import { Icon } from '../Icon'
 import type { Comment, EssayNode } from '../../models/types'
 
@@ -144,7 +145,7 @@ export function CommentsPanel({
   }, [nodeMap, mode])
 
   async function handleDelete(node: EssayNode, commentId: string) {
-    if (!confirm('Delete this comment, and everything replied or commented on it?')) return
+    if (!(await confirmDialog('Delete this comment, and everything replied or commented on it?', { confirmLabel: 'Delete', danger: true }))) return
     await deleteComment(node, commentId)
     onChanged()
   }

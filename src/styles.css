@@ -282,8 +282,29 @@ select {
   border-radius: 8px;
 }
 
+/* A plain `.btn-danger` (no `.btn-ghost`) is solid — used by ConfirmDialog
+   for a destructive action's own confirm button, the same way a native
+   browser confirm's "OK" needed no extra styling to read as the
+   consequential choice. Combined with `.btn-ghost` elsewhere (a toolbar
+   button that's dangerous but shouldn't visually shout), the more
+   specific rule right after this one keeps that original text-only-red
+   look unchanged. */
 .btn-danger {
+  background: #a23b2c;
+  color: #fff;
+}
+
+.btn-danger:hover {
+  background: #8a2f22;
+}
+
+.btn-ghost.btn-danger {
+  background: transparent;
   color: #a23b2c;
+}
+
+.btn-ghost.btn-danger:hover {
+  background: var(--surface-2);
 }
 
 .card-grid {

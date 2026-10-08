@@ -3,6 +3,7 @@ import { deleteQuoteFromBank, listQuoteBank, matchesQuoteQuery } from '../../mod
 import { hasQuotableText, listSources } from '../../models/sourcesRepo'
 import { citationLabel, citationPage, displayAuthors, displayTitle } from '../../lib/bibtex'
 import { onSyncApplied } from '../../sync/syncEvents'
+import { confirmDialog } from '../../lib/confirm'
 import type { QuoteBankEntry, Source } from '../../models/types'
 import { SourceWorkspace } from '../sources/SourceWorkspace'
 import { Icon } from '../Icon'
@@ -50,7 +51,7 @@ export function QuoteBankView() {
   }
 
   async function handleDelete(entryId: string) {
-    if (!confirm('Remove this quote from the quote bank?')) return
+    if (!(await confirmDialog('Remove this quote from the quote bank?', { confirmLabel: 'Remove', danger: true }))) return
     await deleteQuoteFromBank(entryId)
     reload()
   }

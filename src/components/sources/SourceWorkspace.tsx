@@ -10,6 +10,7 @@ import { formatBytes } from '../../lib/format'
 import { describeOcrError, looksLikeScannedPdf, ocrImage, ocrPdf, reOcrPdf } from '../../lib/ocr'
 import { useSourceStorageBytes } from '../../lib/useSourceStorageBytes'
 import { useIsMobile } from '../../lib/useIsMobile'
+import { confirmDialog } from '../../lib/confirm'
 import { commitOcrPreview, convertSourceToTextOnly, deleteSource, discardOcrPreview, getSource, getSourcePdfBlob, removeSourcePdf, setSourcePdf, stageOcrPreview, touchSourceViewed, updateSource, updateSourceContent } from '../../models/sourcesRepo'
 import { addMarginAnnotation, addQuoteToBank, deleteQuoteFromBank, listMarginAnnotationsForSource, listQuotesForSource } from '../../models/quoteBankRepo'
 import { Icon } from '../Icon'
@@ -215,7 +216,7 @@ export function SourceWorkspace({
 
   async function handleRemovePdf() {
     if (!source) return
-    if (!confirm('Remove the attached PDF? The BibTeX entry and comment are kept.')) return
+    if (!(await confirmDialog('Remove the attached PDF? The BibTeX entry and comment are kept.', { confirmLabel: 'Remove PDF', danger: true }))) return
     setPdfBusy(true)
     try {
       await removeSourcePdf(source)
@@ -265,7 +266,7 @@ export function SourceWorkspace({
    */
   async function handleOcrPdf() {
     if (!source?.pdfBlobId) return
-    if (!confirm("Run OCR on this PDF to add selectable text? This runs entirely in your browser and can take a while for a longer document — you'll see progress as it goes.")) return
+    if (!(await confirmDialog("Run OCR on this PDF to add selectable text? This runs entirely in your browser and can take a while for a longer document — you'll see progress as it goes.", { confirmLabel: 'Run OCR' }))) return
     setPdfBusy(true)
     try {
       const blob = await getSourcePdfBlob(source)
@@ -306,7 +307,7 @@ export function SourceWorkspace({
    */
   async function handleReOcr() {
     if (!source?.pdfBlobId) return
-    if (!confirm("Re-run OCR on this PDF? This runs entirely in your browser and can take a while — you'll be able to preview and compare the new result against what you already have before deciding whether to keep it.")) return
+    if (!(await confirmDialog("Re-run OCR on this PDF? This runs entirely in your browser and can take a while — you'll be able to preview and compare the new result against what you already have before deciding whether to keep it.", { confirmLabel: 'Re-run OCR' }))) return
     setPdfBusy(true)
     try {
       const blob = await getSourcePdfBlob(source)
@@ -343,7 +344,7 @@ export function SourceWorkspace({
 
   async function handleConvertToTextOnly() {
     if (!source) return
-    if (!confirm("Discard the PDF file and keep only its extracted text? This can't be undone — you'd need to re-upload the PDF to get the file itself back.")) return
+    if (!(await confirmDialog("Discard the PDF file and keep only its extracted text? This can't be undone — you'd need to re-upload the PDF to get the file itself back.", { confirmLabel: 'Discard PDF', danger: true }))) return
     setPdfBusy(true)
     try {
       await convertSourceToTextOnly(source)
@@ -363,7 +364,7 @@ export function SourceWorkspace({
    */
   async function handleRemoveImages() {
     if (!source) return
-    if (!confirm('Remove all embedded images from this extracted text? The text itself is kept — only the images are discarded, and this can\'t be undone.')) return
+    if (!(await confirmDialog("Remove all embedded images from this extracted text? The text itself is kept — only the images are discarded, and this can't be undone.", { confirmLabel: 'Remove images', danger: true }))) return
     const pageHtml = removeImagesFromPageHtml(source.pageHtml)
     await updateSourceContent(source, pageHtml)
     onChanged()
@@ -408,7 +409,7 @@ export function SourceWorkspace({
   }
 
   async function handleDeleteQuote(quoteId: string) {
-    if (!confirm('Remove this quote from the quote bank?')) return
+    if (!(await confirmDialog('Remove this quote from the quote bank?', { confirmLabel: 'Remove', danger: true }))) return
     await deleteQuoteFromBank(quoteId)
     refreshQuotes()
   }
@@ -457,7 +458,7 @@ export function SourceWorkspace({
 
   async function handleDelete() {
     if (!source) return
-    if (!confirm('Delete this source? This removes its PDF and BibTeX entry permanently.')) return
+    if (!(await confirmDialog('Delete this source? This removes its PDF and BibTeX entry permanently.', { confirmLabel: 'Delete', danger: true }))) return
     if (ocrPreview) await discardOcrPreview(ocrPreview.blobId)
     await deleteSource(source.id)
     onChanged()
