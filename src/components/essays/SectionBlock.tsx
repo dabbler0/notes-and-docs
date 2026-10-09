@@ -755,9 +755,19 @@ function cssEscapeId(s: string): string {
 }
 
 /**
- * Three related "leave the special formatting behind" gestures most block
+ * Four related "leave the special formatting behind" gestures most block
  * editors support, all keyed off the same trailing/collapsed-caret shape:
  *
+ * - Tab/Shift+Tab inside a list item nests it into (or lifts it back out
+ *   of) a sub-list, the same gesture Google Docs/Word/Notion all use —
+ *   checked first, ahead of the "no modifier key" guard the other three
+ *   gestures share below, since Shift+Tab is exactly the outdent half of
+ *   this one. A bare `<ul>`/`<ol>`/`<li>` (from the toolbar's own
+ *   "Bulleted/Numbered list" buttons, or the `- `/`1. ` editor shortcuts)
+ *   has no such behavior built in — Tab's default browser meaning (move
+ *   focus to whatever's next in tab order) would otherwise just jump
+ *   focus out of the document entirely, which is far more surprising than
+ *   useful while actually editing a list.
  * - Enter right at the trailing edge of a quote (or its attached citation
  *   line right after it) breaks out into a fresh, ordinary paragraph after
  *   it, instead of continuing to type inside it. A bare contentEditable
@@ -784,6 +794,7 @@ function cssEscapeId(s: string): string {
  *   deletes) — the actual bug this was written to fix.
  */
 function handleShardKeyDown(e: KeyboardEvent) {
+  if (e.key === 'Tab' && !e.ctrlKey && !e.metaKey && !e.altKey && handleListIndent(e)) return
   if (e.shiftKey || e.ctrlKey || e.metaKey || e.altKey) return
   const sel = window.getSelection()
   if (!sel || sel.rangeCount === 0) return
@@ -852,6 +863,134 @@ function handleShardKeyDown(e: KeyboardEvent) {
   // one so the shard's own onInput (handleShardInput) picks this up and
   // schedules a save exactly like any other edit.
   shard.dispatchEvent(new Event('input', { bubbles: true }))
+}
+
+/**
+ * The Tab/Shift+Tab half of handleShardKeyDown's doc comment above — a
+ * no-op (returns false, leaving Tab's default browser behavior alone) the
+ * instant the caret isn't inside a list item at all, so Tab still moves
+ * focus normally everywhere else in the document. `execCommand`'s own
+ * 'indent'/'outdent' do the actual nesting: Chrome already handles both a
+ * collapsed caret and a selection spanning several list items correctly
+ * (nesting/un-nesting all of them), so none of that needs reimplementing
+ * here. `export.ts`'s own list handling (`listToMarkdown`/`listToLatex`,
+ * and `markdownToHtml`'s own list-line parser) already expects exactly
+ * the nested-`<ul>`/`<ol>`-inside-an-`<li>` shape `execCommand('indent')`
+ * produces, from before there was any way to actually reach it from the
+ * editor itself — what Chrome *doesn't* get right on its own, worked
+ * around below, is indenting the first item in a list (nothing above it
+ * to nest under) and where the caret ends up afterward.
+ */
+function handleListIndent(e: KeyboardEvent): boolean {
+  const sel = window.getSelection()
+  if (!sel || sel.rangeCount === 0) return false
+  const range = sel.getRangeAt(0)
+  const startEl = (range.startContainer.nodeType === Node.ELEMENT_NODE ? (range.startContainer as HTMLElement) : range.startContainer.parentElement) as HTMLElement | null
+  const shard = startEl?.closest<HTMLElement>('.node-content')
+  if (!shard) return false
+  const li = startEl?.closest('li')
+  if (!li || !shard.contains(li)) return false
+  e.preventDefault()
+  // The doc comment above calls indenting the first item in a list "already
+  // a correct no-op" — that's wrong, confirmed live: Chrome's `indent` has
+  // nothing to nest this item *under*, so instead it wraps the entire list
+  // in a second, outer `<ul>`/`<ol>` with no `<li>` of its own at all
+  // (`<ol><ol><li>...`), which is invalid in a way nothing here can repair
+  // (there's no preceding `<li>` for `normalizeNestedLists` to move it
+  // into) and would otherwise sit there corrupting every later edit. Only
+  // handling worth doing for this case is skipping the command entirely.
+  if (!e.shiftKey && !(li.previousElementSibling?.tagName === 'LI')) return true
+  // Chrome's own `indent`/`outdent` don't reliably leave the caret where
+  // the user actually was — confirmed live, outdenting a trailing *empty*
+  // item (or the sole item of its own sub-list, even with real text)
+  // leaves the caret in whatever item used to precede it instead, because
+  // Chrome discards and recreates the `<li>` in both of those cases rather
+  // than just relocating it (so even a captured reference to the original
+  // `<li>` is already stale by the time the command returns — tried that
+  // first, it doesn't survive either case).
+  //
+  // A real marker node dropped at the exact caret position would survive
+  // an ordinary relocation along with whatever content it's sitting in —
+  // except *because* it's content, planting it inside an otherwise-empty
+  // `<li>` changes Chrome's own emptiness check and makes it split the
+  // item instead of relocating it (confirmed live: an extra leftover
+  // empty `<li>` appears where the real one used to be). So the marker is
+  // only planted when there's real text to plant it inside, and for
+  // either recreated-node case (this one, or the empty-`<li>` one the
+  // marker can't safely touch), the fallback below re-finds the caret by
+  // matching the exact text the original `<li>` held — the one property
+  // Chrome's recreated node is guaranteed to preserve — among the `<li>`s
+  // now in the shard; true as long as the user isn't editing two list
+  // items with identical text at once, which this has no way to tell
+  // apart anyway.
+  const originalText = li.textContent ?? ''
+  const isEmptyLi = originalText.trim() === ''
+  let marker: HTMLElement | null = null
+  if (sel.isCollapsed && !isEmptyLi) {
+    marker = document.createElement('span')
+    marker.setAttribute('data-list-indent-caret', '')
+    range.insertNode(marker)
+  }
+  document.execCommand(e.shiftKey ? 'outdent' : 'indent')
+  normalizeNestedLists(shard)
+  if (marker?.isConnected) {
+    const restored = document.createRange()
+    restored.setStartBefore(marker)
+    restored.collapse(true)
+    sel.removeAllRanges()
+    sel.addRange(restored)
+  } else {
+    const matches = Array.from(shard.querySelectorAll('li')).filter((x) => x.textContent === originalText)
+    if (matches.length === 1) {
+      const restored = document.createRange()
+      restored.selectNodeContents(matches[0])
+      restored.collapse(false)
+      sel.removeAllRanges()
+      sel.addRange(restored)
+    }
+  }
+  marker?.remove()
+  shard.dispatchEvent(new Event('input', { bubbles: true }))
+  return true
+}
+
+/**
+ * `execCommand('indent')` nests a `<ul>`/`<ol>` right there in the
+ * document — confirmed live — but as a direct child of the *outer* list,
+ * a sibling of its own `<li>` elements, not nested inside the `<li>` it
+ * visually follows. Browsers render that identically to the
+ * standards-correct shape (indented, same as a sub-list genuinely nested
+ * inside an `<li>`), so it's easy to miss live, but it isn't the same
+ * HTML: `export.ts`'s own list walk (`listToMarkdown`/`listToLatex`, both
+ * iterating `listEl.children` and skipping anything that isn't an `<li>`)
+ * silently drops a sub-list sitting here, since structurally it isn't
+ * *inside* any item at all — confirmed live, a freshly Tab-indented
+ * sub-item vanished from every export entirely. Moving it into the end of
+ * its own previous `<li>` sibling — exactly where `<ul>`/`<ol>` nesting
+ * is supposed to live — fixes the save this produces at the source, so
+ * every downstream reader (export, a future reload) sees the same
+ * ordinary nested-list shape without needing its own special case for
+ * this.
+ */
+function normalizeNestedLists(root: HTMLElement) {
+  for (const nested of Array.from(root.querySelectorAll('ul > ul, ul > ol, ol > ul, ol > ol'))) {
+    const prev = nested.previousElementSibling
+    if (prev?.tagName === 'LI') prev.appendChild(nested)
+  }
+  // `execCommand('outdent')` has the mirror-image bug when lifting the
+  // *last* item of a sub-list back to the top level: the lifted `<li>`
+  // lands directly inside the preceding `<li>` it used to be nested
+  // under, rather than becoming that `<li>`'s sibling in the outer list —
+  // confirmed live. `export.ts`'s list walk never looks inside an `<li>`
+  // for another `<li>`, so this one gets its text silently concatenated
+  // onto its former parent's instead of appearing as its own item. Moving
+  // it to sit right after its enclosing `<li>`, in that `<li>`'s own
+  // parent list, is the correctly-nested shape it should have had.
+  for (const li of Array.from(root.querySelectorAll('li > li'))) {
+    const outerLi = li.parentElement!
+    const grandparent = outerLi.parentElement
+    if (grandparent) grandparent.insertBefore(li, outerLi.nextSibling)
+  }
 }
 
 /** The Backspace/Delete half of handleShardKeyDown's doc comment above. */
