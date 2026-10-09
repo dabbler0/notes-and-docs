@@ -1244,7 +1244,51 @@ function autoListify(e: InputEvent | undefined) {
   sel.removeAllRanges()
   sel.addRange(newRange)
 
-  document.execCommand(isOrdered ? 'insertOrderedList' : 'insertUnorderedList')
+  // `line === shard` only when there's nothing wrapping this line at all —
+  // the very first content ever typed into a still-otherwise-empty shard,
+  // before any Enter has made a real block to hold it. `execCommand`
+  // handles that one correctly (confirmed live) since there's nothing
+  // else around for it to grab, so it's left as the fallback there.
+  //
+  // Everywhere else — any line with a preceding sibling block, which is
+  // the ordinary case right after pressing Enter — `execCommand`'s own
+  // 'insertUnorderedList'/'insertOrderedList' doesn't limit itself to
+  // *this* now-marker-stripped (and often fully empty) line: confirmed
+  // live, it instead walks back and listifies the *previous* sibling
+  // block, leaving the line the user actually typed the marker on empty
+  // and swallowing the one before it into the new list item instead. So
+  // the list is built by hand here rather than trusting that command:
+  // `line`'s own remaining content (whatever was left after the marker,
+  // including any trailing text or inline formatting already past the
+  // cursor) becomes the new `<li>`, and `line` itself is replaced by the
+  // `<ul>`/`<ol>` wrapping it — never touching any sibling.
+  if (line === shard) {
+    document.execCommand(isOrdered ? 'insertOrderedList' : 'insertUnorderedList')
+    return
+  }
+  // `line` is already an `<li>` when the marker is typed inside a line
+  // that pressing Enter left behind *within* an existing list (the next
+  // empty item after the last one, still a sibling of the others). It's
+  // already a list item — wrapping it in a further `<ul>`/`<ol>` here
+  // would nest that new list as an invalid sibling of the surrounding
+  // `<li>`s, not inside any of them (the same invalid shape
+  // `normalizeNestedLists` above exists to clean up after Tab/Shift+Tab,
+  // but there's no reason to produce it here at all) — simplest correct
+  // behavior is leaving it a plain item, same as if the marker had never
+  // been typed, which stripping it already accomplished.
+  if ((line as HTMLElement).tagName === 'LI') return
+  const lineEl = line as HTMLElement
+  const list = document.createElement(isOrdered ? 'ol' : 'ul')
+  const li = document.createElement('li')
+  while (lineEl.firstChild) li.appendChild(lineEl.firstChild)
+  if (!li.firstChild) li.appendChild(document.createElement('br'))
+  list.appendChild(li)
+  lineEl.replaceWith(list)
+  const caretRange = document.createRange()
+  caretRange.selectNodeContents(li)
+  caretRange.collapse(false)
+  sel.removeAllRanges()
+  sel.addRange(caretRange)
 }
 
 /** `_` -> italic (`<em>`), `*` -> bold (`<strong>`) — same "checked on every
