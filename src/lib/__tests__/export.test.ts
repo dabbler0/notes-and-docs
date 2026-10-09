@@ -250,3 +250,40 @@ describe('list edge cases in export', () => {
     expect(html.trim().endsWith('</ul>')).toBe(true)
   })
 })
+
+describe('a blockquote whose text has invisible-in-the-editor line breaks', () => {
+  // A quote pulled from a PDF (reflowTextItems/separatorForGap in
+  // lib/pdf.ts) has a literal "\n" wherever the original page happened to
+  // wrap a line — never shown as a break in the live editor, since the
+  // browser collapses it under ordinary white-space: normal, same as any
+  // other run of whitespace in flowing text. A real <br> the user actually
+  // inserted is a separate element entirely, not part of this text node.
+  const draftContent = '<blockquote class="quote">First line of the quote\nsecond line of the same quote.</blockquote>'
+
+  it('collapses it to a single flowing line in Markdown, not one "> " line per embedded newline', () => {
+    const root = makeNode({ id: 'root', draftContent })
+    const md = essayToMarkdown(makeEssay('root'), new Map([['root', root]]))
+    expect(md).toContain('> First line of the quote second line of the same quote.')
+    expect(md).not.toMatch(/>.*\n>.*second line/)
+  })
+
+  it('renders as one continuous blockquote in the printable HTML, not a line break mid-quote', () => {
+    const root = makeNode({ id: 'root', draftContent })
+    const md = essayToMarkdown(makeEssay('root'), new Map([['root', root]]))
+    const html = markdownToHtml(md)
+    expect(html).toContain('First line of the quote second line of the same quote.')
+    expect(html).not.toContain('<br>')
+  })
+
+  it('does not turn into a LaTeX paragraph break inside the quote environment', () => {
+    const root = makeNode({ id: 'root', draftContent: '<blockquote class="quote">First paragraph of the quote\n\nsecond paragraph, same quote.</blockquote>' })
+    const tex = essayToLatex(makeEssay('root'), new Map([['root', root]]), new Map())
+    expect(tex).toContain('First paragraph of the quote second paragraph, same quote.')
+  })
+
+  it('still honors a real <br> the user actually inserted as a hard break', () => {
+    const root = makeNode({ id: 'root', draftContent: '<blockquote class="quote">First line<br>second line</blockquote>' })
+    const md = essayToMarkdown(makeEssay('root'), new Map([['root', root]]))
+    expect(md).toContain('> First line  \n> second line')
+  })
+})

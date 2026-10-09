@@ -76,14 +76,28 @@ function renderMarkdownFootnoteRef(footnoteId: string | null, fnCtx: MarkdownFoo
 }
 
 function mdEscapeText(s: string): string {
-  // `$` is escaped here too, alongside the usual Markdown-significant
-  // characters — essayToMarkdown's own equation markers use bare `$...$`/
-  // `$$...$$` (see inlineHtmlToMarkdown/htmlToMarkdownBlocks), so an
-  // ordinary dollar amount typed as plain prose ("it costs $5") has to be
-  // escaped the same way a literal `*` or `_` already is, or it would read
-  // back as unintended inline math the moment markdownToHtml parses it
-  // again for the PDF export path.
-  return s.replace(/([*_$[\]\\])/g, '\\$1')
+  // Collapses any run of whitespace — including a literal newline — down
+  // to a single space, the same way a browser already visually treats any
+  // ordinary text node under the default `white-space: normal` (plain
+  // prose, and a `<blockquote>` is no exception). A pasted/inserted quote
+  // routinely *has* literal `\n` characters sitting in its text: pulling a
+  // selection out of a PDF (`reflowTextItems`/`separatorForGap` in
+  // lib/pdf.ts) deliberately turns each line-wrap in the original page
+  // into a `\n`, specifically so the extracted text reads back with real
+  // line/paragraph structure — exactly right for *that*, but those breaks
+  // are never shown in the live editor (the browser collapses them,
+  // same as this). Without this, they'd survive untouched into the
+  // exported Markdown text, and `htmlToMarkdownBlocks`'s own blockquote
+  // handling (which *does* split on real `\n`, to honor an actual `<br>`
+  // a user inserted on purpose — see its own `case 'br'` just below)
+  // would read every one of those as a deliberate hard break, visibly
+  // splitting one flowing quote into several short lines the moment it
+  // reached print — confirmed live: a quote with no visible line breaks
+  // in the editor came out broken into several lines in the print
+  // preview. A real `<br>` never reaches this function at all (it's its
+  // own branch, converted to Markdown's own hard-break syntax, not
+  // plain text) so this never touches an intentional one.
+  return s.replace(/\s+/g, ' ').replace(/([*_$[\]\\])/g, '\\$1')
 }
 
 /** Splits one node-content shard's HTML into a list of Markdown "blocks" (paragraphs, blockquotes) to join with blank lines. */
@@ -387,7 +401,16 @@ function sectionCmd(depth: number): string {
 }
 
 function texEscape(s: string): string {
+  // Same reasoning as mdEscapeText's own whitespace collapse (its own doc
+  // comment has the fuller story): a run of whitespace, including a
+  // literal `\n` a pasted/inserted quote often has sitting in its text,
+  // reads in the live editor exactly like a single space (the browser
+  // collapses it) — collapsed here the same way before anything else
+  // touches it, so a `\n\n` from the original text doesn't compile as an
+  // unintended LaTeX paragraph break, and the generated .tex source
+  // doesn't carry a confusing mid-sentence line break either.
   return s
+    .replace(/\s+/g, ' ')
     .replace(/\\/g, '\\textbackslash{}')
     .replace(/([%$#_{}&])/g, '\\$1')
     .replace(/~/g, '\\textasciitilde{}')
