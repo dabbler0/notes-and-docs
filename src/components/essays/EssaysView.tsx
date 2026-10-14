@@ -13,6 +13,7 @@ export function EssaysView() {
   const [openId, setOpenId] = useState<string | null>(null)
   const [showImport, setShowImport] = useState(false)
   const [showArchived, setShowArchived] = useState(false)
+  const [query, setQuery] = useState('')
 
   async function reload() {
     setEssays(await listEssays())
@@ -61,12 +62,18 @@ export function EssaysView() {
   }
 
   const archivedCount = essays.filter((e) => e.archived).length
-  const visible = essays.filter((e) => (showArchived ? !!e.archived : !e.archived))
+  const byArchived = essays.filter((e) => (showArchived ? !!e.archived : !e.archived))
+  const trimmedQuery = query.trim().toLowerCase()
+  const visible = trimmedQuery ? byArchived.filter((e) => e.title.toLowerCase().includes(trimmedQuery)) : byArchived
 
   return (
     <div className="page-pad">
       <div className="page-header">
         <h1>Drafts</h1>
+        <div className="search-bar">
+          <Icon name="search" className="muted-icon" />
+          <input placeholder="Search by title…" value={query} onInput={(e) => setQuery((e.target as HTMLInputElement).value)} />
+        </div>
         {archivedCount > 0 && (
           <button className="btn btn-ghost" onClick={() => setShowArchived((v) => !v)}>
             {showArchived ? '← Back to active' : `Show archived (${archivedCount})`}
@@ -81,7 +88,13 @@ export function EssaysView() {
       </div>
       {visible.length === 0 ? (
         <p className="empty-state">
-          {showArchived ? 'No archived essays.' : essays.length === 0 ? 'No essays yet. Start a new one to build up a section tree with versioned drafts.' : 'No active essays — everything is archived.'}
+          {trimmedQuery
+            ? 'No essays match your search.'
+            : showArchived
+              ? 'No archived essays.'
+              : essays.length === 0
+                ? 'No essays yet. Start a new one to build up a section tree with versioned drafts.'
+                : 'No active essays — everything is archived.'}
         </p>
       ) : (
         <div className="card-grid">
