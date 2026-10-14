@@ -8,12 +8,46 @@ import type { Essay } from '../../models/types'
 import { EssayWorkspace } from './EssayWorkspace'
 import { ImportLatexDialog } from './ImportLatexDialog'
 
+type SortOrder = 'updated-desc' | 'updated-asc' | 'created-desc' | 'created-asc' | 'title-asc' | 'title-desc'
+
+const SORT_OPTIONS: { value: SortOrder; label: string }[] = [
+  { value: 'updated-desc', label: 'Last edited (newest first)' },
+  { value: 'updated-asc', label: 'Last edited (oldest first)' },
+  { value: 'created-desc', label: 'Date created (newest first)' },
+  { value: 'created-asc', label: 'Date created (oldest first)' },
+  { value: 'title-asc', label: 'Title (A–Z)' },
+  { value: 'title-desc', label: 'Title (Z–A)' },
+]
+
+/** `listEssays()` itself already returns essays sorted by `updatedAt` descending (last edited first) — this just lets the dropdown offer the other orderings on top of that default, without needing `listEssays()` to know about any of them. */
+function sortEssays(essays: Essay[], order: SortOrder): Essay[] {
+  const sorted = [...essays]
+  switch (order) {
+    case 'updated-desc':
+      return sorted.sort((a, b) => b.updatedAt - a.updatedAt)
+    case 'updated-asc':
+      return sorted.sort((a, b) => a.updatedAt - b.updatedAt)
+    case 'created-desc':
+      return sorted.sort((a, b) => b.createdAt - a.createdAt)
+    case 'created-asc':
+      return sorted.sort((a, b) => a.createdAt - b.createdAt)
+    case 'title-asc':
+      return sorted.sort((a, b) => a.title.localeCompare(b.title))
+    case 'title-desc':
+      return sorted.sort((a, b) => b.title.localeCompare(a.title))
+  }
+}
+
 export function EssaysView() {
   const [essays, setEssays] = useState<Essay[]>([])
   const [openId, setOpenId] = useState<string | null>(null)
   const [showImport, setShowImport] = useState(false)
   const [showArchived, setShowArchived] = useState(false)
   const [query, setQuery] = useState('')
+  // Matches `listEssays()`'s own default ordering, so picking this option
+  // back out of the dropdown is indistinguishable from never having
+  // touched it.
+  const [sortOrder, setSortOrder] = useState<SortOrder>('updated-desc')
 
   async function reload() {
     setEssays(await listEssays())
@@ -64,7 +98,8 @@ export function EssaysView() {
   const archivedCount = essays.filter((e) => e.archived).length
   const byArchived = essays.filter((e) => (showArchived ? !!e.archived : !e.archived))
   const trimmedQuery = query.trim().toLowerCase()
-  const visible = trimmedQuery ? byArchived.filter((e) => e.title.toLowerCase().includes(trimmedQuery)) : byArchived
+  const bySearch = trimmedQuery ? byArchived.filter((e) => e.title.toLowerCase().includes(trimmedQuery)) : byArchived
+  const visible = sortEssays(bySearch, sortOrder)
 
   return (
     <div className="page-pad">
@@ -74,6 +109,13 @@ export function EssaysView() {
           <Icon name="search" className="muted-icon" />
           <input placeholder="Search by title…" value={query} onInput={(e) => setQuery((e.target as HTMLInputElement).value)} />
         </div>
+        <select value={sortOrder} onChange={(e) => setSortOrder((e.target as HTMLSelectElement).value as SortOrder)} title="Sort essays by">
+          {SORT_OPTIONS.map((opt) => (
+            <option key={opt.value} value={opt.value}>
+              {opt.label}
+            </option>
+          ))}
+        </select>
         {archivedCount > 0 && (
           <button className="btn btn-ghost" onClick={() => setShowArchived((v) => !v)}>
             {showArchived ? '← Back to active' : `Show archived (${archivedCount})`}

@@ -13,7 +13,7 @@ import { useSourceStorageBytes } from '../../lib/useSourceStorageBytes'
 import { useIsMobile } from '../../lib/useIsMobile'
 import { confirmDialog } from '../../lib/confirm'
 import { commitOcrPreview, convertSourceToTextOnly, deleteSource, discardOcrPreview, getSource, getSourcePdfBlob, removeSourcePdf, setSourcePdf, stageOcrPreview, touchSourceViewed, updateSource, updateSourceContent } from '../../models/sourcesRepo'
-import { addMarginAnnotation, addQuoteToBank, deleteQuoteFromBank, listMarginAnnotationsForSource, listQuotesForSource } from '../../models/quoteBankRepo'
+import { addMarginAnnotation, addQuoteToBank, deleteQuoteFromBank, listMarginAnnotationsForSource, listQuotesForSource, matchesQuoteQuery } from '../../models/quoteBankRepo'
 import { Icon } from '../Icon'
 import type { QuoteBankEntry, Source } from '../../models/types'
 
@@ -106,6 +106,7 @@ export function SourceWorkspace({
   const [ocrPreview, setOcrPreview] = useState<{ blobId: string; fileName: string; pageHtml: string[] } | null>(null)
   const [quotes, setQuotes] = useState<QuoteBankEntry[]>([])
   const [annotations, setAnnotations] = useState<QuoteBankEntry[]>([])
+  const [quotesPanelQuery, setQuotesPanelQuery] = useState('')
   // Fed to `ReaderMode` for its own span-highlighting, which wants both
   // kinds at once (each in its own color) even though they're never shown
   // together in a *list* anywhere in this component. Memoized so this
@@ -748,14 +749,32 @@ export function SourceWorkspace({
     )
   }
 
+  // Both lists are this one source's own, so there's nothing useful to
+  // search by beyond the quote text and the note on it — `matchesQuoteQuery`
+  // accepts a third "source label" field too (what the quote-bank-wide
+  // pickers search by, alongside quote text/annotation — see
+  // QuoteInsertDialog.tsx's own `QuoteBankPicker`), left empty here since
+  // every card in this panel is already from the same source.
+  const trimmedQuotesPanelQuery = quotesPanelQuery.trim()
+  const filteredQuotes = trimmedQuotesPanelQuery ? quotes.filter((q) => matchesQuoteQuery(q, '', trimmedQuotesPanelQuery)) : quotes
+  const filteredAnnotations = trimmedQuotesPanelQuery ? annotations.filter((q) => matchesQuoteQuery(q, '', trimmedQuotesPanelQuery)) : annotations
+
   const quotesPanel = (
     <div className="source-quotes-panel">
-      <h4 className="source-quotes-panel-heading">Quotes{quotes.length > 0 ? ` (${quotes.length})` : ''}</h4>
-      {entryList(quotes, 'No quotes saved from this source yet — highlight some text in the reader and add it to the quote bank.')}
-      <h4 className="source-quotes-panel-heading">Margin annotations{annotations.length > 0 ? ` (${annotations.length})` : ''}</h4>
+      {(quotes.length > 0 || annotations.length > 0) && (
+        <div className="search-bar" style={{ marginBottom: 10 }}>
+          <Icon name="search" className="muted-icon" />
+          <input placeholder="Search quotes & annotations…" value={quotesPanelQuery} onInput={(e) => setQuotesPanelQuery((e.target as HTMLInputElement).value)} />
+        </div>
+      )}
+      <h4 className="source-quotes-panel-heading">Quotes{quotes.length > 0 ? ` (${filteredQuotes.length}${trimmedQuotesPanelQuery ? ` of ${quotes.length}` : ''})` : ''}</h4>
+      {entryList(filteredQuotes, trimmedQuotesPanelQuery ? 'No quotes match your search.' : 'No quotes saved from this source yet — highlight some text in the reader and add it to the quote bank.')}
+      <h4 className="source-quotes-panel-heading">Margin annotations{annotations.length > 0 ? ` (${filteredAnnotations.length}${trimmedQuotesPanelQuery ? ` of ${annotations.length}` : ''})` : ''}</h4>
       {entryList(
-        annotations,
-        'No margin annotations on this source yet — highlight some text in the reader and save it as an annotation. Unlike quotes, these stay with the source: they never show up in the quote bank or when inserting quotes into an essay.',
+        filteredAnnotations,
+        trimmedQuotesPanelQuery
+          ? 'No margin annotations match your search.'
+          : 'No margin annotations on this source yet — highlight some text in the reader and save it as an annotation. Unlike quotes, these stay with the source: they never show up in the quote bank or when inserting quotes into an essay.',
         'quote-bank-text-annotation',
       )}
     </div>
