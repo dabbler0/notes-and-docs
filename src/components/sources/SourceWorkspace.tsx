@@ -6,6 +6,7 @@ import { downloadBlob, filenameFor } from '../../lib/download'
 import { EpubExportDialog } from './EpubExportDialog'
 import { loadPdf } from '../../lib/pdf'
 import { extractPageHtml, htmlToPlainText, pageHtmlHasImages, removeImagesFromPageHtml } from '../../lib/textExtraction'
+import { buildSimplePdfFromText } from '../../lib/pdfFromText'
 import { formatBytes } from '../../lib/format'
 import { describeOcrError, looksLikeScannedPdf, ocrImage, ocrPdf, reOcrPdf } from '../../lib/ocr'
 import { useSourceStorageBytes } from '../../lib/useSourceStorageBytes'
@@ -212,6 +213,18 @@ export function SourceWorkspace({
     const blob = await getSourcePdfBlob(source)
     if (!blob) return
     downloadBlob(blob, source.pdfFileName || `${filenameFor(displayTitle(source.bibtex))}.pdf`)
+  }
+
+  /** The text-only counterpart to `handleDownloadPdf` above, for a source with no original PDF left to hand out byte-for-byte — renders its extracted `pageHtml` into a brand new, minimal PDF instead (see `buildSimplePdfFromText`'s own doc comment for what that does and doesn't preserve). */
+  async function handleDownloadTextAsPdf() {
+    if (!source) return
+    setPdfBusy(true)
+    try {
+      const bytes = await buildSimplePdfFromText({ title: displayTitle(source.bibtex), subtitle: formatCitation(source.bibtex), pageHtml: source.pageHtml })
+      downloadBlob(new Blob([bytes as BlobPart], { type: 'application/pdf' }), `${filenameFor(displayTitle(source.bibtex))}.pdf`)
+    } finally {
+      setPdfBusy(false)
+    }
   }
 
   async function handleRemovePdf() {
@@ -600,6 +613,17 @@ export function SourceWorkspace({
         </label>
         {source.pdfBlobId && (
           <button type="button" className="btn btn-ghost btn-sm icon-btn-toolbar" title="Download PDF" disabled={pdfBusy || !!ocrPreview} onClick={handleDownloadPdf}>
+            <Icon name="export" />
+          </button>
+        )}
+        {!source.pdfBlobId && source.pageCount > 0 && (
+          <button
+            type="button"
+            className="btn btn-ghost btn-sm icon-btn-toolbar"
+            title="Download as PDF — no original PDF is stored for this source, so this renders its extracted text into a new, simple PDF instead"
+            disabled={pdfBusy || !!ocrPreview}
+            onClick={handleDownloadTextAsPdf}
+          >
             <Icon name="export" />
           </button>
         )}
