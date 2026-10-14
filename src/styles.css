@@ -195,6 +195,55 @@ select {
   color: var(--ink);
 }
 
+/* A `<select>` living in a `.page-header` alongside `.search-bar`/`.btn` —
+   a bare native select there reads as an unstyled browser control dropped
+   into an otherwise consistently pill-shaped, soft-shadowed toolbar.
+   Matches `.search-bar`'s own pill/border/shadow so a sort dropdown (or
+   any other header-level select) reads as part of the same row instead of
+   standing out from it. A custom chevron replaces the native arrow, which
+   varies too much across browsers/platforms to reliably match this
+   palette on its own — `appearance: none` hides it, and the chevron is a
+   plain inline SVG data URI (not a 1x1 icon font swap) so it recolors for
+   dark mode the same way every other icon here does, via `--ink-dim`
+   baked into the URI per color-scheme below rather than filtered at
+   runtime. */
+.select-pill {
+  appearance: none;
+  -webkit-appearance: none;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 10px 36px 10px 16px;
+  background-color: var(--surface);
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%236b6862' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 14px center;
+  box-shadow: var(--shadow-soft);
+  font-size: 14.5px;
+  font-weight: 600;
+  color: var(--ink);
+  outline: none;
+  cursor: pointer;
+  transition: background-color 0.15s ease, border-color 0.15s ease;
+}
+
+.select-pill:hover {
+  background-color: var(--surface-2);
+}
+
+.select-pill:focus {
+  border-color: var(--accent);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) .select-pill {
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%23a6a096' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  }
+}
+
+:root[data-theme='dark'] .select-pill {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%23a6a096' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+}
+
 .muted-icon {
   color: var(--ink-dim);
   flex-shrink: 0;

@@ -92,7 +92,21 @@ export function EssaysView() {
   }
 
   if (openId) {
-    return <EssayWorkspace essayId={openId} onBack={() => setOpenId(null)} />
+    // Refetches on the way back out, not just on this view's own mount —
+    // `EssayWorkspace` has no separate `onChanged` callback the way
+    // `SourceWorkspace` does, so without this, every edit just made (which
+    // bumps the essay's own `updatedAt` — see `saveNode`) stayed invisible
+    // to the "last edited" sort order until something unrelated (switching
+    // tabs and back, a background sync) happened to remount this view.
+    return (
+      <EssayWorkspace
+        essayId={openId}
+        onBack={() => {
+          setOpenId(null)
+          reload()
+        }}
+      />
+    )
   }
 
   const archivedCount = essays.filter((e) => e.archived).length
@@ -109,7 +123,7 @@ export function EssaysView() {
           <Icon name="search" className="muted-icon" />
           <input placeholder="Search by title…" value={query} onInput={(e) => setQuery((e.target as HTMLInputElement).value)} />
         </div>
-        <select value={sortOrder} onChange={(e) => setSortOrder((e.target as HTMLSelectElement).value as SortOrder)} title="Sort essays by">
+        <select className="select-pill" value={sortOrder} onChange={(e) => setSortOrder((e.target as HTMLSelectElement).value as SortOrder)} title="Sort essays by">
           {SORT_OPTIONS.map((opt) => (
             <option key={opt.value} value={opt.value}>
               {opt.label}

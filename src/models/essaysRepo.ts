@@ -90,8 +90,25 @@ function migrateComments(node: EssayNode): void {
  */
 export async function saveNode(node: EssayNode): Promise<boolean> {
   const pruned = pruneOrphanedFootnotes(node)
-  node.updatedAt = Date.now()
+  const now = Date.now()
+  node.updatedAt = now
   await backend.docs.put(NODES, node)
+  // Bubbles up to the parent essay's own `updatedAt` too — this is the one
+  // place nearly every real edit passes through (the debounced autosave
+  // behind every keystroke, a comment, a footnote, a version commit or
+  // revert, moving a subsection), unlike `saveEssay`, which only a handful
+  // of essay-level actions call directly (renaming the essay, archiving,
+  // deleting). Without this, `listEssays()`'s "sorted by last edited"
+  // ordering — and the Drafts tab's sort dropdown default — reflected only
+  // those few structural/metadata changes, never the actual writing, which
+  // is backwards from what "last edited" should mean. A missing essay
+  // (deleted, or a node whose `essayId` is stale) is silently skipped —
+  // nothing left to sort by last-edited for.
+  const essay = await getEssay(node.essayId)
+  if (essay && !essay.deleted) {
+    essay.updatedAt = now
+    await backend.docs.put(ESSAYS, essay)
+  }
   return pruned
 }
 
