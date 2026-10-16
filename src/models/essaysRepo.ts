@@ -1,7 +1,9 @@
 import { backend } from '../storage'
 import { id } from '../lib/id'
 import { getChildIds, insertMarkerInContent, removeMarkerFromContent, type MarkerPlacement } from '../lib/childMarkers'
-import type { Comment, Essay, EssayNode, Footnote, NodeVersion } from './types'
+import { citationHtml, extractLegacyCitationNote } from '../lib/bibtex'
+import { listSources } from './sourcesRepo'
+import type { Comment, Essay, EssayNode, Footnote, NodeVersion, Source } from './types'
 
 const ESSAYS = 'essays'
 const NODES = 'nodes'
@@ -19,49 +21,88 @@ export async function getNode(nodeId: string): Promise<EssayNode | undefined> {
   const node = await backend.docs.get<EssayNode>(NODES, nodeId)
   if (node) {
     migrateComments(node)
-    migrateLegacyCitations(node)
+    await migrateLegacyCitations(node)
   }
   return node
 }
 
 /**
- * Flattens any *legacy* citation chip — one inserted before `citationHtml`
+ * Upgrades any *legacy* citation chip — one inserted before `citationHtml`
  * (lib/bibtex.ts) started tagging its output `data-cite-v="2"` and storing
  * a unique source reference plus a separate freeform note as structured
  * data, rather than baking everything into freeform, hand-editable label
- * text with nothing to reliably split back apart later — down to plain
- * text with the same visible contents, right where the chip was. This is
- * citations' own version of `migrateComments` right above: lazy, run every
+ * text — into that same structured shape, right where the chip was. This
+ * is citations' own version of `migrateComments` above: lazy, run every
  * time a node is loaded, mutating in place rather than writing back
  * immediately (the next real edit's own autosave persists it for real,
  * same as that one).
+ *
+ * A legacy chip already carries a real `data-source-id` — the one piece
+ * of this that was never actually freeform — so there's a source to
+ * rebuild a proper chip from; only the freeform note has to be recovered,
+ * via `extractLegacyCitationNote` reading whatever page number (or year,
+ * correctly excluded — see that function's own doc comment) the old label
+ * text happened to mention. The new chip is built the exact same way a
+ * fresh "Cite" does, via `citationHtml(source, { note })` — so its label
+ * is freshly rendered from the source's own bibtex entry, not whatever
+ * the old one's text happened to say (a hand-edited label from before
+ * this existed doesn't survive the upgrade verbatim, only the source it
+ * pointed to and the page it mentioned do).
+ *
+ * Falls back to flattening to plain text — the same degraded fallback
+ * this migration used before `data-source-id` was recognized as already
+ * being real structured data — only when there's no source left to
+ * rebuild from at all (a missing `data-source-id`, or a source that's
+ * since been deleted): nothing to reconstruct a valid chip out of.
  *
  * Only `.citation` elements *without* the version marker are touched — a
  * node holding a mix of old and freshly-inserted citations (the ordinary
  * case right after this shipped) keeps the new ones exactly as they are.
  * Runs against `draftContent` and every historical `version.content`
  * alike, so an old pinned version doesn't go on citing a source through
- * markup nothing downstream still understands as structured — it just
- * keeps the same text, no longer as a special, source-linked element.
+ * markup nothing downstream still understands as structured.
  */
-function migrateLegacyCitations(node: EssayNode): void {
-  node.draftContent = flattenLegacyCitations(node.draftContent)
-  for (const version of node.versions) version.content = flattenLegacyCitations(version.content)
+async function migrateLegacyCitations(node: EssayNode): Promise<void> {
+  const htmls = [node.draftContent, ...node.versions.map((v) => v.content)]
+  if (!htmls.some((html) => html.includes('citation'))) return
+  // Sources are fetched at most once per `getNode` call, lazily, and only
+  // when there's actually a legacy citation to resolve against them —
+  // `listSources()` itself is already the cheap, metadata-only path (no
+  // extracted-PDF-text decompression), unlike calling `getSource` once per
+  // citation would be.
+  let sourcesById: Map<string, Source> | null = null
+  async function sourceFor(sourceId: string): Promise<Source | undefined> {
+    if (!sourcesById) sourcesById = new Map((await listSources()).map((s) => [s.id, s]))
+    return sourcesById.get(sourceId)
+  }
+  node.draftContent = await flattenLegacyCitations(node.draftContent, sourceFor)
+  for (const version of node.versions) version.content = await flattenLegacyCitations(version.content, sourceFor)
 }
 
-function flattenLegacyCitations(html: string): string {
+async function flattenLegacyCitations(html: string, sourceFor: (sourceId: string) => Promise<Source | undefined>): Promise<string> {
   // Cheap fast path: the overwhelming majority of nodes never had a
   // citation in them at all, and this skips ever constructing a
   // DOMParser document for any of them.
   if (!html.includes('citation')) return html
   const doc = new DOMParser().parseFromString(html, 'text/html')
-  let changed = false
-  for (const el of Array.from(doc.querySelectorAll('.citation'))) {
-    if (el.hasAttribute('data-cite-v')) continue
+  const legacyEls = Array.from(doc.querySelectorAll('.citation')).filter((el) => !el.hasAttribute('data-cite-v'))
+  if (legacyEls.length === 0) return html
+  for (const el of legacyEls) {
+    const sourceId = el.getAttribute('data-source-id')
+    const source = sourceId ? await sourceFor(sourceId) : undefined
+    if (source) {
+      const note = extractLegacyCitationNote(el.textContent ?? '', source.bibtex.fields.year)
+      const scratch = doc.createElement('div')
+      scratch.innerHTML = citationHtml(source, { note })
+      const replacement = scratch.firstElementChild
+      if (replacement) {
+        el.replaceWith(replacement)
+        continue
+      }
+    }
     el.replaceWith(doc.createTextNode(el.textContent ?? ''))
-    changed = true
   }
-  return changed ? doc.body.innerHTML : html
+  return doc.body.innerHTML
 }
 
 /** A comment as it could look in already-stored data predating either migration below — a wider, looser shape than the current `Comment` type allows (in particular, `anchorKind` could be `'reply'`, a kind that no longer exists at all — see the loop below). */

@@ -2,6 +2,7 @@
  * behind the Drafts view's "Show archived" toggle. */
 import { beforeEach, describe, expect, it } from 'vitest'
 import { archiveEssay, commitNewVersion, createChildNode, createEssay, getEssay, getNode, saveEssay, saveNode, unarchiveEssay } from '../essaysRepo'
+import { createSource } from '../sourcesRepo'
 
 interface FakeStorageModule {
   createFakeBackend(): unknown
@@ -85,23 +86,72 @@ describe("saveNode bubbling up to its essay's updatedAt", () => {
 })
 
 /**
- * `getNode`'s lazy flattening of a *legacy* citation chip (inserted before
+ * `getNode`'s lazy upgrade of a *legacy* citation chip (inserted before
  * `citationHtml` tagged its output `data-cite-v="2"` and split a source
- * reference + freeform note out as structured data — see that function's
- * own doc comment in lib/bibtex.ts) down to plain text with the same
- * visible contents.
+ * reference + freeform note out as structured data) into that same
+ * structured shape — recovering the note from the old label text via
+ * `extractLegacyCitationNote`, since `data-source-id` was already a real
+ * reference. Falls back to flattening to plain text only when there's no
+ * source left to rebuild from (missing id, or a deleted source).
  */
 describe('migrateLegacyCitations (via getNode)', () => {
-  it('flattens an old, unversioned citation chip to plain text, dropping the element entirely', async () => {
+  it('upgrades a legacy citation chip into the current structured format, recovering the page from the old label text', async () => {
     const essay = await createEssay('Has an old citation')
+    const source = await createSource({ type: 'article', key: 'smith2020', fields: { author: 'Smith', year: '2020' } })
     const root = (await getNode(essay.rootNodeId))!
-    root.draftContent = '<p>As argued by <cite class="citation" data-source-id="s1">(Smith, 2020)</cite>, the sky is blue.</p>'
+    root.draftContent = `<p>As argued by <cite class="citation" data-source-id="${source.id}">(Smith, 2020, p. 5)</cite>, the sky is blue.</p>`
+    await saveNode(root)
+
+    const reloaded = (await getNode(essay.rootNodeId))!
+    expect(reloaded.draftContent).toContain(`data-source-id="${source.id}"`)
+    expect(reloaded.draftContent).toContain('data-cite-v="2"')
+    expect(reloaded.draftContent).toContain('data-note="p5"')
+    expect(reloaded.draftContent).toContain('(Smith, 2020), p5')
+  })
+
+  it('recovers a page range, not just a single page', async () => {
+    const essay = await createEssay('Has an old citation with a range')
+    const source = await createSource({ type: 'article', key: 'smith2020', fields: { author: 'Smith', year: '2020' } })
+    const root = (await getNode(essay.rootNodeId))!
+    root.draftContent = `<p><cite class="citation" data-source-id="${source.id}">(Smith, 2020, pp. 12 - 15)</cite></p>`
+    await saveNode(root)
+
+    const reloaded = (await getNode(essay.rootNodeId))!
+    expect(reloaded.draftContent).toContain('data-note="pp12-15"')
+  })
+
+  it('omits the note when the old label only ever mentioned the publication year', async () => {
+    const essay = await createEssay('Has an old citation with no real page')
+    const source = await createSource({ type: 'article', key: 'smith2020', fields: { author: 'Smith', year: '2020' } })
+    const root = (await getNode(essay.rootNodeId))!
+    root.draftContent = `<p><cite class="citation" data-source-id="${source.id}">(Smith, 2020)</cite></p>`
+    await saveNode(root)
+
+    const reloaded = (await getNode(essay.rootNodeId))!
+    expect(reloaded.draftContent).not.toContain('data-note')
+    expect(reloaded.draftContent).toContain('(Smith, 2020)')
+  })
+
+  it('falls back to flattening to plain text when the chip has no data-source-id at all', async () => {
+    const essay = await createEssay('Has a sourceless old citation')
+    const root = (await getNode(essay.rootNodeId))!
+    root.draftContent = '<p>As argued by <cite class="citation">(Smith, 2020)</cite>, the sky is blue.</p>'
     await saveNode(root)
 
     const reloaded = (await getNode(essay.rootNodeId))!
     expect(reloaded.draftContent).not.toContain('<cite')
-    expect(reloaded.draftContent).not.toContain('data-source-id')
     expect(reloaded.draftContent).not.toContain('class="citation"')
+    expect(reloaded.draftContent).toContain('As argued by (Smith, 2020), the sky is blue.')
+  })
+
+  it('falls back to flattening to plain text when the referenced source has since been deleted', async () => {
+    const essay = await createEssay('Has a citation to a deleted source')
+    const root = (await getNode(essay.rootNodeId))!
+    root.draftContent = '<p>As argued by <cite class="citation" data-source-id="never-existed">(Smith, 2020)</cite>, the sky is blue.</p>'
+    await saveNode(root)
+
+    const reloaded = (await getNode(essay.rootNodeId))!
+    expect(reloaded.draftContent).not.toContain('<cite')
     expect(reloaded.draftContent).toContain('As argued by (Smith, 2020), the sky is blue.')
   })
 
@@ -116,18 +166,19 @@ describe('migrateLegacyCitations (via getNode)', () => {
     expect(reloaded.draftContent).toContain(chip)
   })
 
-  it('flattens a legacy chip in an older, pinned version, not just the live draft', async () => {
+  it('upgrades a legacy chip in an older, pinned version, not just the live draft', async () => {
     const essay = await createEssay('Has an old citation in an old version')
+    const source = await createSource({ type: 'article', key: 'smith2020', fields: { author: 'Smith', year: '2020' } })
     const root = (await getNode(essay.rootNodeId))!
-    root.draftContent = '<p>Old text with <cite class="citation" data-source-id="s1">(Smith, 2020)</cite>.</p>'
+    root.draftContent = `<p>Old text with <cite class="citation" data-source-id="${source.id}">(Smith, 2020, p. 5)</cite>.</p>`
     await commitNewVersion(root)
     root.draftContent = '<p>Completely different text now.</p>'
     await saveNode(root)
 
     const reloaded = (await getNode(essay.rootNodeId))!
     const oldVersion = reloaded.versions.find((v) => v.content.includes('Old text'))!
-    expect(oldVersion.content).not.toContain('<cite')
-    expect(oldVersion.content).toContain('Old text with (Smith, 2020).')
+    expect(oldVersion.content).toContain('data-cite-v="2"')
+    expect(oldVersion.content).toContain('data-note="p5"')
   })
 
   it('leaves a node with no citation markup at all completely unchanged', async () => {

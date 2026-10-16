@@ -183,6 +183,39 @@ export function citationPage(source: Source, page: number | undefined): number |
 }
 
 /**
+ * `essaysRepo.ts`'s own migration for a legacy citation (see
+ * `citationHtml`'s doc comment on `data-cite-v`) uses this to recover a
+ * freeform note from a chip's old, otherwise-unstructured label text, now
+ * that `data-source-id` alone is enough to know *which* source it was
+ * always pointing to — the one piece of real information such a label
+ * ever added on top of that is wherever it mentioned a page, so this
+ * pulls out the last run of digits in the text, or the last `N-N` page
+ * range (arbitrary whitespace allowed, or none, around the dash — "12-15",
+ * "12 - 15", "12-  15" all match as one range rather than two separate
+ * numbers), whichever comes later — and formats it the way a page note
+ * from this migration is meant to read: `p12` for a single page, `pp12-15`
+ * for a range (dashes/whitespace normalized away either way).
+ *
+ * Returns `''` — no note at all, the ordinary case for a citation that
+ * never had a page in the first place — in two situations: no digits
+ * anywhere in the text, or the text contains *exactly one* number and
+ * that number is the source's own publication year (`(Smith, 2020)`,
+ * where "2020" is the year the citation label itself always included,
+ * not a page). That exclusion only fires when it's the *only* number in
+ * the text — a citation that mentions the year *and* a real page
+ * ("Smith, 2020, p. 2020" — contrived, but possible) still gets that
+ * page, since there's then no ambiguity about which number is which.
+ */
+export function extractLegacyCitationNote(text: string, year: string | undefined): string {
+  const matches = Array.from(text.matchAll(/\d+\s*-\s*\d+|\d+/g)).map((m) => m[0])
+  if (matches.length === 0) return ''
+  const last = matches[matches.length - 1]
+  const range = last.match(/^(\d+)\s*-\s*(\d+)$/)
+  if (matches.length === 1 && !range && year !== undefined && last === year) return ''
+  return range ? `pp${range[1]}-${range[2]}` : `p${last}`
+}
+
+/**
  * Which citation style a label is rendered in — only `'author-date'` (the
  * parenthetical form this app has always used) is actually implemented
  * below, but it's kept as its own type/parameter from the start so a

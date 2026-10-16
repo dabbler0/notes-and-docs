@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks'
 import { createPortal } from 'preact/compat'
 import { commentIdsInContent, commitNewVersion, deleteFootnote, deleteNodeOnly, findCommentById, headVersion, nodeComments, nodeFootnotes, revertToVersion, saveNode, updateFootnoteContent } from '../../models/essaysRepo'
+import { getSource } from '../../models/sourcesRepo'
 import { deleteComment, promoteComment, toggleCommentDisplayMode } from './commentActions'
 import { CommentCard } from './CommentsPanel'
 import { MathBody } from './MathBody'
@@ -10,6 +11,8 @@ import { Icon } from '../Icon'
 import { id as newId } from '../../lib/id'
 import { escapeHtml } from '../../lib/html'
 import { confirmDialog } from '../../lib/confirm'
+import { promptDialog } from '../../lib/prompt'
+import { citationHtml } from '../../lib/bibtex'
 import type { Comment, EssayNode, Footnote, NodeVersion } from '../../models/types'
 
 const HEADING_SIZES = [21, 18, 16.5, 15, 14.5]
@@ -452,6 +455,7 @@ export function SectionBlock({
               onActivate(node.id, e.currentTarget as HTMLDivElement)
               onCaptureRange()
             }}
+            onClick={handleShardClick}
             onInput={handleShardInput}
             onKeyDown={handleShardKeyDown}
             onKeyUp={onCaptureRange}
@@ -752,6 +756,50 @@ function FootnoteRow({
 
 function cssEscapeId(s: string): string {
   return typeof CSS !== 'undefined' && CSS.escape ? CSS.escape(s) : s.replace(/["\\]/g, '\\$&')
+}
+
+/**
+ * Clicking a citation chip edits its freeform "page number or other
+ * note" field (see `citationHtml`'s own doc comment in lib/bibtex.ts for
+ * what that is and isn't) — the one part of a citation meant to be
+ * hand-edited after insertion; the author/date portion is generated from
+ * the source's own bibtex entry and regenerated here too, never typed
+ * into directly. A plain click (no modifier) on anything inside a
+ * `.citation` element opens a small prompt pre-filled with the chip's
+ * current note, and on confirming replaces the whole chip with a fresh
+ * one built the exact same way a new "Cite" does
+ * (`citationHtml(source, { note })`) — so an edited citation is
+ * indistinguishable from one inserted fresh with that note to begin with.
+ *
+ * A modified click (ctrl/cmd/shift/alt) is left alone — mainly so
+ * ctrl/cmd-click still opens a URL-backed citation's own link in a new
+ * tab, the ordinary browser gesture for that, rather than this always
+ * intercepting every click on it.
+ */
+function handleShardClick(e: MouseEvent) {
+  if (e.ctrlKey || e.metaKey || e.shiftKey || e.altKey) return
+  const target = e.target as HTMLElement | null
+  const chip = target?.closest<HTMLElement>('.citation')
+  if (!chip) return
+  const shard = chip.closest<HTMLElement>('.node-content')
+  if (!shard) return
+  e.preventDefault()
+  editCitationNote(chip, shard)
+}
+
+async function editCitationNote(chip: HTMLElement, shard: HTMLElement) {
+  const sourceId = chip.getAttribute('data-source-id')
+  if (!sourceId) return
+  const source = await getSource(sourceId)
+  if (!source) return
+  const next = await promptDialog('Page number or other note for this citation?', { defaultValue: chip.getAttribute('data-note') ?? '', placeholder: 'e.g. p. 5, ch. 3' })
+  if (next === null || !chip.isConnected) return
+  const scratch = document.createElement('div')
+  scratch.innerHTML = citationHtml(source, { note: next })
+  const replacement = scratch.firstElementChild
+  if (!replacement) return
+  chip.replaceWith(replacement)
+  shard.dispatchEvent(new Event('input', { bubbles: true }))
 }
 
 /**

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { citationHtml, citationLabel, citationPage, formatCitation, pageNote, renderCitationLabel } from '../bibtex'
+import { citationHtml, citationLabel, citationPage, extractLegacyCitationNote, formatCitation, pageNote, renderCitationLabel } from '../bibtex'
 import type { BibtexEntry, Source } from '../../models/types'
 
 function source(overrides: Partial<Source> = {}): Source {
@@ -152,5 +152,43 @@ describe('formatCitation', () => {
 
   it('uses booktitle and volume alone (no issue number) when there is no journal', () => {
     expect(formatCitation(entry({ title: 'A Chapter', booktitle: 'Collected Works', volume: '2' }, 'incollection'))).toBe('A Chapter. Collected Works, 2.')
+  })
+})
+
+describe('extractLegacyCitationNote', () => {
+  it('returns a single page as "pN", with no period or space', () => {
+    expect(extractLegacyCitationNote('(Smith, 2020, p. 5)', '2020')).toBe('p5')
+  })
+
+  it('returns a page range as "ppN-N", collapsing any whitespace around the dash', () => {
+    expect(extractLegacyCitationNote('(Smith, 2020, pp. 12-15)', '2020')).toBe('pp12-15')
+    expect(extractLegacyCitationNote('(Smith, 2020, pp. 12 - 15)', '2020')).toBe('pp12-15')
+    expect(extractLegacyCitationNote('(Smith, 2020, pp. 12  -15)', '2020')).toBe('pp12-15')
+    expect(extractLegacyCitationNote('(Smith, 2020, pp. 12-  15)', '2020')).toBe('pp12-15')
+  })
+
+  it('uses the LAST number or range in the text, not the first', () => {
+    expect(extractLegacyCitationNote('(Smith, 2020, see also p. 5, cited at p. 12)', '2020')).toBe('p12')
+  })
+
+  it('returns an empty string when there are no digits anywhere', () => {
+    expect(extractLegacyCitationNote('(Smith, n.d.)', undefined)).toBe('')
+  })
+
+  it('returns an empty string when the only number in the text is the source\'s own publication year', () => {
+    expect(extractLegacyCitationNote('(Smith, 2020)', '2020')).toBe('')
+  })
+
+  it('still returns the page when the text mentions both the year and a real page, even if the page equals the year', () => {
+    // Contrived, but unambiguous: two separate numbers, not one.
+    expect(extractLegacyCitationNote('(Smith, 2020, p. 2020)', '2020')).toBe('p2020')
+  })
+
+  it('does not apply the year exclusion when there is no year to compare against', () => {
+    expect(extractLegacyCitationNote('(Smith, n.d., p. 2020)', undefined)).toBe('p2020')
+  })
+
+  it('does not apply the year exclusion to a lone number that just does not happen to equal the year', () => {
+    expect(extractLegacyCitationNote('(Smith, p. 5)', '2021')).toBe('p5')
   })
 })
