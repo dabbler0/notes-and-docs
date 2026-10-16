@@ -419,10 +419,20 @@ export function CommentCard({
 
 function InlineComposer({ placeholder, onCancel, onSubmit }: { placeholder: string; onCancel: () => void; onSubmit: (body: string) => void }) {
   const [body, setBody] = useState('')
+  // The `autoFocus` attribute alone isn't reliable here — this textarea is
+  // mounted well after the page's own initial load, in response to a click
+  // on a button that itself just took focus, and the dynamic-autofocus
+  // path browsers support for that case doesn't always win the race against
+  // an already-focused control. An explicit focus() on mount, same fix
+  // PromptDialog.tsx already uses for its own input, works regardless.
+  const textareaRef = useRef<HTMLTextAreaElement>(null)
+  useEffect(() => {
+    textareaRef.current?.focus()
+  }, [])
   return (
     <div className="field">
       <textarea
-        autoFocus
+        ref={textareaRef}
         rows={2}
         placeholder={placeholder}
         value={body}

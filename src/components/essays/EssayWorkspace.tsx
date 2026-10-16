@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'preact/hooks'
 import { addFootnote, createChildNode, addComment, getEssay, getNode, loadNodeMap, moveNode, saveEssay, saveNode } from '../../models/essaysRepo'
 import { addToGraveyard } from '../../models/graveyardRepo'
 import { citationHtml, displayTitle } from '../../lib/bibtex'
-import { extractAroundRange, insertHtmlAtRange, stripInlineFormatting } from '../../lib/selection'
+import { extractAroundRange, insertHtmlAtRange, plainTextOfRange, stripInlineFormatting } from '../../lib/selection'
 import { escapeAttr, escapeHtml } from '../../lib/html'
 import { id } from '../../lib/id'
 import { buildParentMap, isPlaceholderTitle, placeholderTitle } from '../../lib/treeNumbering'
@@ -53,7 +53,8 @@ export function EssayWorkspace({ essayId, onBack }: { essayId: string; onBack: (
   const [showExport, setShowExport] = useState(false)
   const [pendingComment, setPendingComment] = useState<{
     nodeId: string
-    range: Range
+    /** Generated up front, before the composer ever opens, and already carried by the live `<mark class="comment-anchor">` — see `insertCommentAnchor`. */
+    commentId: string
     anchorKind: 'text'
     displayMode: 'margin' | 'inline'
     text: string
@@ -88,7 +89,7 @@ export function EssayWorkspace({ essayId, onBack }: { essayId: string; onBack: (
     if (!pendingComment) return
     function onDown(e: MouseEvent) {
       if (commentWidgetRef.current && !commentWidgetRef.current.contains(e.target as Node)) {
-        setPendingComment(null)
+        cancelPendingComment()
       }
     }
     document.addEventListener('mousedown', onDown, true)
@@ -393,9 +394,10 @@ export function EssayWorkspace({ essayId, onBack }: { essayId: string; onBack: (
     const text = range.toString().trim()
     if (!text) return
     const rect = range.getBoundingClientRect()
+    const commentId = insertCommentAnchor(range.cloneRange(), 'margin')
     setPendingComment({
       nodeId: node.id,
-      range: range.cloneRange(),
+      commentId,
       anchorKind: 'text',
       displayMode: 'margin',
       text,
@@ -414,6 +416,66 @@ export function EssayWorkspace({ essayId, onBack }: { essayId: string; onBack: (
   /** A `DOMRect` is only useful for positioning the comment popover once it actually has some extent — a collapsed range/caret right at the very start of an empty, unrendered shard can report all zeroes, same failure mode `commentWidgetStyle`'s own caller has to guard against elsewhere. */
   function usefulRect(r: DOMRect): boolean {
     return r.width > 0 || r.height > 0 || r.top > 0 || r.left > 0
+  }
+
+  /**
+   * Wraps `range`'s own contents in a real `<mark class="comment-anchor"
+   * data-comment-id>` right away, at comment-*opening* time rather than
+   * waiting for `submitComment` the way this used to — so the anchor is
+   * genuine, persistent DOM for as long as the composer stays open, not
+   * just the browser's own transient selection highlight (which clears the
+   * instant focus moves to the composer's textarea, the exact "why did my
+   * highlight disappear" complaint this exists to fix). `.comment-anchor`
+   * already has its own `background` in styles.css — it was never a CSS
+   * gap, only a timing one: nothing existed yet for that rule to apply to
+   * while composing.
+   *
+   * Returns the commentId it generated (used by the id-less `id()` fallback
+   * below if the DOM mutation itself throws, so a comment can still be
+   * recorded — without a live anchor — even on that rare failure, same
+   * resilience `submitComment` used to provide via its own try/catch).
+   */
+  function insertCommentAnchor(range: Range, displayMode: 'margin' | 'inline'): string {
+    const commentId = id()
+    try {
+      const mark = document.createElement('mark')
+      mark.className = 'comment-anchor'
+      mark.dataset.commentId = commentId
+      const contents = range.extractContents()
+      mark.appendChild(contents)
+      range.insertNode(mark)
+      if (displayMode === 'inline') {
+        const marker = document.createElement('span')
+        marker.className = 'inline-comment-marker'
+        marker.setAttribute('data-comment-id', commentId)
+        marker.setAttribute('contenteditable', 'false')
+        mark.after(marker)
+      }
+    } catch {
+      /* the id is still returned — submitComment records the comment anyway, just without a live anchor to show for it */
+    }
+    return commentId
+  }
+
+  /**
+   * Undoes `insertCommentAnchor` without ever saving anything — the mark
+   * (and its inline marker sibling, if any) only ever lived in the live,
+   * uncommitted DOM, so unwrapping it here is enough; there's nothing
+   * persisted yet for a cancel to need to clean up in storage. Shared by
+   * the composer's own Cancel button, Escape inside it, and a click
+   * outside the widget — every way out of composing besides actually
+   * submitting.
+   */
+  function cancelPendingComment() {
+    if (pendingComment) {
+      const mark = document.querySelector<HTMLElement>(`mark.comment-anchor[data-comment-id="${cssEscape(pendingComment.commentId)}"]`)
+      if (mark) {
+        const marker = mark.nextElementSibling
+        if (marker?.classList.contains('inline-comment-marker') && marker.getAttribute('data-comment-id') === pendingComment.commentId) marker.remove()
+        mark.replaceWith(...Array.from(mark.childNodes))
+      }
+    }
+    setPendingComment(null)
   }
 
   /**
@@ -438,11 +500,13 @@ export function EssayWorkspace({ essayId, onBack }: { essayId: string; onBack: (
     const text = usableRange.collapsed ? '' : usableRange.toString().trim()
     const rect = usableRange.getBoundingClientRect()
     const anchorRect = usefulRect(rect) ? rect : el.getBoundingClientRect()
+    const displayMode = usableRange.collapsed || !text ? 'inline' : 'margin'
+    const commentId = insertCommentAnchor(usableRange.cloneRange(), displayMode)
     setPendingComment({
       nodeId: node.id,
-      range: usableRange.cloneRange(),
+      commentId,
       anchorKind: 'text',
-      displayMode: usableRange.collapsed || !text ? 'inline' : 'margin',
+      displayMode,
       text,
       anchorRect: { top: anchorRect.top, bottom: anchorRect.bottom, left: anchorRect.left, right: anchorRect.right },
     })
@@ -452,31 +516,8 @@ export function EssayWorkspace({ essayId, onBack }: { essayId: string; onBack: (
     if (!pendingComment) return
     const node = nodeMap.get(pendingComment.nodeId)
     if (!node) return
-    // Generated up front so the mark can carry it — that id is how the
-    // margin view finds *this* comment's own anchor in the DOM afterward,
-    // rather than just the nearest one.
-    const commentId = id()
-    if (pendingComment.range) {
-      try {
-        const mark = document.createElement('mark')
-        mark.className = 'comment-anchor'
-        mark.dataset.commentId = commentId
-        const contents = pendingComment.range.extractContents()
-        mark.appendChild(contents)
-        pendingComment.range.insertNode(mark)
-        if (pendingComment.displayMode === 'inline') {
-          const marker = document.createElement('span')
-          marker.className = 'inline-comment-marker'
-          marker.setAttribute('data-comment-id', commentId)
-          marker.setAttribute('contenteditable', 'false')
-          mark.after(marker)
-        }
-        await persistActiveNode(node)
-      } catch {
-        /* fall back to just recording the comment without an inline mark */
-      }
-    }
-    await addComment(node, { anchorKind: pendingComment.anchorKind, anchorText: pendingComment.text, body, commentId, displayMode: pendingComment.displayMode })
+    await persistActiveNode(node)
+    await addComment(node, { anchorKind: pendingComment.anchorKind, anchorText: pendingComment.text, body, commentId: pendingComment.commentId, displayMode: pendingComment.displayMode })
     setPendingComment(null)
     reload()
   }
@@ -566,7 +607,15 @@ export function EssayWorkspace({ essayId, onBack }: { essayId: string; onBack: (
         <button className={`btn btn-ghost btn-sm toolbar-toggle${commentMode ? ' active' : ''}`} onClick={toggleCommentMode}>
           <Icon name="comment" /> <span className="btn-label">{commentMode ? 'Commenting…' : 'Comment mode'}</span>
         </button>
-        <button className="btn btn-ghost btn-sm" title="Word count" onClick={() => setShowWordCount(true)}>
+        <button
+          className="btn btn-ghost btn-sm"
+          title="Word count"
+          onMouseDown={(e) => {
+            e.preventDefault()
+            captureRange()
+          }}
+          onClick={() => setShowWordCount(true)}
+        >
           <Icon name="word-count" /> <span className="btn-label">Word count</span>
         </button>
         <button className="btn btn-ghost btn-sm" onClick={() => setShowExport(true)}>
@@ -809,7 +858,7 @@ export function EssayWorkspace({ essayId, onBack }: { essayId: string; onBack: (
           style={commentWidgetStyle(pendingComment.anchorRect)}
         >
           <p className="comment-widget-quote">{pendingComment.text ? `“${pendingComment.text}”` : 'New inline comment, right here'}</p>
-          <CommentComposer onCancel={() => setPendingComment(null)} onSubmit={submitComment} />
+          <CommentComposer onCancel={cancelPendingComment} onSubmit={submitComment} />
         </div>
       )}
 
@@ -817,18 +866,36 @@ export function EssayWorkspace({ essayId, onBack }: { essayId: string; onBack: (
       {showQuoteDialog && <QuoteInsertDialog onClose={() => setShowQuoteDialog(false)} onInsertBlock={insertQuote} onInsertInline={insertInlineQuote} />}
       {showLink && <CitationPickerDialog title="Link to a source" requireUrl onClose={() => setShowLink(false)} onSelect={insertSourceLink} />}
       {showExport && <ExportDialog essay={essay} nodeMap={nodeMap} onClose={() => setShowExport(false)} />}
-      {showWordCount && <WordCountDialog rootNode={rootNode} activeNode={activeNode()} nodeMap={nodeMap} onClose={() => setShowWordCount(false)} />}
+      {showWordCount && (
+        <WordCountDialog
+          rootNode={rootNode}
+          activeNode={activeNode()}
+          nodeMap={nodeMap}
+          selectedText={savedRange.current ? plainTextOfRange(savedRange.current) : ''}
+          onClose={() => setShowWordCount(false)}
+        />
+      )}
     </div>
   )
 }
 
 function CommentComposer({ onCancel, onSubmit }: { onCancel: () => void; onSubmit: (body: string) => void }) {
   const [body, setBody] = useState('')
+  // The `autoFocus` attribute alone isn't reliable here — this textarea
+  // mounts in response to a click on a toolbar button that itself just
+  // took focus, and the dynamic-autofocus path browsers support for an
+  // element inserted after initial page load doesn't always win that race.
+  // An explicit focus() on mount, the same fix PromptDialog.tsx already
+  // uses for its own input, works regardless.
+  const textareaRef = useRef<HTMLTextAreaElement>(null)
+  useEffect(() => {
+    textareaRef.current?.focus()
+  }, [])
   return (
     <>
       <div className="field">
         <textarea
-          autoFocus
+          ref={textareaRef}
           rows={3}
           value={body}
           onInput={(e) => setBody((e.target as HTMLTextAreaElement).value)}
@@ -872,4 +939,8 @@ function commentWidgetStyle(rect: { top: number; bottom: number; left: number; r
     style.top = `${rect.bottom + 8}px`
   }
   return style
+}
+
+function cssEscape(s: string): string {
+  return typeof CSS !== 'undefined' && CSS.escape ? CSS.escape(s) : s.replace(/["\\]/g, '\\$&')
 }
