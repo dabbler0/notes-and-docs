@@ -127,6 +127,28 @@ describe('citationHtml structured data', () => {
   })
 })
 
+describe('citationHtml DOM structure (base span vs. editable note)', () => {
+  it('wraps the generated author/date label in a non-editable .citation-base span', () => {
+    const html = citationHtml(source())
+    expect(html).toContain('<span class="citation-base" contenteditable="false">(Smith, 2020)</span>')
+  })
+
+  it('leaves the note as plain trailing text outside the base span, not inside it', () => {
+    const html = citationHtml(source(), { note: 'p. 5' })
+    expect(html).toContain('<span class="citation-base" contenteditable="false">(Smith, 2020)</span>, p. 5')
+    // The separator + note must not have ended up inside the non-editable span.
+    expect(html).not.toContain('(Smith, 2020), p. 5</span>')
+  })
+
+  it('adds no visible separator or note text when there is no note — only the invisible zero-width-space caret placeholder', () => {
+    const html = citationHtml(source())
+    // See citationHtml's own doc comment: a lone U+200B keeps a click
+    // right after the chip from landing outside it entirely, with
+    // nothing visible to show for it.
+    expect(html).toMatch(/<\/span>​<\/cite>$/)
+  })
+})
+
 describe('formatCitation', () => {
   function entry(fields: Record<string, string> = {}, type = 'article'): BibtexEntry {
     return { type, key: 'smith2020', fields }

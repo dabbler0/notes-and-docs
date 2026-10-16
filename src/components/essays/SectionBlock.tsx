@@ -1,7 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks'
 import { createPortal } from 'preact/compat'
 import { commentIdsInContent, commitNewVersion, deleteFootnote, deleteNodeOnly, findCommentById, headVersion, nodeComments, nodeFootnotes, revertToVersion, saveNode, updateFootnoteContent } from '../../models/essaysRepo'
-import { getSource } from '../../models/sourcesRepo'
 import { deleteComment, promoteComment, toggleCommentDisplayMode } from './commentActions'
 import { CommentCard } from './CommentsPanel'
 import { MathBody } from './MathBody'
@@ -11,8 +10,6 @@ import { Icon } from '../Icon'
 import { id as newId } from '../../lib/id'
 import { escapeHtml } from '../../lib/html'
 import { confirmDialog } from '../../lib/confirm'
-import { promptDialog } from '../../lib/prompt'
-import { citationHtml } from '../../lib/bibtex'
 import type { Comment, EssayNode, Footnote, NodeVersion } from '../../models/types'
 
 const HEADING_SIZES = [21, 18, 16.5, 15, 14.5]
@@ -239,6 +236,7 @@ export function SectionBlock({
   }
 
   function handleShardInput(e: Event) {
+    syncCitationNotes(e.currentTarget as HTMLElement)
     autoListify(e as InputEvent)
     autoFormatEmphasis(e as InputEvent)
     autoMathify(e as InputEvent)
@@ -455,7 +453,6 @@ export function SectionBlock({
               onActivate(node.id, e.currentTarget as HTMLDivElement)
               onCaptureRange()
             }}
-            onClick={handleShardClick}
             onInput={handleShardInput}
             onKeyDown={handleShardKeyDown}
             onKeyUp={onCaptureRange}
@@ -759,47 +756,42 @@ function cssEscapeId(s: string): string {
 }
 
 /**
- * Clicking a citation chip edits its freeform "page number or other
- * note" field (see `citationHtml`'s own doc comment in lib/bibtex.ts for
- * what that is and isn't) — the one part of a citation meant to be
- * hand-edited after insertion; the author/date portion is generated from
- * the source's own bibtex entry and regenerated here too, never typed
- * into directly. A plain click (no modifier) on anything inside a
- * `.citation` element opens a small prompt pre-filled with the chip's
- * current note, and on confirming replaces the whole chip with a fresh
- * one built the exact same way a new "Cite" does
- * (`citationHtml(source, { note })`) — so an edited citation is
- * indistinguishable from one inserted fresh with that note to begin with.
+ * Keeps a citation chip's own `data-note` attribute in sync with
+ * whatever's actually typed after its `.citation-base` span — see
+ * `citationHtml`'s own doc comment in lib/bibtex.ts for why that span is
+ * `contenteditable="false"` (the generated author/date text) while
+ * everything after it is ordinary editable content (the freeform note):
+ * typing there, including deleting it down to nothing, *is* the edit,
+ * with no separate confirm step — this just has to notice it happened.
+ * Checked on every `input` event; the `class="citation"` substring check
+ * up front skips the common case (an input event nowhere near a
+ * citation) without ever touching the DOM below `root`.
  *
- * A modified click (ctrl/cmd/shift/alt) is left alone — mainly so
- * ctrl/cmd-click still opens a URL-backed citation's own link in a new
- * tab, the ordinary browser gesture for that, rather than this always
- * intercepting every click on it.
+ * A chip's own leading separator (", " for the one style that exists
+ * today — see `citationNoteSeparator`) is just more of that same
+ * editable text, not regenerated here: whatever's left after the base
+ * span, comma and surrounding whitespace stripped, is the note,
+ * verbatim. Typing straight after the base span with no comma at all
+ * still works the same way — there's nothing to strip, so the typed text
+ * becomes the note directly.
  */
-function handleShardClick(e: MouseEvent) {
-  if (e.ctrlKey || e.metaKey || e.shiftKey || e.altKey) return
-  const target = e.target as HTMLElement | null
-  const chip = target?.closest<HTMLElement>('.citation')
-  if (!chip) return
-  const shard = chip.closest<HTMLElement>('.node-content')
-  if (!shard) return
-  e.preventDefault()
-  editCitationNote(chip, shard)
-}
-
-async function editCitationNote(chip: HTMLElement, shard: HTMLElement) {
-  const sourceId = chip.getAttribute('data-source-id')
-  if (!sourceId) return
-  const source = await getSource(sourceId)
-  if (!source) return
-  const next = await promptDialog('Page number or other note for this citation?', { defaultValue: chip.getAttribute('data-note') ?? '', placeholder: 'e.g. p. 5, ch. 3' })
-  if (next === null || !chip.isConnected) return
-  const scratch = document.createElement('div')
-  scratch.innerHTML = citationHtml(source, { note: next })
-  const replacement = scratch.firstElementChild
-  if (!replacement) return
-  chip.replaceWith(replacement)
-  shard.dispatchEvent(new Event('input', { bubbles: true }))
+function syncCitationNotes(root: HTMLElement) {
+  if (!root.innerHTML.includes('citation')) return
+  root.querySelectorAll<HTMLElement>('.citation[data-cite-v]').forEach((chip) => {
+    const base = chip.querySelector(':scope > .citation-base')
+    const baseLength = base?.textContent?.length ?? 0
+    const note = (chip.textContent ?? '')
+      .slice(baseLength)
+      // The lone zero-width space `citationHtml` (lib/bibtex.ts) plants
+      // as a caret-landing placeholder when there's no note yet is never
+      // real content — stripped first so it can't end up masquerading as
+      // (or getting stuck inside) a freshly-typed note.
+      .replace(/​/g, '')
+      .replace(/^[,\s]+/, '')
+      .trim()
+    if (note) chip.setAttribute('data-note', note)
+    else chip.removeAttribute('data-note')
+  })
 }
 
 /**

@@ -241,6 +241,20 @@ export function renderCitationLabel(entry: BibtexEntry, note?: string, _style: C
 }
 
 /**
+ * The literal text (", " for `'author-date'`, the only style that exists
+ * today) joining `citationLabel`'s own output to a freeform note, when
+ * there is one — `citationHtml` needs this on its own, split out from
+ * `renderCitationLabel` above, since the note has to be its own real text
+ * node in the DOM (see that function's own doc comment on why) rather
+ * than baked into one flat label string. A future second style would
+ * need its own separator here too, alongside its own case in
+ * `renderCitationLabel`.
+ */
+function citationNoteSeparator(_style: CitationStyle = 'author-date'): string {
+  return ', '
+}
+
+/**
  * `citationHtml`'s own page-number convenience, also usable directly by
  * any other caller that already has a raw PDF/text-viewer page rather
  * than freeform note text (a quote's own page, mainly) — see
@@ -264,32 +278,63 @@ export function pageNote(source: Source, page: number | undefined): string {
  * or other note." Together they're everything `renderCitationLabel` (and
  * so a future citation-style setting) needs to re-render this exact
  * citation in a different style later, without re-deriving anything from
- * the display text itself — which stays here only as the actual rendered
- * output, same as it's always been.
+ * the display text itself.
+ *
+ * The rendered content is split into two pieces, not one flat label
+ * string: `citationLabel`'s own output sits in a `.citation-base` span
+ * marked `contenteditable="false"`, and the note (plus its separator,
+ * when there is one) follows as plain text, a normal sibling inside the
+ * chip. `SectionBlock.tsx`'s `syncCitationNotes` reads that trailing text
+ * back out on every keystroke and keeps `data-note` in sync with it — so
+ * a citation is editable exactly where it has a real freeform field to
+ * edit (the note) and nowhere else: the base span is unfocusable/
+ * unenterable the same way any other `contenteditable="false"` marker in
+ * this editor is (a subsection embed, a footnote ref), so arrow-key
+ * navigation and typing both skip over it rather than editing the
+ * generated author/date text in place.
  *
  * `data-cite-v="2"` marks a chip as using this structured shape.
- * `essaysRepo.ts`'s own `migrateLegacyCitations` flattens any `.citation`
+ * `essaysRepo.ts`'s own `migrateLegacyCitations` upgrades any `.citation`
  * element *without* it — one from before this existed, where the label
- * was the only thing ever stored, freeform and hand-editable, with no
- * reliable way to split it back into (source, note) after the fact — down
- * to plain text instead of guessing, per this feature's own "just convert
- * old citations into plain text" design: anything downstream (export, a
- * future style change) that expects structured data now expects it from
- * every `.citation` element it sees, which only holds if there's no
- * silent, unstructured leftover from before passing itself off as one.
+ * was the only thing ever stored, freeform and hand-editable — into this
+ * same shape (or, failing that, flattens it to plain text): anything
+ * downstream (export, a future style change, `syncCitationNotes` above)
+ * that expects structured data now expects it from every `.citation`
+ * element it sees, which only holds if there's no silent, unstructured
+ * leftover from before passing itself off as one.
  *
  * `opts.note` is used directly when given; `opts.page` is the older,
  * still-supported shorthand for a caller that has a raw PDF page rather
  * than already-formatted note text (quote insertion, mainly), converted
  * via `pageNote`. Passing both prefers `note`.
+ *
+ * A note-less chip still gets one real, invisible zero-width-space
+ * character (`​`) after the base span, rather than nothing — the
+ * same caret-landing-placeholder trick `insertFootnote` in
+ * EssayWorkspace.tsx uses for its own otherwise-empty marker (see that
+ * function's own doc comment for the fuller browser-behavior story),
+ * applied here for the opposite reason: that one keeps a blank click
+ * from landing *inside* an empty marker, this one keeps it from landing
+ * *outside* the chip entirely. Confirmed live: with truly nothing after
+ * `.citation-base` (the chip's last child, `contenteditable="false"`),
+ * clicking right after the chip and typing placed the new text as a
+ * sibling of the whole `<cite>`/`<a>` in the surrounding paragraph
+ * instead of inside it, so a citation with no note yet had no way to
+ * gain one by typing — only ever extending an *existing* note worked.
+ * `syncCitationNotes` strips any zero-width space out of what it reads
+ * back as the note, and the export helpers that escape plain text
+ * (`mdEscapeText`/`texEscape`) strip it from exported output too, so it
+ * never surfaces as a stray invisible character anywhere downstream.
  */
 export function citationHtml(source: Source, opts: { page?: number; note?: string } = {}): string {
   const note = opts.note?.trim() || pageNote(source, opts.page)
-  const label = escapeHtml(renderCitationLabel(source.bibtex, note))
+  const base = escapeHtml(citationLabel(source.bibtex))
+  const trailing = note ? escapeHtml(citationNoteSeparator() + note) : '​'
   const noteAttr = note ? ` data-note="${escapeAttr(note)}"` : ''
+  const inner = `<span class="citation-base" contenteditable="false">${base}</span>${trailing}`
   const url = source.bibtex.fields.url
   if (url) {
-    return `<a class="citation" data-source-id="${source.id}" data-cite-v="2"${noteAttr} href="${escapeAttr(url)}" target="_blank" rel="noopener noreferrer">${label}</a>`
+    return `<a class="citation" data-source-id="${source.id}" data-cite-v="2"${noteAttr} href="${escapeAttr(url)}" target="_blank" rel="noopener noreferrer">${inner}</a>`
   }
-  return `<cite class="citation" data-source-id="${source.id}" data-cite-v="2"${noteAttr}>${label}</cite>`
+  return `<cite class="citation" data-source-id="${source.id}" data-cite-v="2"${noteAttr}>${inner}</cite>`
 }

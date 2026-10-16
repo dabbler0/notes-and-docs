@@ -106,7 +106,12 @@ describe('migrateLegacyCitations (via getNode)', () => {
     expect(reloaded.draftContent).toContain(`data-source-id="${source.id}"`)
     expect(reloaded.draftContent).toContain('data-cite-v="2"')
     expect(reloaded.draftContent).toContain('data-note="p5"')
-    expect(reloaded.draftContent).toContain('(Smith, 2020), p5')
+    // The rendered label is split across a non-editable `.citation-base`
+    // span and plain trailing text (see citationHtml's own doc comment in
+    // lib/bibtex.ts) — "(Smith, 2020)" and ", p5" don't sit contiguously
+    // in the markup, so they're checked separately rather than as one
+    // continuous substring.
+    expect(reloaded.draftContent).toContain('class="citation-base" contenteditable="false">(Smith, 2020)</span>, p5')
   })
 
   it('recovers a page range, not just a single page', async () => {

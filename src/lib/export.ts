@@ -97,7 +97,19 @@ function mdEscapeText(s: string): string {
   // preview. A real `<br>` never reaches this function at all (it's its
   // own branch, converted to Markdown's own hard-break syntax, not
   // plain text) so this never touches an intentional one.
-  return s.replace(/\s+/g, ' ').replace(/([*_$[\]\\])/g, '\\$1')
+  //
+  // Zero-width spaces (`​`) are stripped outright rather than
+  // collapsed like other whitespace — they're never real content, only a
+  // caret-landing placeholder editors plant next to an otherwise-empty
+  // marker (a footnote ref, a note-less citation's own trailing text —
+  // see `citationHtml` in lib/bibtex.ts) so there's always a valid
+  // position to click or type into right where the marker visually
+  // sits. Left in, one would render as an invisible, non-printable
+  // character sitting in the exported text for no visible reason.
+  return s
+    .replace(/​/g, '')
+    .replace(/\s+/g, ' ')
+    .replace(/([*_$[\]\\])/g, '\\$1')
 }
 
 /** Splits one node-content shard's HTML into a list of Markdown "blocks" (paragraphs, blockquotes) to join with blank lines. */
@@ -408,8 +420,11 @@ function texEscape(s: string): string {
   // collapses it) — collapsed here the same way before anything else
   // touches it, so a `\n\n` from the original text doesn't compile as an
   // unintended LaTeX paragraph break, and the generated .tex source
-  // doesn't carry a confusing mid-sentence line break either.
+  // doesn't carry a confusing mid-sentence line break either. Zero-width
+  // spaces are stripped outright for the same reason mdEscapeText strips
+  // them — see that function's own doc comment.
   return s
+    .replace(/​/g, '')
     .replace(/\s+/g, ' ')
     .replace(/\\/g, '\\textbackslash{}')
     .replace(/([%$#_{}&])/g, '\\$1')

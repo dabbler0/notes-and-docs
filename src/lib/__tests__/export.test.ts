@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { essayToLatex, essayToMarkdown, markdownToHtml } from '../export'
+import { citationHtml } from '../bibtex'
 import type { Essay, EssayNode, Source } from '../../models/types'
 
 function makeSource(overrides: Partial<Source> & { id: string } = { id: 's1' }): Source {
@@ -341,6 +342,15 @@ describe('citations in the LaTeX export', () => {
     expect(tex).toContain('\\cite{unknown-id}')
   })
 
+  it('does not leak the note-less chip\'s own zero-width-space caret placeholder into the output', () => {
+    // citationHtml (lib/bibtex.ts) plants a lone U+200B after a note-less
+    // citation's base span so a click right after it has somewhere to
+    // land — real markup, not a hand-crafted edge case.
+    const root = makeNode({ id: 'root', draftContent: `<p>As argued ${citationHtml(makeSource())}.</p>` })
+    const tex = essayToLatex(makeEssay('root'), new Map([['root', root]]), new Map([['s1', makeSource()]]))
+    expect(tex).toContain('As argued \\cite{smith2020}.')
+    expect(tex).not.toContain('​')
+  })
 })
 
 describe('citations in Markdown export', () => {
@@ -351,5 +361,12 @@ describe('citations in Markdown export', () => {
     })
     const md = essayToMarkdown(makeEssay('root'), new Map([['root', root]]))
     expect(md).toContain('As argued (Smith, 2020), p. 5.')
+  })
+
+  it('does not leak the note-less chip\'s own zero-width-space caret placeholder into the output', () => {
+    const root = makeNode({ id: 'root', draftContent: `<p>As argued ${citationHtml(makeSource())}.</p>` })
+    const md = essayToMarkdown(makeEssay('root'), new Map([['root', root]]))
+    expect(md).toContain('As argued (Smith, 2020).')
+    expect(md).not.toContain('​')
   })
 })
