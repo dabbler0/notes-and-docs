@@ -11,7 +11,8 @@ export function CitationPickerDialog({
   requireUrl,
 }: {
   onClose: () => void
-  onSelect: (source: Source, page?: number) => void
+  /** `note` is the citation's freeform "page number or other note" field (see `citationHtml` in lib/bibtex.ts) — whatever's typed below, trimmed, or undefined if left blank. */
+  onSelect: (source: Source, note?: string) => void
   title?: string
   /** Only list sources that have a URL to link to — used by the "Link to source" tool, since a hyperlink needs an href. */
   requireUrl?: boolean
@@ -23,8 +24,10 @@ export function CitationPickerDialog({
   // applies to whichever source ends up picked below, rather than asking
   // again per-card. Only offered for a plain citation (not `requireUrl`'s
   // "Link to source" flow, which already states it's citing the source's
-  // own given URL rather than a specific page of it).
-  const [page, setPage] = useState(0)
+  // own given URL rather than a specific page of it). Freeform rather than
+  // a number — a page is the common case, but this is also where anything
+  // else worth noting on a citation (a chapter, "forthcoming", …) goes.
+  const [note, setNote] = useState('')
 
   useEffect(() => {
     listSources().then(setSources)
@@ -52,12 +55,11 @@ export function CitationPickerDialog({
           </label>
           <div className="field">
             <input
-              type="number"
-              min="1"
-              placeholder="Page (optional)"
-              value={page > 0 ? String(page) : ''}
-              onInput={(e) => setPage(Number((e.target as HTMLInputElement).value) || 0)}
-              style={{ width: 160 }}
+              type="text"
+              placeholder="Page or other note (optional)"
+              value={note}
+              onInput={(e) => setNote((e.target as HTMLInputElement).value)}
+              style={{ width: 220 }}
             />
           </div>
         </>
@@ -65,7 +67,7 @@ export function CitationPickerDialog({
       <div className="citation-list">
         {filtered.length === 0 && <p className="empty-state">No matching sources{requireUrl ? ' with a URL' : ''}.</p>}
         {filtered.map((s) => (
-          <div className="card" key={s.id} onClick={() => onSelect(s, page > 0 ? page : undefined)}>
+          <div className="card" key={s.id} onClick={() => onSelect(s, note.trim() || undefined)}>
             <div className="card-title">{displayTitle(s.bibtex)}</div>
             <div className="card-meta">
               {displayAuthors(s.bibtex) || 'Unknown author'} {s.bibtex.fields.year ? `· ${s.bibtex.fields.year}` : ''}

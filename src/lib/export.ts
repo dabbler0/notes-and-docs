@@ -433,7 +433,14 @@ function inlineHtmlToLatex(node: Node, ctx: LatexCtx): string {
   const sourceId = el.getAttribute('data-source-id')
   if (el.classList.contains('citation') && sourceId) {
     const key = ctx.sources.get(sourceId)?.bibtex.key ?? sourceId
-    return `${ctx.citeCmd}{${key}}`
+    // The freeform "page number or other note" field (lib/bibtex.ts's
+    // `citationHtml`/`data-note`) maps directly onto natbib/biblatex's own
+    // optional post-note argument — `\cite[p. 5]{key}` — both `\cite` and
+    // `\footcite` support it. A legacy citation (no structured data at
+    // all, migrated to plain text by essaysRepo.ts before this ever sees
+    // it) never reaches here as a `.citation` element in the first place.
+    const note = el.getAttribute('data-note')
+    return note ? `${ctx.citeCmd}[${texEscape(note)}]{${key}}` : `${ctx.citeCmd}{${key}}`
   }
   if (tag === 'sup' && el.classList.contains('footnote-ref')) {
     // Unlike Markdown, LaTeX footnotes are inline and self-numbering —

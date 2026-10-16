@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { citationHtml, citationPage, formatCitation } from '../bibtex'
+import { citationHtml, citationLabel, citationPage, formatCitation, pageNote, renderCitationLabel } from '../bibtex'
 import type { BibtexEntry, Source } from '../../models/types'
 
 function source(overrides: Partial<Source> = {}): Source {
@@ -64,6 +64,66 @@ describe('citationHtml page display', () => {
   it('omits the page when no page was given at all', () => {
     const html = citationHtml(source())
     expect(html).not.toContain('p.')
+  })
+})
+
+describe('pageNote', () => {
+  it('formats the offset-adjusted page as "p. N"', () => {
+    expect(pageNote(source(), 12)).toBe('p. 12')
+    expect(pageNote(source({ pageOffset: 3 }), 12)).toBe('p. 9')
+  })
+
+  it('is the empty string, not null, when there is nothing to show', () => {
+    expect(pageNote(source(), undefined)).toBe('')
+    expect(pageNote(source({ noPageNumbers: true }), 12)).toBe('')
+  })
+})
+
+describe('renderCitationLabel', () => {
+  it('matches citationLabel alone when there is no note', () => {
+    expect(renderCitationLabel(source().bibtex)).toBe(citationLabel(source().bibtex))
+  })
+
+  it('appends the note after the closing paren, comma-separated — the same shape citationHtml has always rendered', () => {
+    expect(renderCitationLabel(source().bibtex, 'p. 5')).toBe('(Smith, 2020), p. 5')
+  })
+
+  it('accepts any freeform note, not just a page number', () => {
+    expect(renderCitationLabel(source().bibtex, 'ch. 3')).toBe('(Smith, 2020), ch. 3')
+    expect(renderCitationLabel(source().bibtex, 'forthcoming')).toBe('(Smith, 2020), forthcoming')
+  })
+})
+
+describe('citationHtml structured data', () => {
+  it('tags every chip it produces with the current structured-data version marker', () => {
+    expect(citationHtml(source())).toContain('data-cite-v="2"')
+  })
+
+  it('carries the source id and the freeform note as separate data attributes', () => {
+    const html = citationHtml(source(), { note: 'ch. 3' })
+    expect(html).toContain('data-source-id="s1"')
+    expect(html).toContain('data-note="ch. 3"')
+  })
+
+  it('derives data-note from a raw page via the same pageNote formatting, when note is not given directly', () => {
+    const html = citationHtml(source({ pageOffset: 3 }), { page: 12 })
+    expect(html).toContain('data-note="p. 9"')
+  })
+
+  it('omits data-note entirely when there is nothing to show, rather than an empty attribute', () => {
+    expect(citationHtml(source())).not.toContain('data-note')
+  })
+
+  it('prefers an explicit note over a page when both are given', () => {
+    const html = citationHtml(source(), { page: 12, note: 'ch. 3' })
+    expect(html).toContain('data-note="ch. 3"')
+    expect(html).not.toContain('p. 12')
+  })
+
+  it('HTML-escapes a freeform note that contains markup, rather than splicing it in raw', () => {
+    const html = citationHtml(source(), { note: '<img src=x onerror=alert(1)>' })
+    expect(html).not.toContain('<img')
+    expect(html).toContain('&lt;img')
   })
 })
 

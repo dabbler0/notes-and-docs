@@ -1,6 +1,19 @@
 import { describe, expect, it } from 'vitest'
 import { essayToLatex, essayToMarkdown, markdownToHtml } from '../export'
-import type { Essay, EssayNode } from '../../models/types'
+import type { Essay, EssayNode, Source } from '../../models/types'
+
+function makeSource(overrides: Partial<Source> & { id: string } = { id: 's1' }): Source {
+  return {
+    bibtex: { type: 'article', key: 'smith2020', fields: { author: 'Smith', year: '2020' } },
+    comment: '',
+    pageHtml: [],
+    pageCount: 0,
+    contentBytes: 0,
+    createdAt: 0,
+    updatedAt: 0,
+    ...overrides,
+  }
+}
 
 function makeEssay(rootNodeId: string): Essay {
   return { id: 'e1', title: 'Test Essay', rootNodeId, createdAt: 0, updatedAt: 0 }
@@ -285,5 +298,58 @@ describe('a blockquote whose text has invisible-in-the-editor line breaks', () =
     const root = makeNode({ id: 'root', draftContent: '<blockquote class="quote">First line<br>second line</blockquote>' })
     const md = essayToMarkdown(makeEssay('root'), new Map([['root', root]]))
     expect(md).toContain('> First line  \n> second line')
+  })
+})
+
+describe('citations in the LaTeX export', () => {
+  it('exports a plain citation (no note) as \\cite{key}, with no optional argument', () => {
+    const root = makeNode({ id: 'root', draftContent: '<p>As argued <cite class="citation" data-source-id="s1" data-cite-v="2">(Smith, 2020)</cite>.</p>' })
+    const tex = essayToLatex(makeEssay('root'), new Map([['root', root]]), new Map([['s1', makeSource()]]))
+    expect(tex).toContain('As argued \\cite{smith2020}.')
+  })
+
+  it('exports data-note as \\cite\'s own optional post-note argument', () => {
+    const root = makeNode({
+      id: 'root',
+      draftContent: '<p>As argued <cite class="citation" data-source-id="s1" data-cite-v="2" data-note="p. 5">(Smith, 2020), p. 5</cite>.</p>',
+    })
+    const tex = essayToLatex(makeEssay('root'), new Map([['root', root]]), new Map([['s1', makeSource()]]))
+    expect(tex).toContain('As argued \\cite[p. 5]{smith2020}.')
+  })
+
+  it('also works for \\footcite (biblatex)', () => {
+    const root = makeNode({
+      id: 'root',
+      draftContent: '<cite class="citation" data-source-id="s1" data-cite-v="2" data-note="ch. 3">(Smith, 2020), ch. 3</cite>',
+    })
+    const tex = essayToLatex(makeEssay('root'), new Map([['root', root]]), new Map([['s1', makeSource()]]), { citeCommand: '\\footcite' })
+    expect(tex).toContain('\\footcite[ch. 3]{smith2020}')
+  })
+
+  it('escapes LaTeX-special characters in the note', () => {
+    const root = makeNode({
+      id: 'root',
+      draftContent: '<cite class="citation" data-source-id="s1" data-cite-v="2" data-note="p. 5 &amp; 6">(Smith, 2020), p. 5 &amp; 6</cite>',
+    })
+    const tex = essayToLatex(makeEssay('root'), new Map([['root', root]]), new Map([['s1', makeSource()]]))
+    expect(tex).toContain('\\cite[p. 5 \\& 6]{smith2020}')
+  })
+
+  it('falls back to the raw source id when the source is not in the sources map', () => {
+    const root = makeNode({ id: 'root', draftContent: '<cite class="citation" data-source-id="unknown-id" data-cite-v="2">(Someone, 2020)</cite>' })
+    const tex = essayToLatex(makeEssay('root'), new Map([['root', root]]), new Map())
+    expect(tex).toContain('\\cite{unknown-id}')
+  })
+
+})
+
+describe('citations in Markdown export', () => {
+  it('exports a citation as its own rendered label text, note included — Markdown has no special-case for .citation at all', () => {
+    const root = makeNode({
+      id: 'root',
+      draftContent: '<p>As argued <cite class="citation" data-source-id="s1" data-cite-v="2" data-note="p. 5">(Smith, 2020), p. 5</cite>.</p>',
+    })
+    const md = essayToMarkdown(makeEssay('root'), new Map([['root', root]]))
+    expect(md).toContain('As argued (Smith, 2020), p. 5.')
   })
 })

@@ -217,14 +217,14 @@ export function EssayWorkspace({ essayId, onBack }: { essayId: string; onBack: (
     el.dispatchEvent(new InputEvent('input', { bubbles: true }))
   }
 
-  async function insertCitation(source: Source, page?: number) {
+  async function insertCitation(source: Source, note?: string) {
     setShowCitation(false)
     const range = savedRange.current
     const el = activeEditorEl.current
     const node = activeNode()
     if (!range || !el || !node) return
     el.focus()
-    insertHtmlAtRange(range, `${citationHtml(source, { page })}&nbsp;`)
+    insertHtmlAtRange(range, `${citationHtml(source, { note })}&nbsp;`)
     await persistActiveNode(node)
     reload()
   }

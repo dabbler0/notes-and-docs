@@ -1,5 +1,5 @@
 import type { BibtexEntry, Source } from '../models/types'
-import { escapeAttr } from './html'
+import { escapeAttr, escapeHtml } from './html'
 
 /**
  * Small, permissive BibTeX parser: supports `{ }` and `" "` delimited field
@@ -183,18 +183,80 @@ export function citationPage(source: Source, page: number | undefined): number |
 }
 
 /**
+ * Which citation style a label is rendered in — only `'author-date'` (the
+ * parenthetical form this app has always used) is actually implemented
+ * below, but it's kept as its own type/parameter from the start so a
+ * future citation-style setting (author-title, numeric, …) has something
+ * to switch on without needing another data migration: every citation
+ * chip's own structured data (a source reference plus a freeform note —
+ * see `citationHtml`) already carries everything any of those styles
+ * would need to render from. Adding a style is purely a matter of
+ * extending `renderCitationLabel`'s own switch, never touching stored
+ * data or how a chip is inserted.
+ */
+export type CitationStyle = 'author-date'
+
+/**
+ * Turns a `BibtexEntry` plus an optional freeform note ("p. 5", "ch. 3",
+ * "forthcoming", …) into a citation's actual display text. The one
+ * function a future citation-style setting would extend — see
+ * `CitationStyle`'s own doc comment.
+ */
+export function renderCitationLabel(entry: BibtexEntry, note?: string, _style: CitationStyle = 'author-date'): string {
+  const base = citationLabel(entry)
+  return note ? `${base}, ${note}` : base
+}
+
+/**
+ * `citationHtml`'s own page-number convenience, also usable directly by
+ * any other caller that already has a raw PDF/text-viewer page rather
+ * than freeform note text (a quote's own page, mainly) — see
+ * `citationPage`'s own doc comment for the offset/no-page-numbers
+ * handling this defers to. Empty string (not null) when there's nothing
+ * to show, so a caller can splice it straight into a template without an
+ * extra null check.
+ */
+export function pageNote(source: Source, page: number | undefined): string {
+  const p = citationPage(source, page)
+  return p ? `p. ${p}` : ''
+}
+
+/**
  * The inline citation chip inserted by "Cite," "Quote from PDF," and "Link
  * to source": a `<cite>` when the source has no URL to point at, or an
  * `<a>` wearing the same `.citation` styling when it does — either way
- * tagged `data-source-id` so export and citation-picking can find the
- * source it points to.
+ * carrying two structured fields as data attributes, not just baked into
+ * the rendered text: `data-source-id`, a unique reference to the source,
+ * and `data-note` (omitted when empty), a separate freeform "page number
+ * or other note." Together they're everything `renderCitationLabel` (and
+ * so a future citation-style setting) needs to re-render this exact
+ * citation in a different style later, without re-deriving anything from
+ * the display text itself — which stays here only as the actual rendered
+ * output, same as it's always been.
+ *
+ * `data-cite-v="2"` marks a chip as using this structured shape.
+ * `essaysRepo.ts`'s own `migrateLegacyCitations` flattens any `.citation`
+ * element *without* it — one from before this existed, where the label
+ * was the only thing ever stored, freeform and hand-editable, with no
+ * reliable way to split it back into (source, note) after the fact — down
+ * to plain text instead of guessing, per this feature's own "just convert
+ * old citations into plain text" design: anything downstream (export, a
+ * future style change) that expects structured data now expects it from
+ * every `.citation` element it sees, which only holds if there's no
+ * silent, unstructured leftover from before passing itself off as one.
+ *
+ * `opts.note` is used directly when given; `opts.page` is the older,
+ * still-supported shorthand for a caller that has a raw PDF page rather
+ * than already-formatted note text (quote insertion, mainly), converted
+ * via `pageNote`. Passing both prefers `note`.
  */
-export function citationHtml(source: Source, opts: { page?: number } = {}): string {
-  const page = citationPage(source, opts.page)
-  const label = citationLabel(source.bibtex) + (page ? `, p. ${page}` : '')
+export function citationHtml(source: Source, opts: { page?: number; note?: string } = {}): string {
+  const note = opts.note?.trim() || pageNote(source, opts.page)
+  const label = escapeHtml(renderCitationLabel(source.bibtex, note))
+  const noteAttr = note ? ` data-note="${escapeAttr(note)}"` : ''
   const url = source.bibtex.fields.url
   if (url) {
-    return `<a class="citation" data-source-id="${source.id}" href="${escapeAttr(url)}" target="_blank" rel="noopener noreferrer">${label}</a>`
+    return `<a class="citation" data-source-id="${source.id}" data-cite-v="2"${noteAttr} href="${escapeAttr(url)}" target="_blank" rel="noopener noreferrer">${label}</a>`
   }
-  return `<cite class="citation" data-source-id="${source.id}">${label}</cite>`
+  return `<cite class="citation" data-source-id="${source.id}" data-cite-v="2"${noteAttr}>${label}</cite>`
 }

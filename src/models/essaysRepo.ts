@@ -17,8 +17,51 @@ export async function getEssay(essayId: string): Promise<Essay | undefined> {
 
 export async function getNode(nodeId: string): Promise<EssayNode | undefined> {
   const node = await backend.docs.get<EssayNode>(NODES, nodeId)
-  if (node) migrateComments(node)
+  if (node) {
+    migrateComments(node)
+    migrateLegacyCitations(node)
+  }
   return node
+}
+
+/**
+ * Flattens any *legacy* citation chip — one inserted before `citationHtml`
+ * (lib/bibtex.ts) started tagging its output `data-cite-v="2"` and storing
+ * a unique source reference plus a separate freeform note as structured
+ * data, rather than baking everything into freeform, hand-editable label
+ * text with nothing to reliably split back apart later — down to plain
+ * text with the same visible contents, right where the chip was. This is
+ * citations' own version of `migrateComments` right above: lazy, run every
+ * time a node is loaded, mutating in place rather than writing back
+ * immediately (the next real edit's own autosave persists it for real,
+ * same as that one).
+ *
+ * Only `.citation` elements *without* the version marker are touched — a
+ * node holding a mix of old and freshly-inserted citations (the ordinary
+ * case right after this shipped) keeps the new ones exactly as they are.
+ * Runs against `draftContent` and every historical `version.content`
+ * alike, so an old pinned version doesn't go on citing a source through
+ * markup nothing downstream still understands as structured — it just
+ * keeps the same text, no longer as a special, source-linked element.
+ */
+function migrateLegacyCitations(node: EssayNode): void {
+  node.draftContent = flattenLegacyCitations(node.draftContent)
+  for (const version of node.versions) version.content = flattenLegacyCitations(version.content)
+}
+
+function flattenLegacyCitations(html: string): string {
+  // Cheap fast path: the overwhelming majority of nodes never had a
+  // citation in them at all, and this skips ever constructing a
+  // DOMParser document for any of them.
+  if (!html.includes('citation')) return html
+  const doc = new DOMParser().parseFromString(html, 'text/html')
+  let changed = false
+  for (const el of Array.from(doc.querySelectorAll('.citation'))) {
+    if (el.hasAttribute('data-cite-v')) continue
+    el.replaceWith(doc.createTextNode(el.textContent ?? ''))
+    changed = true
+  }
+  return changed ? doc.body.innerHTML : html
 }
 
 /** A comment as it could look in already-stored data predating either migration below — a wider, looser shape than the current `Comment` type allows (in particular, `anchorKind` could be `'reply'`, a kind that no longer exists at all — see the loop below). */
