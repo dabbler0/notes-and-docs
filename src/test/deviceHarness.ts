@@ -92,7 +92,7 @@ export interface Device {
 
   sync(onProgress?: (message: string) => void): Promise<SyncResult>
   forceFullResync(onProgress?: (message: string) => void): Promise<SyncResult>
-  discardLocalChanges(collections: ('essays' | 'nodes' | 'sources' | 'quotes' | 'graveyard' | 'bookmarks')[]): Promise<void>
+  discardLocalChanges(collections: ('essays' | 'nodes' | 'sources' | 'quotes' | 'graveyard' | 'bookmarks' | 'todos')[]): Promise<void>
   sweepOrphanedRemoteBlobs(onProgress?: (message: string) => void): Promise<SweepResult>
 }
 

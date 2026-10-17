@@ -10,6 +10,7 @@ import { PromptHost } from './components/PromptDialog'
 import { startAutoSyncLoop } from './sync/autoSync'
 import { detectHostingConfig, getStoredFirebaseConfig, setFirebaseConfig } from './sync/firebaseConfig'
 import { Icon } from './components/Icon'
+import { TodoDrawer } from './components/todos/TodoDrawer'
 
 type Tab = 'essays' | 'sources' | 'quotes' | 'search'
 
@@ -67,6 +68,7 @@ export function App() {
           <Icon name="sync" /> <span className="btn-label">Sync</span>
         </button>
       </div>
+      <TodoDrawer />
       <div className="main-area">
         {tab === 'essays' && <EssaysView />}
         {tab === 'sources' && <SourcesView />}

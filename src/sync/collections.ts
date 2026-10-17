@@ -14,7 +14,7 @@
  * it — it syncs as its own independent collection for the same reason:
  * nothing about pulling/pushing a library's worth of BibTeX metadata
  * should have to also move everyone's extracted text around with it. */
-export const SYNCED_COLLECTIONS = ['essays', 'nodes', 'sources', 'sourceContent', 'quotes', 'graveyard', 'bookmarks'] as const
+export const SYNCED_COLLECTIONS = ['essays', 'nodes', 'sources', 'sourceContent', 'quotes', 'graveyard', 'bookmarks', 'todos'] as const
 export type SyncedCollection = (typeof SYNCED_COLLECTIONS)[number]
 
 /**

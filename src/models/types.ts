@@ -352,6 +352,40 @@ export interface GraveyardFragment {
   deleted?: boolean
 }
 
+// ---- Todos ---------------------------------------------------------------
+
+/**
+ * A standalone TODO item, independent of any essay or source. Active
+ * (non-deferred) items are listed oldest-`undeferredAt`-first — see
+ * `todosRepo.ts`'s `listTodos`/`activeTodos` for the sort and for how an
+ * expired `deferredUntil` gets lazily cleared (and `undeferredAt` refreshed)
+ * the next time the list is read, rather than via any background job.
+ */
+export interface TodoItem {
+  id: string
+  text: string
+  /**
+   * Set while this item is "snoozed" — hidden from the active list and
+   * shown only in the backlog until this date/time passes. Absent means
+   * the item is active right now.
+   */
+  deferredUntil?: number
+  /**
+   * When this item last became active — either when it was first created
+   * (never deferred) or when a deferral most recently ended, whether by
+   * passing naturally or by an explicit "undefer now". Drives the active
+   * list's sort order: the item that's been active longest without being
+   * re-deferred sorts first, as the one to actually do now.
+   */
+  undeferredAt: number
+  /** Set once an item is checked off. Done items are dropped from both the active list and the backlog. */
+  done?: boolean
+  createdAt: number
+  updatedAt: number
+  /** Tombstone — see the note on Source.deleted. */
+  deleted?: boolean
+}
+
 /**
  * Design note on versioning (see project brief): each node's own text has an
  * independent, explicit version history (draftContent -> "make a new

@@ -178,6 +178,7 @@ const SENSITIVE_FIELDS: Record<SyncedCollection, string[]> = {
   quotes: ['quoteText', 'annotation', 'page'],
   graveyard: ['html', 'nodeTitle'],
   bookmarks: ['label', 'page'],
+  todos: ['text', 'deferredUntil'],
 }
 
 const CURSORS_KEY = 'marginal.sync.cursors.v1'
@@ -296,6 +297,7 @@ export interface SyncCounts {
   quotes: number
   graveyard: number
   bookmarks: number
+  todos: number
   blobs: number
 }
 
@@ -546,6 +548,8 @@ export function describeLocalDoc(collectionName: SyncedCollection, localDoc: Loc
     identify = localDoc.nodeTitle as string
   } else if (collectionName === 'bookmarks') {
     identify = (localDoc.label as string) || undefined
+  } else if (collectionName === 'todos') {
+    identify = (localDoc.text as string)?.slice(0, 60)
   }
   return { identify: identify || undefined, fields }
 }
@@ -819,8 +823,8 @@ async function runSyncPassNow(onProgress?: (message: string) => void): Promise<S
   const cursors = loadCursors()
   const passStartedAt = Date.now()
   const result: SyncResult = {
-    pushed: { essays: 0, nodes: 0, sources: 0, sourceContent: 0, quotes: 0, graveyard: 0, bookmarks: 0, blobs: 0 },
-    pulled: { essays: 0, nodes: 0, sources: 0, sourceContent: 0, quotes: 0, graveyard: 0, bookmarks: 0, blobs: 0 },
+    pushed: { essays: 0, nodes: 0, sources: 0, sourceContent: 0, quotes: 0, graveyard: 0, bookmarks: 0, todos: 0, blobs: 0 },
+    pulled: { essays: 0, nodes: 0, sources: 0, sourceContent: 0, quotes: 0, graveyard: 0, bookmarks: 0, todos: 0, blobs: 0 },
     deletedBlobs: 0,
   }
 
