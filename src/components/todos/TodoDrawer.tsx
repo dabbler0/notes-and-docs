@@ -30,10 +30,10 @@ function dateInputValue(ts: number): string {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`
 }
 
-/** Midnight (local time) at the end of the given `<input type="date">` day — "revisit on this date" means any time that day has passed, not the exact instant it started. */
-function endOfDay(dateValue: string): number {
+/** Midnight (local time) at the start of the given `<input type="date">` day — "revisit on this date" means active as of that date, not only once it's over (picking today should surface the item right away). */
+function startOfDay(dateValue: string): number {
   const [y, m, d] = dateValue.split('-').map(Number)
-  return new Date(y, m - 1, d, 23, 59, 59, 999).getTime()
+  return new Date(y, m - 1, d, 0, 0, 0, 0).getTime()
 }
 
 /**
@@ -96,7 +96,7 @@ export function TodoDrawer() {
 
   async function confirmDefer(todo: TodoItem) {
     if (!deferDate) return
-    await deferTodo(todo, endOfDay(deferDate))
+    await deferTodo(todo, startOfDay(deferDate))
     setDeferringId(null)
     await refresh()
   }
