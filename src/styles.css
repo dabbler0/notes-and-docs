@@ -533,7 +533,6 @@ select {
 
 .quote-bank-text {
   margin: 0;
-  font-style: italic;
   font-size: 14px;
   line-height: 1.5;
   border-left: 3px solid var(--accent);
@@ -1065,11 +1064,6 @@ select {
   border-left: 3px solid var(--accent);
   background: var(--surface-2);
   border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
-  font-style: italic;
-}
-
-.node-content span.quote-inline {
-  font-style: italic;
 }
 
 /* An equation marker (`.math-inline`/`.math-block`, see MathBody.tsx) is
