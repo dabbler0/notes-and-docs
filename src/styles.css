@@ -1822,6 +1822,21 @@ select {
   min-height: 0;
 }
 
+/* `QuoteInsertDialog`'s own embedded reader — unlike `.source-reader-scroll`
+   above, this box isn't itself inside a flex column with a viewport-bounded
+   height to stretch into (the modal it sits in just lays things out in
+   plain flow, scrolling the whole dialog if it overflows), so it needs an
+   explicit height of its own for `ReaderMode`'s fit-to-screen sizing (and
+   `.reader-mode-embedded`'s `height: 100%`) to have anything real to
+   measure against. */
+.quote-insert-reader {
+  position: relative;
+  height: 60vh;
+  min-height: 360px;
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+}
+
 /* The no-viewer (BibTeX-only) fallback content needs ordinary scrolling —
    unlike the embedded reader above it, which always fits itself to the box
    it's given, this is plain padded form content that can genuinely run

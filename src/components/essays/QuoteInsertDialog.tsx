@@ -1,12 +1,11 @@
 import { useEffect, useState } from 'preact/hooks'
 import { Modal } from '../Modal'
-import { PdfViewer } from '../sources/PdfViewer'
-import { TextViewer } from '../sources/TextViewer'
+import { ReaderMode } from '../sources/ReaderMode'
 import { Icon } from '../Icon'
 import { citationLabel, citationPage, displayAuthors, displayTitle } from '../../lib/bibtex'
 import { describeOcrError, ocrImage } from '../../lib/ocr'
-import { getSource, listSources, matchesSourceQuery } from '../../models/sourcesRepo'
-import { listQuoteBank, matchesQuoteQuery } from '../../models/quoteBankRepo'
+import { getSource, listSources, matchesSourceQuery, touchSourceViewed } from '../../models/sourcesRepo'
+import { listMarginAnnotationsForSource, listQuoteBank, listQuotesForSource, matchesQuoteQuery } from '../../models/quoteBankRepo'
 import type { QuoteBankEntry, Source } from '../../models/types'
 
 type Picked = { source: Source; quote: string; page: number }
@@ -33,41 +32,76 @@ export function QuoteInsertDialog({
   const [pdfSource, setPdfSource] = useState<Source | null>(null)
   const [loadingSource, setLoadingSource] = useState(false)
   const [pdfPage, setPdfPage] = useState(1)
+  // Which page a selection actually came from — not necessarily `pdfPage`
+  // itself once a two-page spread is showing in `ReaderMode` (see its own
+  // `onSelectionChange` doc comment). Falls back to `pdfPage` whenever
+  // nothing's been selected yet (a manually typed/pasted quote, or the
+  // hand-typed-page fallback for a source with no viewer at all).
+  const [pdfQuotePage, setPdfQuotePage] = useState(0)
   const [pdfQuote, setPdfQuote] = useState('')
+  const [viewerMode, setViewerMode] = useState<'pdf' | 'text'>('pdf')
+  // This source's already-saved quotes/annotations, fed to `ReaderMode` for
+  // highlighting — same reasoning as `SourceWorkspace`'s own merged list:
+  // avoids re-quoting a passage that's already been saved, and keeps
+  // highlights live if a quote is added or removed from in here without
+  // needing a remount to notice.
+  const [highlightQuotes, setHighlightQuotes] = useState<QuoteBankEntry[]>([])
   const [picked, setPicked] = useState<Picked | null>(null)
   const [ocrBusy, setOcrBusy] = useState(false)
 
-  const active: Picked | null = tab === 'source' ? (pdfSource ? { source: pdfSource, quote: pdfQuote, page: pdfPage } : null) : picked
+  const active: Picked | null = tab === 'source' ? (pdfSource ? { source: pdfSource, quote: pdfQuote, page: pdfQuotePage || pdfPage } : null) : picked
   const quote = active?.quote.trim() ?? ''
   const hasPdf = !!pdfSource?.pdfBlobId
   // A text-only source (its PDF discarded via "Discard PDF, keep text
   // only" — see SourceWorkspace) still has real pages to browse and
-  // select from via TextViewer, same as a source with a PDF attached —
+  // select from via ReaderMode, same as a source with a PDF attached —
   // only a source with neither falls back to typing the quote in by hand.
   const hasExtractedText = !!pdfSource && pdfSource.pageCount > 0
   const hasViewer = hasPdf || hasExtractedText
 
+  function refreshHighlightQuotes(sourceId: string) {
+    Promise.all([listQuotesForSource(sourceId), listMarginAnnotationsForSource(sourceId)]).then(([qs, anns]) => setHighlightQuotes([...qs, ...anns]))
+  }
+
   /** `InlineSourcePicker` only ever offers a source straight out of
    * `listSources()` — lightweight, with no extracted text actually loaded
-   * (see `Source.pageHtml`'s own doc comment) — but the PDF/text viewer
-   * right below needs the real thing to render or search anything. Fetches
-   * the full source before showing it; `loadingSource` covers the brief
-   * gap so a text-only source doesn't flash "no extracted text" before its
-   * real content arrives. */
+   * (see `Source.pageHtml`'s own doc comment) — but the `ReaderMode` below
+   * needs the real thing to render or search anything. Fetches the full
+   * source before showing it; `loadingSource` covers the brief gap so a
+   * text-only source doesn't flash "no extracted text" before its real
+   * content arrives. */
   async function handlePickSource(s: Source) {
     setPdfQuote('')
+    setPdfQuotePage(0)
     setLoadingSource(true)
     try {
       const full = (await getSource(s.id)) ?? s
       setPdfSource(full)
+      setViewerMode(full.pdfBlobId ? 'pdf' : 'text')
       // A PDF or text-only source has a real "current page" to track as the
-      // viewer turns pages; a source with neither has nothing to default it
-      // from, so it starts unset (0 — falsy, so citationHtml() below leaves
-      // the page number off entirely until/unless the user types one in).
-      setPdfPage(full.pdfBlobId || full.pageCount > 0 ? 1 : 0)
+      // viewer turns pages — resuming on wherever this source was last
+      // left off (see `touchSourceViewed`'s own doc comment), same as the
+      // main source viewer does — while a source with neither has nothing
+      // to default it from, so it starts unset (0 — falsy, so
+      // citationHtml() below leaves the page number off entirely until/
+      // unless the user types one in).
+      const hasRealViewer = full.pdfBlobId || full.pageCount > 0
+      const initialPage = hasRealViewer ? full.lastViewedPage ?? 1 : 0
+      setPdfPage(initialPage)
+      if (hasRealViewer) touchSourceViewed(full, initialPage)
+      refreshHighlightQuotes(full.id)
     } finally {
       setLoadingSource(false)
     }
+  }
+
+  /** Wraps `ReaderMode`'s own `onPageChange` so every page turn also
+   * records "this is where I left off," same as the main source viewer —
+   * see `touchSourceViewed`'s own doc comment for why this is a
+   * local-only write, not a real edit. */
+  function handlePdfPageChange(p: number) {
+    setPdfPage(p)
+    if (pdfSource) touchSourceViewed(pdfSource, p)
   }
 
   /**
@@ -105,15 +139,25 @@ export function QuoteInsertDialog({
           <p className="muted">Loading source…</p>
         ) : pdfSource ? (
           <>
-            {hasPdf ? (
+            {hasViewer ? (
               <>
-                <p className="muted">Drag to select text in the PDF below, or type/paste it into the box.</p>
-                <PdfViewer source={pdfSource} page={pdfPage} onPageChange={setPdfPage} onSelectionChange={setPdfQuote} />
-              </>
-            ) : hasExtractedText ? (
-              <>
-                <p className="muted">This source is stored as text only — drag to select text below, or type/paste it into the box.</p>
-                <TextViewer source={pdfSource} page={pdfPage} onPageChange={setPdfPage} onSelectionChange={setPdfQuote} />
+                <p className="muted">Drag to select text below, or type/paste it into the box.</p>
+                <div className="quote-insert-reader">
+                  <ReaderMode
+                    source={pdfSource}
+                    page={pdfPage}
+                    onPageChange={handlePdfPageChange}
+                    mode={hasPdf && viewerMode === 'pdf' ? 'pdf' : 'text'}
+                    onModeChange={hasPdf ? setViewerMode : undefined}
+                    quotes={highlightQuotes}
+                    onQuoteSaved={() => refreshHighlightQuotes(pdfSource.id)}
+                    onSelectionChange={(text, selPage) => {
+                      setPdfQuote(text)
+                      setPdfQuotePage(selPage)
+                    }}
+                    embedded
+                  />
+                </div>
               </>
             ) : (
               <p className="muted">This source has no PDF attached — type or paste the quoted text in by hand.</p>
@@ -148,7 +192,10 @@ export function QuoteInsertDialog({
                   min="1"
                   placeholder="Page (optional)"
                   value={pdfPage > 0 ? String(pdfPage) : ''}
-                  onInput={(e) => setPdfPage(Number((e.target as HTMLInputElement).value) || 0)}
+                  onInput={(e) => {
+                    setPdfPage(Number((e.target as HTMLInputElement).value) || 0)
+                    setPdfQuotePage(0)
+                  }}
                   style={{ width: 160, flexShrink: 0 }}
                 />
               </div>
@@ -159,6 +206,8 @@ export function QuoteInsertDialog({
               onClick={() => {
                 setPdfSource(null)
                 setPdfQuote('')
+                setPdfQuotePage(0)
+                setHighlightQuotes([])
               }}
             >
               ← Choose different source

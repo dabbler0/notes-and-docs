@@ -71,6 +71,7 @@ export function ReaderMode({
   onClose,
   onFullscreen,
   embedded = false,
+  onSelectionChange,
 }: {
   source: Source
   page: number
@@ -112,6 +113,15 @@ export function ReaderMode({
   /** Sizes to the caller's own box (`width`/`height: 100%`, `position:
    * relative`) instead of covering the whole screen as a fixed overlay. */
   embedded?: boolean
+  /** Mirrors every selection made in here straight back up to the caller
+   * (alongside whichever page it actually came from — not necessarily
+   * `page` itself, in a two-page spread) — on top of, not instead of,
+   * this component's own internal "save to quote bank/annotation" bar
+   * below. `QuoteInsertDialog` is what this exists for: it needs to keep
+   * its own quote textarea in sync with whatever's highlighted, the same
+   * way its old PdfViewer/TextViewer-based picker did via their own
+   * `onSelectionChange` prop. */
+  onSelectionChange?: (text: string, page: number) => void
 }) {
   const containerRef = useRef<HTMLDivElement>(null)
   const [containerSize, setContainerSize] = useState({ width: 0, height: 0 })
@@ -294,10 +304,18 @@ export function ReaderMode({
   // `page`/`secondPage` themselves do.
   const primaryPageRef = useRef(page)
   primaryPageRef.current = page
+  // Read through a ref rather than closed over directly, same reasoning as
+  // every other ref above this one — `onSelectionChange` itself can change
+  // identity (or go from absent to present) across renders without that
+  // forcing `handlePrimarySelection`/`handleSecondarySelection` to change
+  // theirs too.
+  const onSelectionChangeRef = useRef(onSelectionChange)
+  onSelectionChangeRef.current = onSelectionChange
   const handlePrimarySelection = useMemo(
     () => (text: string) => {
       setPendingQuote(text)
       setPendingQuotePage(primaryPageRef.current)
+      onSelectionChangeRef.current?.(text, primaryPageRef.current)
     },
     [],
   )
@@ -307,6 +325,7 @@ export function ReaderMode({
     () => (text: string) => {
       setPendingQuote(text)
       setPendingQuotePage(secondaryPageRef.current)
+      onSelectionChangeRef.current?.(text, secondaryPageRef.current)
     },
     [],
   )
