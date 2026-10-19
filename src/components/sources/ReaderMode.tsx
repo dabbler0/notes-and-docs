@@ -129,6 +129,7 @@ export function ReaderMode({
   const [bookmarksOpen, setBookmarksOpen] = useState(false)
   const [bookmarkLabel, setBookmarkLabel] = useState('')
   const searchInputRef = useRef<HTMLInputElement>(null)
+  const bookmarkCornerRef = useRef<HTMLDivElement>(null)
   // Every extractor fills in one `pageHtml` entry per PDF page (see
   // `extractPageHtml`), so this is a reliable page count for *either* mode,
   // not just the text one — already relied on the same way elsewhere (e.g.
@@ -151,6 +152,19 @@ export function ReaderMode({
   function refreshBookmarks() {
     listBookmarksForSource(source.id).then(setBookmarks)
   }
+
+  // Dismiss the bookmarks panel on an outside click — same pattern as
+  // `EssayWorkspace`'s own comment-widget dismissal.
+  useEffect(() => {
+    if (!bookmarksOpen) return
+    function onDown(e: MouseEvent) {
+      if (bookmarkCornerRef.current && !bookmarkCornerRef.current.contains(e.target as Node)) {
+        setBookmarksOpen(false)
+      }
+    }
+    document.addEventListener('mousedown', onDown, true)
+    return () => document.removeEventListener('mousedown', onDown, true)
+  }, [bookmarksOpen])
 
   useEffect(() => {
     refreshBookmarks()
@@ -410,7 +424,7 @@ export function ReaderMode({
         )}
       </div>
 
-      <div className="reader-mode-bookmark-corner">
+      <div className="reader-mode-bookmark-corner" ref={bookmarkCornerRef}>
         {bookmarksOpen && (
           <div className="reader-mode-bookmarks-panel">
             <div className="reader-mode-bookmark-add">
