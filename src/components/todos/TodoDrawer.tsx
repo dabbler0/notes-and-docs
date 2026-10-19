@@ -91,7 +91,10 @@ export function TodoDrawer() {
 
   function startDefer(todo: TodoItem) {
     setDeferringId(todo.id)
-    setDeferDate(dateInputValue(Date.now()))
+    // Defaults to tomorrow, not today — "defer" means "not now," and
+    // picking today would (per startOfDay below) undefer it again right
+    // away, no different from not deferring it at all.
+    setDeferDate(dateInputValue(Date.now() + 24 * 60 * 60 * 1000))
   }
 
   async function confirmDefer(todo: TodoItem) {
