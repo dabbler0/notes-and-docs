@@ -213,4 +213,25 @@ describe('extractLegacyCitationNote', () => {
   it('does not apply the year exclusion to a lone number that just does not happen to equal the year', () => {
     expect(extractLegacyCitationNote('(Smith, p. 5)', '2021')).toBe('p5')
   })
+
+  it('excludes a year that was itself written as "N-N" (the same year twice) rather than misreading it as a page range', () => {
+    // A real reported bug: a source whose year field used to be "2020-2020"
+    // (now fixed to plain "2020") left old citations rendering a bogus
+    // "pp2020-2020" note — the range-matching branch below used to skip
+    // the exclusion check entirely whenever the lone match looked like a
+    // range at all, regardless of whether it was actually the year.
+    expect(extractLegacyCitationNote('(Smith, 2020-2020)', '2020')).toBe('')
+  })
+
+  it('excludes a year range when the new, fixed year matches either half of the old range', () => {
+    // The source's year was fixed from a genuine two-year range down to
+    // just one of those two years — still recognizable as "this was the
+    // year slot", not a page range.
+    expect(extractLegacyCitationNote('(Smith, 2020-2021)', '2020')).toBe('')
+    expect(extractLegacyCitationNote('(Smith, 2020-2021)', '2021')).toBe('')
+  })
+
+  it('still reads a genuine page range when it does not match the year at all', () => {
+    expect(extractLegacyCitationNote('(Smith, 2020, pp. 12-15)', '2020')).toBe('pp12-15')
+  })
 })

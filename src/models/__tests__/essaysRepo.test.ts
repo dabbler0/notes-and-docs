@@ -125,6 +125,18 @@ describe('migrateLegacyCitations (via getNode)', () => {
     expect(reloaded.draftContent).toContain('data-note="pp12-15"')
   })
 
+  it('omits the note when the old label\'s year was itself written as a range ("N-N") now fixed to a plain year, rather than misreading it as a page range', async () => {
+    const essay = await createEssay('Has an old citation whose year used to be a range')
+    const source = await createSource({ type: 'article', key: 'smith2020', fields: { author: 'Smith', year: '2020' } })
+    const root = (await getNode(essay.rootNodeId))!
+    root.draftContent = `<p><cite class="citation" data-source-id="${source.id}">(Smith, 2020-2020)</cite></p>`
+    await saveNode(root)
+
+    const reloaded = (await getNode(essay.rootNodeId))!
+    expect(reloaded.draftContent).not.toContain('data-note')
+    expect(reloaded.draftContent).toContain('(Smith, 2020)')
+  })
+
   it('omits the note when the old label only ever mentioned the publication year', async () => {
     const essay = await createEssay('Has an old citation with no real page')
     const source = await createSource({ type: 'article', key: 'smith2020', fields: { author: 'Smith', year: '2020' } })

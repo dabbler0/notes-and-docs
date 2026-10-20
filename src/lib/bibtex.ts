@@ -198,20 +198,37 @@ export function citationPage(source: Source, page: number | undefined): number |
  *
  * Returns `''` — no note at all, the ordinary case for a citation that
  * never had a page in the first place — in two situations: no digits
- * anywhere in the text, or the text contains *exactly one* number and
- * that number is the source's own publication year (`(Smith, 2020)`,
- * where "2020" is the year the citation label itself always included,
- * not a page). That exclusion only fires when it's the *only* number in
- * the text — a citation that mentions the year *and* a real page
- * ("Smith, 2020, p. 2020" — contrived, but possible) still gets that
- * page, since there's then no ambiguity about which number is which.
+ * anywhere in the text, or the text contains *exactly one* number (or
+ * one `N-N` range) and that matches the source's own publication year
+ * (`(Smith, 2020)`, where "2020" is the year the citation label itself
+ * always included, not a page). That exclusion only fires when it's the
+ * *only* match in the text — a citation that mentions the year *and* a
+ * real page ("Smith, 2020, p. 2020" — contrived, but possible) still
+ * gets that page, since there's then no ambiguity about which number is
+ * which.
+ *
+ * The range half of that exclusion exists for a real, reported bug: a
+ * source whose year field used to itself be entered as a range (or a
+ * repeated "2020-2020") rather than a plain number. Fixing the source's
+ * year to a plain number afterward doesn't touch any citation already
+ * baked from the old range-shaped one — so this had to recognize "the
+ * *old* range this legacy label's year-slot actually held" is now this
+ * source's current year, not guess that a dash-joined pair of digits
+ * must always mean a page range. The check is "does either half of the
+ * range match the current year," not "does the whole range," since a
+ * genuine year *range* (e.g. "2020-2021" for a report spanning two
+ * years) now fixed down to just one of those two years should also be
+ * recognized as the year slot, not misread as a page range.
  */
 export function extractLegacyCitationNote(text: string, year: string | undefined): string {
   const matches = Array.from(text.matchAll(/\d+\s*-\s*\d+|\d+/g)).map((m) => m[0])
   if (matches.length === 0) return ''
   const last = matches[matches.length - 1]
   const range = last.match(/^(\d+)\s*-\s*(\d+)$/)
-  if (matches.length === 1 && !range && year !== undefined && last === year) return ''
+  if (matches.length === 1 && year !== undefined) {
+    if (!range && last === year) return ''
+    if (range && (range[1] === year || range[2] === year)) return ''
+  }
   return range ? `pp${range[1]}-${range[2]}` : `p${last}`
 }
 
