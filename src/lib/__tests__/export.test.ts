@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
-import { essayToLatex, essayToMarkdown, markdownToHtml } from '../export'
+import { addPrintChrome, essayToLatex, essayToMarkdown, markdownToHtml } from '../export'
 import { citationHtml } from '../bibtex'
+import { markerHtml } from '../childMarkers'
 import type { Essay, EssayNode, Source } from '../../models/types'
 
 function makeSource(overrides: Partial<Source> & { id: string } = { id: 's1' }): Source {
@@ -368,5 +369,58 @@ describe('citations in Markdown export', () => {
     const md = essayToMarkdown(makeEssay('root'), new Map([['root', root]]))
     expect(md).toContain('As argued (Smith, 2020).')
     expect(md).not.toContain('​')
+  })
+})
+
+describe('addPrintChrome', () => {
+  function threeSectionEssay(): { essay: Essay; nodeMap: Map<string, EssayNode> } {
+    const root = makeNode({ id: 'root', title: 'Essay Title', draftContent: `<p>intro</p>${markerHtml('a')}${markerHtml('b')}` })
+    const a = makeNode({ id: 'a', title: 'First Section', draftContent: `<p>first</p>${markerHtml('a1')}` })
+    const a1 = makeNode({ id: 'a1', title: 'First Subsection', draftContent: '<p>nested</p>' })
+    const b = makeNode({ id: 'b', title: 'Second Section', draftContent: '<p>second</p>' })
+    const nodeMap = new Map([
+      ['root', root],
+      ['a', a],
+      ['a1', a1],
+      ['b', b],
+    ])
+    return { essay: makeEssay('root'), nodeMap }
+  }
+
+  function render(): string {
+    const { essay, nodeMap } = threeSectionEssay()
+    return addPrintChrome(markdownToHtml(essayToMarkdown(essay, nodeMap)))
+  }
+
+  it('numbers root-level sections 1, 2, … and a subsection N.M, the same scheme the editor suggests for a new placeholder title', () => {
+    const html = render()
+    expect(html).toContain('<h2>1 First Section</h2>')
+    expect(html).toContain('<h3>1.1 First Subsection</h3>')
+    expect(html).toContain('<h2>2 Second Section</h2>')
+  })
+
+  it('never numbers the essay title itself', () => {
+    const html = render()
+    expect(html).toContain('<h1>Test Essay</h1>')
+  })
+
+  it('adds a thick rule right after the title', () => {
+    const html = render()
+    expect(html).toMatch(/<h1>Test Essay<\/h1>\s*<hr class="print-title-rule">/)
+  })
+
+  it('adds a thin rule under every root-level section, including the last one, but not under a subsection', () => {
+    const html = render()
+    const ruleCount = (html.match(/<hr class="print-section-rule">/g) ?? []).length
+    expect(ruleCount).toBe(2) // one after "First Section" (before "Second Section"), one after "Second Section" at the very end
+    // The rule between the two root sections sits right before the second one, not right after the subsection.
+    expect(html).toMatch(/<h3>1\.1 First Subsection<\/h3>[\s\S]*?<hr class="print-section-rule">[\s\S]*?<h2>2 Second Section<\/h2>/)
+  })
+
+  it('adds no rules at all for an essay with no sections', () => {
+    const root = makeNode({ id: 'root', title: 'Lonely Essay', draftContent: '<p>just text, no sections</p>' })
+    const html = addPrintChrome(markdownToHtml(essayToMarkdown(makeEssay('root'), new Map([['root', root]]))))
+    expect(html).not.toContain('print-section-rule')
+    expect(html).toContain('print-title-rule') // the title itself still gets its own rule
   })
 })

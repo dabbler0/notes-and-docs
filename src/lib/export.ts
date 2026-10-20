@@ -405,6 +405,53 @@ export function markdownToHtml(md: string): string {
   return out.join('\n')
 }
 
+/**
+ * Post-processes `markdownToHtml`'s own output for the print/PDF export
+ * view with the two bits of structure that don't survive the Markdown
+ * round-trip: section numbering (the same N.M scheme the editor already
+ * suggests for a brand-new section's placeholder title — see
+ * `treeNumbering.ts`) and a horizontal rule under the title and under
+ * each root-level section.
+ *
+ * Walks the rendered heading levels directly rather than the node tree
+ * (no `nodeMap` needed here): `essayToMarkdown`'s own `renderNode` always
+ * emits exactly one heading per node, one level deeper per level of
+ * nesting, in document order — so `<h1>` is always the essay's own title,
+ * `<h2>` always a root-level section, `<h3>` always a child of one, and so
+ * on, the same correspondence `sectionCmd` below relies on for the LaTeX
+ * export. A node's title is always plain text (see `EssayNode.title`),
+ * never rich HTML, so prepending the number as a plain string is safe —
+ * nothing here needs to parse or preserve inline markup.
+ */
+export function addPrintChrome(bodyHtml: string): string {
+  const doc = new DOMParser().parseFromString(bodyHtml, 'text/html')
+  const hr = (className: string) => {
+    const el = doc.createElement('hr')
+    el.className = className
+    return el
+  }
+  const headings = Array.from(doc.body.querySelectorAll('h1, h2, h3, h4, h5, h6'))
+  const counters: number[] = []
+  let sawFirstSection = false
+  for (const heading of headings) {
+    const level = Number(heading.tagName[1])
+    if (level === 1) {
+      heading.after(hr('print-title-rule'))
+      continue
+    }
+    const depth = level - 1 // h2 -> root-level section (depth 1), h3 -> its child (depth 2), ...
+    counters[depth - 1] = (counters[depth - 1] ?? 0) + 1
+    counters.length = depth // drop any deeper counters left over from a previous sibling's own subsections
+    heading.prepend(`${counters.join('.')} `)
+    if (level === 2) {
+      if (sawFirstSection) heading.before(hr('print-section-rule'))
+      sawFirstSection = true
+    }
+  }
+  if (sawFirstSection) doc.body.appendChild(hr('print-section-rule'))
+  return doc.body.innerHTML
+}
+
 // ---- LaTeX -------------------------------------------------------------
 
 const SECTION_CMDS = ['section', 'subsection', 'subsubsection', 'paragraph', 'subparagraph']
