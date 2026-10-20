@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from 'preact/hooks'
 import { addFootnote, createChildNode, addComment, getEssay, getNode, loadNodeMap, moveNode, saveEssay, saveNode } from '../../models/essaysRepo'
 import { addToGraveyard } from '../../models/graveyardRepo'
-import { citationHtml, displayTitle } from '../../lib/bibtex'
+import { citationHtml, citationNoteSeparator, displayTitle } from '../../lib/bibtex'
+import { promptDialog } from '../../lib/prompt'
 import { extractAroundRange, insertHtmlAtRange, plainTextOfRange, stripInlineFormatting } from '../../lib/selection'
 import { escapeAttr, escapeHtml } from '../../lib/html'
 import { id } from '../../lib/id'
@@ -152,6 +153,49 @@ export function EssayWorkspace({ essayId, onBack }: { essayId: string; onBack: (
     const sel = window.getSelection()
     sel?.removeAllRanges()
     sel?.addRange(range)
+  }
+
+  /**
+   * Double-clicking a citation chip — the generated "(Author, Year)" label
+   * or its trailing page/note, block quote or bare "Cite" alike — offers a
+   * dedicated way to set or change that note, rather than relying on
+   * editing it in place: that *does* already work (its trailing text is
+   * ordinary editable content kept in sync by `SectionBlock`'s own
+   * `syncCitationNotes`, see that function's doc comment), but the click
+   * target to start doing so is a single zero-width space when there's no
+   * note yet — invisible, and genuinely hard to land a click on
+   * precisely. This is the fix for the common case that actually prompted
+   * it: a quote inserted by hand (no PDF to carry a page along with it)
+   * whose page was left blank the first time around.
+   */
+  async function handleCitationDblClick(e: MouseEvent) {
+    const chip = (e.target as HTMLElement).closest<HTMLElement>('.citation[data-cite-v]')
+    if (!chip) return
+    e.preventDefault()
+    const sectionEl = chip.closest<HTMLElement>('[data-node-id]')
+    const node = sectionEl ? nodeMap.get(sectionEl.getAttribute('data-node-id')!) : undefined
+    if (!node) return
+    const current = chip.getAttribute('data-note') ?? ''
+    const next = await promptDialog('Page number or other note for this citation?', { defaultValue: current, placeholder: 'e.g. p. 5', confirmLabel: 'Save' })
+    if (next === null) return
+    const note = next.trim()
+    const base = chip.querySelector(':scope > .citation-base')
+    while (base?.nextSibling) chip.removeChild(base.nextSibling)
+    if (note) {
+      chip.appendChild(document.createTextNode(citationNoteSeparator() + note))
+      chip.setAttribute('data-note', note)
+    } else {
+      // The same invisible caret-landing placeholder citationHtml() plants
+      // for a fresh, note-less citation — see its own doc comment.
+      chip.appendChild(document.createTextNode('​'))
+      chip.removeAttribute('data-note')
+    }
+    const html = reconstructContent(node.id)
+    if (html != null) {
+      node.draftContent = html
+      await saveNode(node)
+    }
+    reload()
   }
 
   function captureRange() {
@@ -759,7 +803,13 @@ export function EssayWorkspace({ essayId, onBack }: { essayId: string; onBack: (
             <div className="spacer" />
           </div>
 
-          <div className={`editor-scroll doc-scroll${commentMode ? ' comment-mode' : ''}`} ref={docScrollRef} onMouseUp={handleMouseUpForComments} onClick={handleDocMissClick}>
+          <div
+            className={`editor-scroll doc-scroll${commentMode ? ' comment-mode' : ''}`}
+            ref={docScrollRef}
+            onMouseUp={handleMouseUpForComments}
+            onClick={handleDocMissClick}
+            onDblClick={handleCitationDblClick}
+          >
             <SectionBlock
               node={rootNode}
               nodeMap={nodeMap}

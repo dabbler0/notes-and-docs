@@ -250,7 +250,7 @@ export function renderCitationLabel(entry: BibtexEntry, note?: string, _style: C
  * need its own separator here too, alongside its own case in
  * `renderCitationLabel`.
  */
-function citationNoteSeparator(_style: CitationStyle = 'author-date'): string {
+export function citationNoteSeparator(_style: CitationStyle = 'author-date'): string {
   return ', '
 }
 
@@ -332,9 +332,14 @@ export function citationHtml(source: Source, opts: { page?: number; note?: strin
   const trailing = note ? escapeHtml(citationNoteSeparator() + note) : '​'
   const noteAttr = note ? ` data-note="${escapeAttr(note)}"` : ''
   const inner = `<span class="citation-base" contenteditable="false">${base}</span>${trailing}`
+  // Double-click to edit the page/note is `EssayWorkspace`'s own
+  // `handleCitationDblClick` — this tooltip is the only hint of it in the
+  // UI, since the click target otherwise has nothing to show for itself
+  // (a lone zero-width space) until there's already a note to click on.
+  const titleAttr = ' title="Double-click to edit page/note"'
   const url = source.bibtex.fields.url
   if (url) {
-    return `<a class="citation" data-source-id="${source.id}" data-cite-v="2"${noteAttr} href="${escapeAttr(url)}" target="_blank" rel="noopener noreferrer">${inner}</a>`
+    return `<a class="citation" data-source-id="${source.id}" data-cite-v="2"${noteAttr}${titleAttr} href="${escapeAttr(url)}" target="_blank" rel="noopener noreferrer">${inner}</a>`
   }
-  return `<cite class="citation" data-source-id="${source.id}" data-cite-v="2"${noteAttr}>${inner}</cite>`
+  return `<cite class="citation" data-source-id="${source.id}" data-cite-v="2"${noteAttr}${titleAttr}>${inner}</cite>`
 }
