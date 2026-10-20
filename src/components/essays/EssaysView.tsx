@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'preact/hooks'
 import { archiveEssay, createEssay, deleteEssay, listEssays, unarchiveEssay } from '../../models/essaysRepo'
+import { mergeEssays } from '../../models/essayHistoryRepo'
 import { groupEssays, removeEssayFromProject } from '../../models/projectsRepo'
 import { onSyncApplied } from '../../sync/syncEvents'
 import { confirmDialog } from '../../lib/confirm'
@@ -129,9 +130,13 @@ export function EssaysView() {
    * (`groupEssays` — see its own doc comment for exactly how, including
    * what happens when one or both are already in different projects).
    * Dragging onto a card that *already* shares a project with the one
-   * being dragged is a different gesture — merging their commit histories
-   * together — handled separately (Stage 5: `mergeEssays`, wired in here
-   * with its own confirmation modal once it exists), not by this function.
+   * being dragged is a different gesture entirely — merging their commit
+   * histories together (`mergeEssays`): the dropped-on card is the base,
+   * the dragged one gets appended after it and then removed, so its
+   * content becomes the merged essay's new current state. Destructive
+   * enough (to the dragged essay as a standalone essay, not to its
+   * content — see `mergeEssays`' own doc comment) to need an explicit
+   * confirmation first, unlike plain grouping.
    */
   async function handleDrop(sourceId: string, targetId: string) {
     setDragEssayId(null)
@@ -140,7 +145,18 @@ export function EssaysView() {
     const source = essays.find((x) => x.id === sourceId)
     const target = essays.find((x) => x.id === targetId)
     if (!source || !target) return
-    if (source.projectId && source.projectId === target.projectId) return // already grouped — nothing to do until merge (Stage 5) handles this case
+    if (source.projectId && source.projectId === target.projectId) {
+      if (
+        !(await confirmDialog(
+          `Merge "${source.title}" into "${target.title}"? "${target.title}"'s current content becomes "${source.title}"'s current content, with "${target.title}"'s own earlier drafts kept underneath in its history — the full edit history of both essays is preserved, concatenated. "${source.title}" itself is then removed (nothing in it is lost; it lives on inside "${target.title}").`,
+          { confirmLabel: 'Merge', danger: true },
+        ))
+      )
+        return
+      await mergeEssays(target.id, source.id)
+      reload()
+      return
+    }
     await groupEssays(target, source)
     reload()
   }

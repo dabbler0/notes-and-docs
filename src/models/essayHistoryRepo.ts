@@ -11,7 +11,12 @@ import { backend } from '../storage'
 import { id } from '../lib/id'
 import { getChildIds } from '../lib/childMarkers'
 import { snapshotText, diffSnapshots, applyPatch, reconstructSnapshotText, reconstructSnapshot } from '../lib/essayHistory'
-import { saveNode, saveEssay, nodeComments, nodeFootnotes } from './essaysRepo'
+import { getEssay, loadNodeMap, saveNode, saveEssay, nodeComments, nodeFootnotes } from './essaysRepo'
+// `mergeEssays` (below) needs `removeEssayFromProject` — projectsRepo.ts
+// itself only ever imports from essaysRepo.ts, never from this module, so
+// this one-directional edge doesn't create a cycle (essaysRepo.ts <-
+// essayHistoryRepo.ts -> projectsRepo.ts -> essaysRepo.ts, not a loop).
+import { removeEssayFromProject } from './projectsRepo'
 import type { Essay, EssayCommitEntry, EssayNode, EssaySnapshot } from './types'
 
 const ESSAY_HISTORY = 'essayHistory'
@@ -138,9 +143,98 @@ async function applySnapshotToLiveTree(essay: Essay, nodeMap: Map<string, EssayN
   }
 }
 
-/** Convenience used by `mergeEssays` (Stage 5): this essay's first commit's own reconstructed snapshot text, or `''` if it has no commits at all yet. */
-export async function firstCommitSnapshotText(essayId: string): Promise<string> {
-  const commits = await listEssayHistory(essayId)
-  if (commits.length === 0) return ''
-  return reconstructSnapshotText(commits, commits[0].seq)
+/**
+ * Splices `appendedEssayId`'s entire commit history onto the end of
+ * `baseEssayId`'s own — "as if one was a new version of and written after
+ * the other" (the request this implements verbatim). The merged essay
+ * keeps `baseEssayId`'s own identity (its id, and so every existing
+ * reference to it — bookmarks, nothing else currently links an essay, but
+ * the principle holds), but its *current* content becomes whatever
+ * `appendedEssayId`'s current content was: `base`'s own history is
+ * preserved underneath, intact, as earlier drafts.
+ *
+ * 1. Ensures both essays have at least one commit (`commitEssay` — a
+ *    brand-new essay with literally nothing written yet still gets a real
+ *    first commit here, since its snapshot text is never the empty string
+ *    `commitEssay`'s own "nothing changed" check compares against).
+ * 2. One bridging `kind: 'merge'` commit, diffing `base`'s current
+ *    snapshot straight to the state right after `appended`'s own *first*
+ *    commit (not its final state) — everything `appended`'s own 2nd commit
+ *    onward needs is already a diff relative to that same point, so once
+ *    the bridge lands there, those commits' own `patch` text applies
+ *    completely unchanged.
+ * 3. `appended`'s remaining commits (2nd onward) are copied — fresh `id`,
+ *    `essayId` repointed to `base`, `seq` continuing `base`'s own
+ *    sequence, `patch` byte-for-byte unchanged — and its original rows
+ *    (now redundant) are deleted.
+ * 4. Every node reachable from `appended`'s root is re-parented
+ *    (`essayId` field) onto `base`, and `base.rootNodeId`/`base.title` are
+ *    set to `appended`'s own — this is what actually makes `base`'s live,
+ *    editable content become `appended`'s content, matching exactly what
+ *    replaying the full spliced history now reconstructs. `base`'s own
+ *    *previous* live nodes are deliberately left in place, unreferenced
+ *    but intact — already fully recoverable by reverting to any of
+ *    `base`'s own earlier commits, so deleting them outright would be
+ *    pure risk for no benefit.
+ * 5. `appended` itself is tombstoned (`deleted: true` — its content now
+ *    lives on inside `base`) and taken out of whatever project it shared
+ *    with `base` (`removeEssayFromProject`, which also cleans the project
+ *    up if that leaves it with ≤1 member).
+ *
+ * The caller (`EssaysView`'s own same-project drag gesture) is
+ * responsible for confirming this with the user first — it's destructive
+ * to `appended` as a standalone essay (though never to its content, which
+ * survives inside `base`'s own history either way).
+ */
+export async function mergeEssays(baseEssayId: string, appendedEssayId: string): Promise<void> {
+  if (baseEssayId === appendedEssayId) return
+  const base = await getEssay(baseEssayId)
+  const appended = await getEssay(appendedEssayId)
+  if (!base || !appended) return
+
+  const baseNodeMap = await loadNodeMap(base)
+  const appendedNodeMap = await loadNodeMap(appended)
+
+  let baseCommits = await listEssayHistory(base.id)
+  if (baseCommits.length === 0) {
+    const first = await commitEssay(base, baseNodeMap)
+    if (first) baseCommits = [first]
+  }
+  let appendedCommits = await listEssayHistory(appended.id)
+  if (appendedCommits.length === 0) {
+    const first = await commitEssay(appended, appendedNodeMap)
+    if (first) appendedCommits = [first]
+  }
+  if (baseCommits.length === 0 || appendedCommits.length === 0) return // neither essay has any content at all to merge from — shouldn't happen for a real essay, but nothing to do either way
+
+  const baseCurrentText = snapshotText(buildSnapshot(base, baseNodeMap))
+  const appendedFirstText = reconstructSnapshotText(appendedCommits, appendedCommits[0].seq)
+
+  let nextSeq = baseCommits[baseCommits.length - 1].seq + 1
+  const bridge: EssayCommitEntry = {
+    id: id(),
+    essayId: base.id,
+    seq: nextSeq++,
+    createdAt: Date.now(),
+    kind: 'merge',
+    label: `Merged from "${appended.title}"`,
+    patch: diffSnapshots(baseCurrentText, appendedFirstText),
+  }
+  await backend.docs.put(ESSAY_HISTORY, bridge)
+  for (const commit of appendedCommits.slice(1)) {
+    await backend.docs.put(ESSAY_HISTORY, { ...commit, id: id(), essayId: base.id, seq: nextSeq++ } satisfies EssayCommitEntry)
+  }
+  for (const commit of appendedCommits) await backend.docs.delete(ESSAY_HISTORY, commit.id)
+
+  for (const node of appendedNodeMap.values()) {
+    node.essayId = base.id
+    await saveNode(node)
+  }
+  base.rootNodeId = appended.rootNodeId
+  base.title = appended.title
+  await saveEssay(base)
+
+  await removeEssayFromProject(appended)
+  appended.deleted = true
+  await saveEssay(appended)
 }

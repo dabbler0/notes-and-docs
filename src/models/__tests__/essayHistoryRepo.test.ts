@@ -1,6 +1,8 @@
 import { beforeEach, describe, expect, it } from 'vitest'
 import { createChildNode, createEssay, getEssay, getNode, loadNodeMap, saveNode } from '../essaysRepo'
-import { buildSnapshot, commitEssay, getCommitSnapshot, listEssayHistory, revertEssayTo } from '../essayHistoryRepo'
+import { buildSnapshot, commitEssay, getCommitSnapshot, listEssayHistory, mergeEssays, revertEssayTo } from '../essayHistoryRepo'
+import { groupEssays, getProject } from '../projectsRepo'
+import { reconstructSnapshotText } from '../../lib/essayHistory'
 import { markerHtml } from '../../lib/childMarkers'
 
 interface FakeStorageModule {
@@ -133,6 +135,99 @@ describe('revertEssayTo', () => {
 
     const history = await listEssayHistory(essay.id)
     expect(history.filter((c) => c.kind === 'revert')).toHaveLength(2)
+  })
+})
+
+describe('mergeEssays', () => {
+  it('appends the base essay with the content of the appended one, preserving both histories', async () => {
+    const base = await createEssay('Base Essay')
+    let baseNodeMap = await loadNodeMap(base)
+    const baseRoot = baseNodeMap.get(base.rootNodeId)!
+    baseRoot.draftContent = '<p>Base v1.</p>'
+    await saveNode(baseRoot)
+    baseNodeMap = await loadNodeMap(base)
+    await commitEssay(base, baseNodeMap, 'Base v1')
+    baseRoot.draftContent = '<p>Base v2.</p>'
+    await saveNode(baseRoot)
+    baseNodeMap = await loadNodeMap(base)
+    await commitEssay(base, baseNodeMap, 'Base v2')
+
+    const appended = await createEssay('Appended Essay')
+    let appendedNodeMap = await loadNodeMap(appended)
+    const appendedRoot = appendedNodeMap.get(appended.rootNodeId)!
+    appendedRoot.draftContent = '<p>Appended v1.</p>'
+    await saveNode(appendedRoot)
+    appendedNodeMap = await loadNodeMap(appended)
+    await commitEssay(appended, appendedNodeMap, 'Appended v1')
+    appendedRoot.draftContent = '<p>Appended v2.</p>'
+    await saveNode(appendedRoot)
+    appendedNodeMap = await loadNodeMap(appended)
+    await commitEssay(appended, appendedNodeMap, 'Appended v2')
+
+    const appendedHistoryBefore = await listEssayHistory(appended.id)
+    const appendedPatchesBefore = appendedHistoryBefore.map((c) => c.patch)
+
+    await mergeEssays(base.id, appended.id)
+
+    const liveBase = (await getEssay(base.id))!
+    const liveRoot = (await getNode(liveBase.rootNodeId))!
+    expect(liveRoot.draftContent).toBe('<p>Appended v2.</p>')
+
+    const mergedHistory = await listEssayHistory(base.id)
+    expect(mergedHistory.some((c) => c.kind === 'merge')).toBe(true)
+    const lastSeq = mergedHistory[mergedHistory.length - 1].seq
+    const replayedText = reconstructSnapshotText(mergedHistory, lastSeq)
+    const replayed = JSON.parse(replayedText)
+    expect(replayed.nodes.find((n: { id: string }) => n.id === liveRoot.id)?.draftContent).toBe('<p>Appended v2.</p>')
+
+    // The appended essay's own commits beyond the first (which became the bridge target,
+    // not copied verbatim) are transplanted with byte-identical patch text.
+    const transplanted = mergedHistory.filter((c) => appendedPatchesBefore.includes(c.patch))
+    expect(transplanted.length).toBe(appendedPatchesBefore.length - 1)
+
+    const appendedHistoryAfter = await listEssayHistory(appended.id)
+    expect(appendedHistoryAfter).toHaveLength(0)
+
+    const liveAppended = (await getEssay(appended.id))!
+    expect(liveAppended.deleted).toBe(true)
+  })
+
+  it('tombstones the appended essay and cleans up a now-trivial shared project', async () => {
+    const base = await createEssay('Base')
+    const appended = await createEssay('Appended')
+    await groupEssays(base, appended)
+    const projectId = (await getEssay(base.id))!.projectId!
+    expect(projectId).toBeDefined()
+
+    await mergeEssays(base.id, appended.id)
+
+    const liveBase = (await getEssay(base.id))!
+    expect(liveBase.projectId).toBeUndefined()
+    expect((await getProject(projectId))?.deleted).toBe(true)
+  })
+
+  it('synthesizes a commit for an essay with zero prior history rather than failing', async () => {
+    const base = await createEssay('Base')
+    const appended = await createEssay('Appended')
+    let appendedNodeMap = await loadNodeMap(appended)
+    const appendedRoot = appendedNodeMap.get(appended.rootNodeId)!
+    appendedRoot.draftContent = '<p>Never committed.</p>'
+    await saveNode(appendedRoot)
+
+    await mergeEssays(base.id, appended.id)
+
+    const liveBase = (await getEssay(base.id))!
+    const liveRoot = (await getNode(liveBase.rootNodeId))!
+    expect(liveRoot.draftContent).toBe('<p>Never committed.</p>')
+
+    const history = await listEssayHistory(base.id)
+    expect(history.length).toBeGreaterThan(0)
+  })
+
+  it('is a no-op when merging an essay into itself', async () => {
+    const essay = await createEssay('Solo')
+    await mergeEssays(essay.id, essay.id)
+    expect(await getEssay(essay.id)).toBeDefined()
   })
 })
 
