@@ -55,7 +55,7 @@ type StoredSourceMeta = Omit<Source, 'pageHtml'>
  * and encrypting the smaller result second is the only order that gets
  * both properties rather than one pretending to be the other.
  */
-interface StoredSourceContent {
+export interface StoredSourceContent {
   id: string
   pageHtmlCompressed: Uint8Array
   updatedAt: number

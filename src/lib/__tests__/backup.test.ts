@@ -15,6 +15,7 @@ import { exportBackup, restoreBackup, type BackupManifest } from '../backup'
 import { addQuoteToBank, listQuoteBank } from '../../models/quoteBankRepo'
 import { addToGraveyard, listGraveyard } from '../../models/graveyardRepo'
 import { addBookmark, listBookmarksForSource } from '../../models/bookmarkRepo'
+import { createSource, getSource, getSourceContent, updateSourceContent } from '../../models/sourcesRepo'
 import type { Essay, EssayNode, Source } from '../../models/types'
 
 interface FakeStorageModule {
@@ -110,6 +111,58 @@ describe('restoring a pre-quote-bank/graveyard backup', () => {
   it('rejects a backup with an unrecognized version rather than guessing at its shape', async () => {
     const badBackup = await zipWithManifest({ ...oldFormatManifest(), version: 999 })
     await expect(restoreBackup(badBackup, { mode: 'merge' })).rejects.toThrow(/[Uu]nsupported backup version/)
+  })
+})
+
+describe("exportBackup includes a source's own extracted-text content (the sourceContent collection, split out from the sources collection — see sourcesRepo.ts's own doc comment on the split)", () => {
+  it("round-trips a text-only source's extracted pageHtml through export + restore", async () => {
+    const source = await createSource(
+      { type: 'article', key: 'test2020', fields: { title: 'Text-only source' } },
+      { pageHtml: ['<p>Page one extracted text.</p>', '<p>Page two extracted text.</p>'], textOnly: true },
+    )
+    expect(source.pageCount).toBe(2) // sanity: the content really was written before export
+
+    const zipBlob = await exportBackup()
+
+    const storageMod = (await import('../../storage')) as unknown as FakeStorageModule
+    storageMod.__setActiveBackend(storageMod.createFakeBackend())
+
+    const result = await restoreBackup(zipBlob, { mode: 'replace' })
+    expect(result.sourceContent).toBe(1)
+
+    const restored = await getSource(source.id)
+    expect(restored?.pageCount).toBe(2)
+    expect(restored?.pageHtml).toEqual(['<p>Page one extracted text.</p>', '<p>Page two extracted text.</p>'])
+  })
+
+  it("round-trips a regular (has-a-PDF) source's extracted content the same way, not just a text-only one", async () => {
+    const source = await createSource({ type: 'article', key: 'test2021', fields: { title: 'A source with a PDF' } }, { pdfFile: new File(['%PDF-1.4 fake'], 'paper.pdf') })
+    await updateSourceContent(source, ['<p>Extracted from the PDF.</p>'])
+
+    const zipBlob = await exportBackup()
+    const storageMod = (await import('../../storage')) as unknown as FakeStorageModule
+    storageMod.__setActiveBackend(storageMod.createFakeBackend())
+    await restoreBackup(zipBlob, { mode: 'replace' })
+
+    expect(await getSourceContent(source.id)).toEqual(['<p>Extracted from the PDF.</p>'])
+  })
+
+  it('merge mode leaves a newer local content record alone, same as every other collection', async () => {
+    const source = await createSource({ type: 'article', key: 'test2022', fields: {} }, { pageHtml: ['<p>Original.</p>'] })
+    const zipBlob = await exportBackup() // captures the original content
+
+    await updateSourceContent(source, ['<p>Newer, edited after the backup was taken.</p>']) // now local is newer than the backup
+
+    await restoreBackup(zipBlob, { mode: 'merge' })
+    expect(await getSourceContent(source.id)).toEqual(['<p>Newer, edited after the backup was taken.</p>'])
+  })
+
+  it('a backup with no sourceContent key at all (made before this field existed) still restores everything else cleanly', async () => {
+    const manifest: Omit<BackupManifest, 'sourceContent'> = { ...oldFormatManifest(), quotes: [], graveyard: [] }
+    const oldBackup = await zipWithManifest(manifest)
+    const result = await restoreBackup(oldBackup, { mode: 'merge' })
+    expect(result.sourceContent).toBe(0)
+    expect(result.sources).toBe(1)
   })
 })
 

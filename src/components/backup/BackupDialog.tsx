@@ -49,7 +49,7 @@ export function BackupDialog({ onClose }: { onClose: () => void }) {
     <Modal onClose={onClose}>
       <h2>Backup &amp; restore</h2>
       <p className="muted">
-        A full local backup of everything on this device — essays, sections, version history, comments, the text graveyard, sources, saved quotes, bookmarks, TODO items, and PDFs — as one downloadable file. Unlike sync, this file is <b>not encrypted</b>: keep it somewhere you trust
+        A full local backup of everything on this device — essays, sections, version history, comments, the text graveyard, sources (including their extracted PDF text), saved quotes, bookmarks, TODO items, and PDFs — as one downloadable file. Unlike sync, this file is <b>not encrypted</b>: keep it somewhere you trust
         (your own disk, a personal cloud drive), not somewhere it could be shared or leaked.
       </p>
 
@@ -96,7 +96,7 @@ export function BackupDialog({ onClose }: { onClose: () => void }) {
 }
 
 function summarize(result: RestoreResult): string {
-  const total = result.essays + result.nodes + result.sources + result.quotes + result.graveyard + result.bookmarks + result.todos + result.blobs
+  const total = result.essays + result.nodes + result.sources + result.quotes + result.graveyard + result.bookmarks + result.todos + result.sourceContent + result.blobs
   if (total === 0) return result.mode === 'replace' ? '✓ Restored (backup was empty).' : '✓ Nothing to apply — local data was already newer or identical everywhere.'
   const parts: string[] = []
   if (result.essays) parts.push(`${result.essays} essay${result.essays === 1 ? '' : 's'}`)
@@ -106,6 +106,7 @@ function summarize(result: RestoreResult): string {
   if (result.graveyard) parts.push(`${result.graveyard} graveyard fragment${result.graveyard === 1 ? '' : 's'}`)
   if (result.bookmarks) parts.push(`${result.bookmarks} bookmark${result.bookmarks === 1 ? '' : 's'}`)
   if (result.todos) parts.push(`${result.todos} TODO item${result.todos === 1 ? '' : 's'}`)
+  if (result.sourceContent) parts.push(`${result.sourceContent} source text record${result.sourceContent === 1 ? '' : 's'}`)
   if (result.blobs) parts.push(`${result.blobs} PDF${result.blobs === 1 ? '' : 's'}`)
   return `✓ Restored ${parts.join(', ')}.`
 }

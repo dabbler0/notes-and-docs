@@ -11,6 +11,7 @@
 import JSZip from 'jszip'
 import { backend } from '../storage'
 import type { Bookmark, Essay, EssayNode, GraveyardFragment, QuoteBankEntry, Source, TodoItem } from '../models/types'
+import type { StoredSourceContent } from '../models/sourcesRepo'
 
 const BACKUP_VERSION = 1
 
@@ -27,12 +28,40 @@ export interface BackupManifest {
   bookmarks?: Bookmark[]
   /** Absent in a backup made before the TODO list existed — always read with `?? []`. */
   todos?: TodoItem[]
+  /**
+   * Every source's own extracted-text content record — `id` (matching a
+   * `sources` entry's own id) and `updatedAt` only; the real payload
+   * (`StoredSourceContent.pageHtmlCompressed`) is written out as a binary
+   * `sourceContent/{id}` file in the zip instead, exactly the way a PDF's
+   * own bytes go in `blobs/{id}` rather than into this JSON — a
+   * `Uint8Array` run through `JSON.stringify` balloons to several times
+   * its real size (every byte as a decimal array entry, comma-separated),
+   * for exactly the content this is: a source's full extracted page
+   * text/layout markup, gzip-compressed, often the single largest thing a
+   * source holds (easily dwarfing its own metadata or even its PDF, for a
+   * layout-extracted scan carrying inline base64 images). Absent in a
+   * backup made before this field existed — always read with `?? []`.
+   *
+   * **Missing from every backup made before this field existed at all** —
+   * `sources`/`nodes`/`essays`/etc. were always written straight from
+   * `backend.docs.list(...)`, but a source's own text is split out into
+   * this *separate* `sourceContent` collection specifically so listing
+   * sources doesn't have to load it (see `sourcesRepo.ts`'s own doc
+   * comment on the split) — a split this export never actually accounted
+   * for until now, so every earlier backup silently carried a source's
+   * `pageCount`/`contentBytes` (both live on the `sources` record itself)
+   * with no matching text behind them at all. A source extracted before
+   * this field existed needs *re*-extracting (or restoring from sync, if
+   * another device still has it) — there's no way to recover text that
+   * was simply never written to an old backup in the first place.
+   */
+  sourceContent?: { id: string; updatedAt: number }[]
   /** Which blob ids the zip's blobs/ folder actually contains — a source can reference a pdfBlobId whose blob went missing locally, so this isn't just "every source's pdfBlobId." */
   blobs: string[]
 }
 
 export async function exportBackup(): Promise<Blob> {
-  const [essays, nodes, sources, quotes, graveyard, bookmarks, todos] = await Promise.all([
+  const [essays, nodes, sources, quotes, graveyard, bookmarks, todos, sourceContentRecords] = await Promise.all([
     backend.docs.list<Essay>('essays'),
     backend.docs.list<EssayNode>('nodes'),
     backend.docs.list<Source>('sources'),
@@ -40,6 +69,11 @@ export async function exportBackup(): Promise<Blob> {
     backend.docs.list<GraveyardFragment>('graveyard'),
     backend.docs.list<Bookmark>('bookmarks'),
     backend.docs.list<TodoItem>('todos'),
+    // Every source's own extracted-text content — see BackupManifest's own
+    // doc comment on `sourceContent` for why this is a whole separate
+    // collection (and so a whole separate `backend.docs.list` call) rather
+    // than something already sitting on each `Source` record above.
+    backend.docs.list<StoredSourceContent>('sourceContent'),
   ])
 
   const zip = new JSZip()
@@ -53,7 +87,22 @@ export async function exportBackup(): Promise<Blob> {
     blobIds.push(source.pdfBlobId)
   }
 
-  const manifest: BackupManifest = { version: BACKUP_VERSION, exportedAt: Date.now(), essays, nodes, sources, quotes, graveyard, bookmarks, todos, blobs: blobIds }
+  const sourceContentFolder = zip.folder('sourceContent')!
+  const sourceContent: { id: string; updatedAt: number }[] = []
+  for (const record of sourceContentRecords) {
+    // Re-wrapped rather than handed to JSZip as-is: `record.pageHtmlCompressed`
+    // reaches here via `backend.docs.list`, which — for the real IndexedDB
+    // backend — always returns a plain, same-realm `Uint8Array`, but
+    // JSZip's own `instanceof Uint8Array` type check can fail for one
+    // that merely *looks* like one (confirmed against the in-memory test
+    // backend's `structuredClone`-based storage, which can hand back a
+    // cross-realm typed array); constructing a fresh `Uint8Array` from it
+    // is a no-op for the normal case and a free fix for that one.
+    sourceContentFolder.file(record.id, new Uint8Array(record.pageHtmlCompressed))
+    sourceContent.push({ id: record.id, updatedAt: record.updatedAt })
+  }
+
+  const manifest: BackupManifest = { version: BACKUP_VERSION, exportedAt: Date.now(), essays, nodes, sources, quotes, graveyard, bookmarks, todos, sourceContent, blobs: blobIds }
   zip.file('data.json', JSON.stringify(manifest, null, 2))
   return zip.generateAsync({ type: 'blob' })
 }
@@ -67,6 +116,7 @@ export interface RestoreResult {
   graveyard: number
   bookmarks: number
   todos: number
+  sourceContent: number
   blobs: number
 }
 
@@ -87,7 +137,7 @@ export async function restoreBackup(file: File | Blob, opts: { mode: 'merge' | '
 
   if (opts.mode === 'replace') await clearAllLocalData()
 
-  const result: RestoreResult = { mode: opts.mode, essays: 0, nodes: 0, sources: 0, quotes: 0, graveyard: 0, bookmarks: 0, todos: 0, blobs: 0 }
+  const result: RestoreResult = { mode: opts.mode, essays: 0, nodes: 0, sources: 0, quotes: 0, graveyard: 0, bookmarks: 0, todos: 0, sourceContent: 0, blobs: 0 }
 
   async function applyDocs<T extends { id: string; updatedAt?: number }>(collection: string, items: T[]): Promise<number> {
     let applied = 0
@@ -109,6 +159,20 @@ export async function restoreBackup(file: File | Blob, opts: { mode: 'merge' | '
   result.graveyard = await applyDocs('graveyard', manifest.graveyard ?? [])
   result.bookmarks = await applyDocs('bookmarks', manifest.bookmarks ?? [])
   result.todos = await applyDocs('todos', manifest.todos ?? [])
+
+  // Each record's real payload (`pageHtmlCompressed`) lives as its own
+  // `sourceContent/{id}` file in the zip, not in the manifest JSON — see
+  // BackupManifest's own doc comment on `sourceContent` for why — so
+  // reassembling the full `StoredSourceContent` shape `applyDocs` expects
+  // means pairing each manifest entry back up with its own file first.
+  const sourceContentItems: StoredSourceContent[] = []
+  for (const entry of manifest.sourceContent ?? []) {
+    const contentFile = zip.file(`sourceContent/${entry.id}`)
+    if (!contentFile) continue // the record was listed but its own file went missing from the zip somehow — nothing to restore it from
+    const pageHtmlCompressed = await contentFile.async('uint8array')
+    sourceContentItems.push({ id: entry.id, updatedAt: entry.updatedAt, pageHtmlCompressed })
+  }
+  result.sourceContent = await applyDocs('sourceContent', sourceContentItems)
 
   for (const blobId of manifest.blobs) {
     const blobFile = zip.file(`blobs/${blobId}`)
@@ -145,6 +209,17 @@ async function clearAllLocalData(): Promise<void> {
     // this account's PDFs (restoring an older one, say) is exactly what
     // `sweepOrphanedRemoteBlobs`'s on-demand full reconciliation is for.
     if (s.pdfBlobId) await backend.blobs.delete(s.pdfBlobId)
+    // Same reasoning as the blob deletion right above: a plain, untracked
+    // delete, immediately followed by `restoreBackup` writing the
+    // backup's own `sourceContent` records back in under these same ids
+    // (see its own call to `applyDocs('sourceContent', ...)`) — without
+    // this, a 'replace' restore from a backup missing some source's
+    // content (an older backup, or one made before this field existed)
+    // would leave that source's *old* content record behind as an orphan
+    // no longer paired with any `sources` doc, rather than actually
+    // reflecting "this device's data is gone, put it back exactly as the
+    // backup says it was."
+    await backend.docs.delete('sourceContent', s.id)
     await backend.docs.delete('sources', s.id)
   }
   for (const q of quotes) await backend.docs.delete('quotes', q.id)
