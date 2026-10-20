@@ -422,6 +422,13 @@ export function markdownToHtml(md: string): string {
  * export. A node's title is always plain text (see `EssayNode.title`),
  * never rich HTML, so prepending the number as a plain string is safe —
  * nothing here needs to parse or preserve inline markup.
+ *
+ * Both rules land the same way relative to their own heading — right
+ * after it, same as the title's own — rather than the section one
+ * sitting at the *bottom* of all that section's content (including its
+ * own subsections): it reads as underlining the heading, the same role
+ * the title's thick rule plays for the title above it, not as a divider
+ * between one section's content and the next.
  */
 export function addPrintChrome(bodyHtml: string): string {
   const doc = new DOMParser().parseFromString(bodyHtml, 'text/html')
@@ -432,7 +439,6 @@ export function addPrintChrome(bodyHtml: string): string {
   }
   const headings = Array.from(doc.body.querySelectorAll('h1, h2, h3, h4, h5, h6'))
   const counters: number[] = []
-  let sawFirstSection = false
   for (const heading of headings) {
     const level = Number(heading.tagName[1])
     if (level === 1) {
@@ -443,12 +449,8 @@ export function addPrintChrome(bodyHtml: string): string {
     counters[depth - 1] = (counters[depth - 1] ?? 0) + 1
     counters.length = depth // drop any deeper counters left over from a previous sibling's own subsections
     heading.prepend(`${counters.join('.')} `)
-    if (level === 2) {
-      if (sawFirstSection) heading.before(hr('print-section-rule'))
-      sawFirstSection = true
-    }
+    if (level === 2) heading.after(hr('print-section-rule'))
   }
-  if (sawFirstSection) doc.body.appendChild(hr('print-section-rule'))
   return doc.body.innerHTML
 }
 

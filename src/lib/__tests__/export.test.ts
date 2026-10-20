@@ -33,6 +33,23 @@ function makeNode(overrides: Partial<EssayNode> & { id: string; draftContent: st
   }
 }
 
+describe('a title wrapped in "**" renders as bold, not with the literal asterisks left showing', () => {
+  it('consumes a balanced "**...**" wrapping the whole essay title into a real <strong>, in the printed output', () => {
+    const root = makeNode({ id: 'root', draftContent: '<p>body</p>' })
+    const essay: Essay = { id: 'e1', title: '**My Essay**', rootNodeId: 'root', createdAt: 0, updatedAt: 0 }
+    const html = markdownToHtml(essayToMarkdown(essay, new Map([['root', root]])))
+    expect(html).toContain('<h1><strong>My Essay</strong></h1>')
+    expect(html).not.toContain('*')
+  })
+
+  it('does the same for a section title', () => {
+    const root = makeNode({ id: 'root', draftContent: `<p>intro</p>${markerHtml('a')}` })
+    const a = makeNode({ id: 'a', title: '**Section One**', draftContent: '<p>text</p>' })
+    const html = markdownToHtml(essayToMarkdown(makeEssay('root'), new Map([['root', root], ['a', a]])))
+    expect(html).toContain('<h2><strong>Section One</strong></h2>')
+  })
+})
+
 describe('footnotes in Markdown export', () => {
   it('emits a [^label] reference plus a definition at the end of the document', () => {
     const root = makeNode({
@@ -409,12 +426,14 @@ describe('addPrintChrome', () => {
     expect(html).toMatch(/<h1>Test Essay<\/h1>\s*<hr class="print-title-rule">/)
   })
 
-  it('adds a thin rule under every root-level section, including the last one, but not under a subsection', () => {
+  it('adds a thin rule right under every root-level section title, including the last one, but not under a subsection', () => {
     const html = render()
     const ruleCount = (html.match(/<hr class="print-section-rule">/g) ?? []).length
-    expect(ruleCount).toBe(2) // one after "First Section" (before "Second Section"), one after "Second Section" at the very end
-    // The rule between the two root sections sits right before the second one, not right after the subsection.
-    expect(html).toMatch(/<h3>1\.1 First Subsection<\/h3>[\s\S]*?<hr class="print-section-rule">[\s\S]*?<h2>2 Second Section<\/h2>/)
+    expect(ruleCount).toBe(2) // one under "First Section", one under "Second Section"
+    expect(html).toContain('<h2>1 First Section</h2><hr class="print-section-rule">')
+    expect(html).toContain('<h2>2 Second Section</h2><hr class="print-section-rule">')
+    // Right under the section's own heading, not under its subsection's.
+    expect(html).not.toContain('<h3>1.1 First Subsection</h3><hr class="print-section-rule">')
   })
 
   it('adds no rules at all for an essay with no sections', () => {
