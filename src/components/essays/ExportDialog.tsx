@@ -57,9 +57,16 @@ export function ExportDialog({ essay, nodeMap, onClose }: { essay: Essay; nodeMa
           @font-face { font-family: 'EB Garamond'; font-style: normal; font-weight: 400 800; src: url(${garamondRegularUrl}) format('woff2'); font-display: swap; }
           @font-face { font-family: 'EB Garamond'; font-style: italic; font-weight: 400 800; src: url(${garamondItalicUrl}) format('woff2'); font-display: swap; }
           body { font-family: 'EB Garamond', Georgia, 'Times New Roman', serif; max-width: 720px; margin: 40px auto; line-height: 1.6; color: #1a1a1a; padding: 0 20px; }
-          h1, h2, h3, h4, h5, h6 { font-family: 'EB Garamond', Georgia, 'Times New Roman', serif; font-weight: 700; }
-          .print-title-rule { border: none; border-top: 4px solid #1a1a1a; margin: 6px 0 32px; }
-          .print-section-rule { border: none; border-top: 1px solid #bbb; margin: 32px 0; }
+          h1, h2, h3, h4, h5, h6 { font-family: 'EB Garamond', Georgia, 'Times New Roman', serif; font-weight: 700; margin-bottom: 0; }
+          /* Single-direction paragraph spacing (margin-top always 0) so a
+             heading's own margin-bottom is what actually controls the gap
+             below it, rather than being swallowed by the usual CSS
+             margin-collapsing between a heading's bottom margin and the
+             next paragraph's own top one. */
+          p { margin: 0 0 1em; }
+          h3, h4, h5, h6 { margin-top: 1.4em; margin-bottom: 0.3em; }
+          .print-title-rule { border: none; border-top: 4px solid #1a1a1a; margin: 0 0 32px; }
+          .print-section-rule { border: none; border-top: 1px solid #bbb; margin: 0 0 28px; }
           blockquote { border-left: 3px solid #999; margin: 1em 0; padding-left: 1em; color: #444; }
           .katex-display { margin: 1em 0; }
           @media print { body { margin: 0; max-width: none; } }
