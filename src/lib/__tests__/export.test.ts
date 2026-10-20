@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { addPrintChrome, essayToLatex, essayToMarkdown, markdownToHtml } from '../export'
+import { addPrintChrome, essayToLatex, essayToMarkdown, markdownToHtml, referencesHtml, referencesMarkdown } from '../export'
 import { citationHtml } from '../bibtex'
 import { markerHtml } from '../childMarkers'
 import type { Essay, EssayNode, Source } from '../../models/types'
@@ -463,5 +463,54 @@ describe('addPrintChrome', () => {
     const html = addPrintChrome(markdownToHtml(essayToMarkdown(makeEssay('root'), new Map([['root', root]]))))
     expect(html).not.toContain('print-section-rule')
     expect(html).toContain('print-title-rule') // the title itself still gets its own rule
+  })
+})
+
+describe('referencesMarkdown / referencesHtml', () => {
+  function essayWithTwoCitations(): { nodeMap: Map<string, EssayNode>; sources: Map<string, Source> } {
+    const smith = makeSource({ id: 's-smith', bibtex: { type: 'article', key: 'smith2020', fields: { author: 'Smith, Jane', year: '2020', title: 'An Early Paper', journal: 'Journal of Examples' } } })
+    const adams = makeSource({ id: 's-adams', bibtex: { type: 'article', key: 'adams2019', fields: { author: 'Adams, Bob', year: '2019', title: 'A Prior Paper', journal: 'Journal of Priors' } } })
+    const root = makeNode({
+      id: 'root',
+      draftContent: `<p>As argued by ${citationHtml(smith)} and ${citationHtml(adams)}, the sky is blue.</p>`,
+    })
+    return { nodeMap: new Map([['root', root]]), sources: new Map([['s-smith', smith], ['s-adams', adams]]) }
+  }
+
+  it('appends a "## References" section, one list item per cited source, sorted by author', () => {
+    const { nodeMap, sources } = essayWithTwoCitations()
+    const md = referencesMarkdown(nodeMap, sources)
+    expect(md).toContain('## References')
+    expect(md).toContain('- Adams, Bob (2019). A Prior Paper. Journal of Priors.')
+    expect(md).toContain('- Smith, Jane (2020). An Early Paper. Journal of Examples.')
+    // Adams (2019) sorts before Smith (2020).
+    expect(md.indexOf('Adams')).toBeLessThan(md.indexOf('Smith'))
+  })
+
+  it('renders the same entries as an <h2>/<ul> for the print view, outside any numbering', () => {
+    const { nodeMap, sources } = essayWithTwoCitations()
+    const html = referencesHtml(nodeMap, sources)
+    expect(html).toContain('<h2 class="print-references-heading">References</h2>')
+    expect(html).toContain('<li>Adams, Bob (2019). A Prior Paper. Journal of Priors.</li>')
+    expect(html).toContain('<li>Smith, Jane (2020). An Early Paper. Journal of Examples.</li>')
+  })
+
+  it('lists a source only once even if cited multiple times', () => {
+    const smith = makeSource({ id: 's-smith' })
+    const root = makeNode({ id: 'root', draftContent: `<p>${citationHtml(smith)} ... and again, ${citationHtml(smith, { page: 5 })}.</p>` })
+    const md = referencesMarkdown(new Map([['root', root]]), new Map([['s-smith', smith]]))
+    expect((md.match(/^- /gm) ?? []).length).toBe(1)
+  })
+
+  it('omits a cited source with no matching entry in the sources map (deleted since)', () => {
+    const root = makeNode({ id: 'root', draftContent: '<p><cite class="citation" data-source-id="gone" data-cite-v="2">(Nobody, n.d.)</cite></p>' })
+    const md = referencesMarkdown(new Map([['root', root]]), new Map())
+    expect(md).toBe('')
+  })
+
+  it('is the empty string — nothing appended at all — for an essay that cites no sources', () => {
+    const root = makeNode({ id: 'root', draftContent: '<p>No citations here.</p>' })
+    expect(referencesMarkdown(new Map([['root', root]]), new Map())).toBe('')
+    expect(referencesHtml(new Map([['root', root]]), new Map())).toBe('')
   })
 })

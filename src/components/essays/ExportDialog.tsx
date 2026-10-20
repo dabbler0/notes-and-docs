@@ -2,7 +2,17 @@ import { useState } from 'preact/hooks'
 import JSZip from 'jszip'
 import { Modal } from '../Modal'
 import { listSources } from '../../models/sourcesRepo'
-import { addPrintChrome, collectUsedSourceIds, essayToLatex, essayToMarkdown, markdownToHtml, sourcesToBibtex } from '../../lib/export'
+import {
+  addPrintChrome,
+  collectUsedSourceIds,
+  essayToLatex,
+  essayToMarkdown,
+  markdownToHtml,
+  referencesHtml,
+  referencesMarkdown,
+  sourcesToBibtex,
+  type BibliographyStyle,
+} from '../../lib/export'
 import { downloadBlob, filenameFor } from '../../lib/download'
 import { escapeHtml } from '../../lib/html'
 import type { Essay, EssayNode } from '../../models/types'
@@ -26,12 +36,14 @@ import garamondItalicUrl from '../../assets/fonts/EBGaramond-Italic.woff2?inline
 
 export function ExportDialog({ essay, nodeMap, onClose }: { essay: Essay; nodeMap: Map<string, EssayNode>; onClose: () => void }) {
   const [citeCommand, setCiteCommand] = useState<'\\cite' | '\\footcite'>('\\cite')
+  const [bibliographyStyle, setBibliographyStyle] = useState<BibliographyStyle>('plain')
   const [busy, setBusy] = useState<'md' | 'pdf' | 'tex' | null>(null)
 
   async function exportMarkdown() {
     setBusy('md')
     try {
-      const md = essayToMarkdown(essay, nodeMap)
+      const sources = new Map((await listSources()).map((s) => [s.id, s]))
+      const md = essayToMarkdown(essay, nodeMap) + referencesMarkdown(nodeMap, sources, bibliographyStyle)
       downloadBlob(new Blob([md], { type: 'text/markdown' }), `${filenameFor(essay.title)}.md`)
     } finally {
       setBusy(null)
@@ -41,8 +53,9 @@ export function ExportDialog({ essay, nodeMap, onClose }: { essay: Essay; nodeMa
   async function exportPdf() {
     setBusy('pdf')
     try {
+      const sources = new Map((await listSources()).map((s) => [s.id, s]))
       const md = essayToMarkdown(essay, nodeMap)
-      const bodyHtml = addPrintChrome(markdownToHtml(md))
+      const bodyHtml = addPrintChrome(markdownToHtml(md)) + referencesHtml(nodeMap, sources, bibliographyStyle)
       const win = window.open('', '_blank')
       if (!win) {
         alert('Your browser blocked the print preview pop-up — allow pop-ups for this page and try again.')
@@ -69,6 +82,12 @@ export function ExportDialog({ essay, nodeMap, onClose }: { essay: Essay; nodeMa
           .print-section-rule { border: none; border-top: 1px solid #bbb; margin: 0 0 28px; }
           blockquote { border-left: 3px solid #999; margin: 1em 0; padding-left: 1em; color: #444; }
           .katex-display { margin: 1em 0; }
+          /* Deliberately outside addPrintChrome's own numbering/rule pass
+             (see referencesHtml's own doc comment) — a plain heading and a
+             hanging-indent list, the conventional bibliography layout. */
+          .print-references-heading { margin-top: 2.4em; }
+          .print-references-list { list-style: none; margin: 0.6em 0 0; padding: 0; }
+          .print-references-list li { margin: 0 0 0.8em 1.6em; text-indent: -1.6em; }
           @media print { body { margin: 0; max-width: none; } }
         </style></head><body>${bodyHtml}</body></html>`,
       )
@@ -105,11 +124,17 @@ export function ExportDialog({ essay, nodeMap, onClose }: { essay: Essay; nodeMa
   return (
     <Modal onClose={onClose}>
       <h2>Export “{essay.title}”</h2>
+      <label className="field-inline" style={{ marginBottom: 14 }}>
+        Bibliography style
+        <select value={bibliographyStyle} onChange={(e) => setBibliographyStyle((e.target as HTMLSelectElement).value as BibliographyStyle)}>
+          <option value="plain">Plain (author, year, title, venue)</option>
+        </select>
+      </label>
       <div className="export-options">
         <div className="export-option">
           <div className="export-option-body">
             <div className="export-option-title">Markdown</div>
-            <p className="muted">A plain .md file — headings, bold/italic, links, and quotes, with citations kept as their visible text.</p>
+            <p className="muted">A plain .md file — headings, bold/italic, links, and quotes, with citations kept as their visible text, plus a References section for every source you've cited.</p>
           </div>
           <button className="btn btn-primary" disabled={!!busy} onClick={exportMarkdown}>
             {busy === 'md' ? 'Preparing…' : 'Download .md'}
@@ -119,7 +144,7 @@ export function ExportDialog({ essay, nodeMap, onClose }: { essay: Essay; nodeMa
         <div className="export-option">
           <div className="export-option-body">
             <div className="export-option-title">PDF</div>
-            <p className="muted">Renders that same Markdown as a printable page in a new tab, then opens your browser's print dialog — choose “Save as PDF.”</p>
+            <p className="muted">Renders that same Markdown (References section included) as a printable page in a new tab, then opens your browser's print dialog — choose “Save as PDF.”</p>
           </div>
           <button className="btn btn-primary" disabled={!!busy} onClick={exportPdf}>
             {busy === 'pdf' ? 'Opening…' : 'Open print view'}

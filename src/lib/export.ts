@@ -9,10 +9,10 @@
  */
 import { parseSegments } from './childMarkers'
 import { escapeHtml } from './html'
-import { formatBibtex } from './bibtex'
+import { formatBibtex, formatCitation } from './bibtex'
 import { renderMathHtml } from './math'
 import { nodeFootnotes } from '../models/essaysRepo'
-import type { Essay, EssayNode, Source } from '../models/types'
+import type { BibtexEntry, Essay, EssayNode, Source } from '../models/types'
 
 // ---- Markdown --------------------------------------------------------
 
@@ -700,4 +700,58 @@ export function collectUsedSourceIds(nodeMap: Map<string, EssayNode>): Set<strin
 
 export function sourcesToBibtex(sources: Source[]): string {
   return sources.map((s) => formatBibtex(s.bibtex)).join('\n\n') + '\n'
+}
+
+// ---- References / bibliography -----------------------------------------
+
+/**
+ * Which bibliography style a References entry is rendered in — only
+ * `'plain'` (author/year/title/venue, one sentence-per-field — see
+ * `formatCitation` in lib/bibtex.ts, already used the same way for a
+ * source's own "formatted citation" display) is actually implemented, but
+ * kept as its own type/parameter from the start, the same reasoning
+ * `CitationStyle` in bibtex.ts already follows for the inline citation
+ * label: a future style (APA proper, MLA, Chicago, numbered…) is purely a
+ * matter of adding a case to `renderBibliographyEntry` below and a new
+ * option to `ExportDialog`'s own selector, never a data migration or a
+ * second code path through the rest of export.ts.
+ */
+export type BibliographyStyle = 'plain'
+
+/** One formatted References entry — the single function a future bibliography-style setting would extend, mirroring `renderCitationLabel` in bibtex.ts for the inline form. */
+export function renderBibliographyEntry(entry: BibtexEntry, _style: BibliographyStyle = 'plain'): string {
+  return formatCitation(entry)
+}
+
+/** Every source this essay actually cites, resolved against `sources` (silently dropping a cited id with no matching source — deleted since, or never synced) and sorted by first author/title for a stable, conventional reading order — not by insertion order, which would read as arbitrary. */
+function citedSources(nodeMap: Map<string, EssayNode>, sources: Map<string, Source>): Source[] {
+  const ids = collectUsedSourceIds(nodeMap)
+  return Array.from(ids)
+    .map((id) => sources.get(id))
+    .filter((s): s is Source => !!s)
+    .sort((a, b) => (a.bibtex.fields.author || a.bibtex.fields.title || a.bibtex.key).localeCompare(b.bibtex.fields.author || b.bibtex.fields.title || b.bibtex.key))
+}
+
+/** A "## References" section — one list item per cited source — appended to `essayToMarkdown`'s own output for the plain .md export. Empty string (nothing appended at all) when the essay cites no sources. */
+export function referencesMarkdown(nodeMap: Map<string, EssayNode>, sources: Map<string, Source>, style: BibliographyStyle = 'plain'): string {
+  const cited = citedSources(nodeMap, sources)
+  if (cited.length === 0) return ''
+  const items = cited.map((s) => `- ${mdEscapeText(renderBibliographyEntry(s.bibtex, style))}`)
+  return `\n\n## References\n\n${items.join('\n')}\n`
+}
+
+/**
+ * The print/PDF export's own References section — built and appended
+ * separately from the numbered, ruled main body (`addPrintChrome`'s own
+ * job), rather than flowing "## References" through that same pipeline:
+ * a references list conventionally isn't numbered as "N. References"
+ * alongside the essay's real sections, and isn't underlined with the
+ * same per-section rule either, so it deliberately sits outside what
+ * that function ever sees. Empty string when the essay cites no sources.
+ */
+export function referencesHtml(nodeMap: Map<string, EssayNode>, sources: Map<string, Source>, style: BibliographyStyle = 'plain'): string {
+  const cited = citedSources(nodeMap, sources)
+  if (cited.length === 0) return ''
+  const items = cited.map((s) => `<li>${escapeHtml(renderBibliographyEntry(s.bibtex, style))}</li>`)
+  return `<h2 class="print-references-heading">References</h2><ul class="print-references-list">${items.join('')}</ul>`
 }
