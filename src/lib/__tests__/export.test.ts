@@ -235,6 +235,28 @@ describe('lists in the LaTeX export', () => {
   })
 })
 
+describe('an empty <b>/<strong>/<i>/<em> left over from a formatting toggle with nothing typed', () => {
+  it('drops an empty <strong> entirely instead of emitting "****", which markdownToHtml cannot round-trip as bold', () => {
+    const root = makeNode({ id: 'root', draftContent: '<p><strong></strong>Real text right after it.</p>' })
+    const md = essayToMarkdown(makeEssay('root'), new Map([['root', root]]))
+    expect(md).not.toContain('****')
+    expect(md).toContain('Real text right after it.')
+  })
+
+  it('reproduces, and fixes, the real bug: an empty bold span as the very first content after the title no longer leaves two stray asterisks in the printed output', () => {
+    const root = makeNode({ id: 'root', draftContent: '<p><strong></strong>Body text.</p>' })
+    const html = markdownToHtml(essayToMarkdown(makeEssay('root'), new Map([['root', root]])))
+    expect(html).not.toContain('*')
+    expect(html).toContain('<p>Body text.</p>')
+  })
+
+  it('does the same for an empty <i>/<em>', () => {
+    const root = makeNode({ id: 'root', draftContent: '<p><em></em>Body text.</p>' })
+    const html = markdownToHtml(essayToMarkdown(makeEssay('root'), new Map([['root', root]])))
+    expect(html).not.toContain('*')
+  })
+})
+
 describe('underline in export', () => {
   it('passes underline through as raw <u> in Markdown and renders it back in print HTML', () => {
     const root = makeNode({ id: 'root', draftContent: '<p>Some <u>underlined</u> text.</p>' })

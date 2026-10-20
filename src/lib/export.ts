@@ -38,10 +38,28 @@ function inlineHtmlToMarkdown(node: Node, fnCtx: MarkdownFootnoteCtx): string {
   switch (tag) {
     case 'b':
     case 'strong':
-      return `**${inner()}**`
     case 'i':
-    case 'em':
-      return `*${inner()}*`
+    case 'em': {
+      // An empty `<b>`/`<strong>`/`<i>`/`<em>` — a stray leftover from
+      // toggling a formatting button on, typing nothing (or typing then
+      // deleting everything) while it's still active, and clicking away —
+      // carries no visible content, so wrapping nothing in `**`/`*`
+      // markers would just inject bare, meaningless punctuation into the
+      // Markdown. Worse than simply pointless: `markdownToHtml`'s own
+      // bold regex requires at least one character between its two `**`
+      // pairs, so an empty bold's own `****` fails to match there and
+      // falls through to the *italic* regex instead, which happily
+      // matches three of the four as `<em>*</em>` and leaves the fourth
+      // sitting right after it as a stray, literal character — this is
+      // the actual mechanism behind a real reported bug (an empty bold
+      // span landing right after the essay title rendering as two
+      // orphaned asterisks in the print view). Dropping empty formatting
+      // here, at the source, is simpler and more robust than trying to
+      // patch around it in the Markdown parser.
+      const content = inner()
+      if (!content) return ''
+      return tag === 'b' || tag === 'strong' ? `**${content}**` : `*${content}*`
+    }
     case 'u':
       // Markdown has no native underline syntax — passed through as raw
       // inline HTML instead (which every Markdown flavor this app cares
