@@ -1,7 +1,7 @@
 import { backend } from '../storage'
 import { id } from '../lib/id'
 import { getChildIds, insertMarkerInContent, removeMarkerFromContent, type MarkerPlacement } from '../lib/childMarkers'
-import { citationHtml, citationLabel, extractLegacyCitationNote } from '../lib/bibtex'
+import { citationHtml, citationLabelOpen, extractLegacyCitationNote } from '../lib/bibtex'
 import { listSources } from './sourcesRepo'
 import type { Comment, Essay, EssayNode, Footnote, NodeVersion, Source } from './types'
 
@@ -115,7 +115,7 @@ async function syncCitationsInHtml(html: string, sourceFor: (sourceId: string) =
     }
     if (!source) continue // nothing to refresh the label from — leave exactly as is
     const base = el.querySelector(':scope > .citation-base')
-    if (base?.textContent === citationLabel(source.bibtex)) continue // already accurate
+    if (base?.textContent === citationLabelOpen(source.bibtex)) continue // already accurate
     replaceWithFreshCitation(doc, el, source, el.getAttribute('data-note') ?? undefined)
     changed = true
   }

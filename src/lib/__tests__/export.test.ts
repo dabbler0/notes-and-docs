@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { addPrintChrome, essayToLatex, essayToMarkdown, markdownToHtml, referencesHtml, referencesMarkdown } from '../export'
+import { addPrintChrome, essayToLatex, essayToMarkdown, floatPrintFootnotes, markdownToHtml, referencesHtml, referencesMarkdown } from '../export'
 import { citationHtml } from '../bibtex'
 import { markerHtml } from '../childMarkers'
 import type { Essay, EssayNode, Source } from '../../models/types'
@@ -448,10 +448,16 @@ describe('print-mode citation styling (essayToMarkdown\'s citationOptions)', () 
     expect(markdownToHtml(md)).toContain('As argued [2].')
   })
 
-  it('still appends the note for every style', () => {
+  it('still includes the note for every style, folded inside the closing delimiter', () => {
     const { nodeMap, sources, sourceId } = sourceAndCitation('p. 5')
     const md = essayToMarkdown(makeEssay('root'), nodeMap, { citationOptions: { sources, style: 'author-year', placement: 'inline', orderedSourceIds: [sourceId] } })
-    expect(md).toContain('(Smith, 2020), p. 5')
+    expect(md).toContain('(Smith, 2020, p. 5)')
+  })
+
+  it('folds the note inside the brackets for numbered style too', () => {
+    const { nodeMap, sources, sourceId } = sourceAndCitation('p. 5')
+    const md = essayToMarkdown(makeEssay('root'), nodeMap, { citationOptions: { sources, style: 'numbered', placement: 'inline', orderedSourceIds: [sourceId] } })
+    expect(markdownToHtml(md)).toContain('[1, p. 5]')
   })
 
   it('footnote placement replaces the citation with a numbered footnote reference whose body is the full citation', () => {
@@ -485,6 +491,40 @@ describe('print-mode citation styling (essayToMarkdown\'s citationOptions)', () 
     const { nodeMap } = sourceAndCitation()
     const md = essayToMarkdown(makeEssay('root'), nodeMap)
     expect(md).toContain('As argued (Stale, 1999).')
+  })
+})
+
+describe('floatPrintFootnotes', () => {
+  it('replaces an inline footnote-ref marker with a float:footnote span carrying the footnote body, and drops the end-of-document list', () => {
+    const html = markdownToHtml(
+      essayToMarkdown(makeEssay('root'), new Map([['root', makeNode({ id: 'root', draftContent: '<p>A claim<sup class="footnote-ref" data-footnote-id="f1"></sup>.</p>', footnotes: [{ id: 'f1', content: '<p>The footnote body.</p>' }] })]])),
+    )
+    const floated = floatPrintFootnotes(html)
+    expect(floated).not.toContain('print-footnote-ref')
+    expect(floated).not.toContain('print-footnotes')
+    expect(floated).not.toContain('<ol')
+    expect(floated).toContain('<span class="pagedjs-footnote" data-ref="fn1">The footnote body.</span>')
+  })
+
+  it('carries each footnote\'s own id through as data-ref, so multiple footnotes stay distinguishable', () => {
+    const root = makeNode({
+      id: 'root',
+      draftContent: '<p>First<sup class="footnote-ref" data-footnote-id="f1"></sup> and second<sup class="footnote-ref" data-footnote-id="f2"></sup>.</p>',
+      footnotes: [
+        { id: 'f1', content: '<p>First note.</p>' },
+        { id: 'f2', content: '<p>Second note.</p>' },
+      ],
+    })
+    const html = markdownToHtml(essayToMarkdown(makeEssay('root'), new Map([['root', root]])))
+    const floated = floatPrintFootnotes(html)
+    expect(floated).toContain('data-ref="fn1">First note.</span>')
+    expect(floated).toContain('data-ref="fn2">Second note.</span>')
+  })
+
+  it('leaves html with no footnotes at all completely untouched', () => {
+    const root = makeNode({ id: 'root', draftContent: '<p>Plain text, nothing fancy.</p>' })
+    const html = markdownToHtml(essayToMarkdown(makeEssay('root'), new Map([['root', root]])))
+    expect(floatPrintFootnotes(html)).toBe(html)
   })
 })
 

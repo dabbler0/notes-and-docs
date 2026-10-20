@@ -318,10 +318,7 @@ function QuoteBankPicker({ selectedId, onSelect }: { selectedId: string | null; 
               <div className="card-title">
                 “{e.quoteText.length > 140 ? e.quoteText.slice(0, 140) + '…' : e.quoteText}”
               </div>
-              <div className="card-meta">
-                {citationLabel(source.bibtex)}
-                {citationPage(source, e.page) ? `, p. ${citationPage(source, e.page)}` : ''}
-              </div>
+              <div className="card-meta">{citationLabel(source.bibtex, citationPage(source, e.page) ? `p. ${citationPage(source, e.page)}` : undefined)}</div>
               {e.annotation && <div className="card-meta">{e.annotation}</div>}
             </div>
           )

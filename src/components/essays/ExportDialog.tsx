@@ -8,6 +8,7 @@ import {
   collectUsedSourceIds,
   essayToLatex,
   essayToMarkdown,
+  floatPrintFootnotes,
   markdownToHtml,
   referencesHtml,
   referencesMarkdown,
@@ -20,27 +21,55 @@ import { downloadBlob, filenameFor } from '../../lib/download'
 import { escapeHtml } from '../../lib/html'
 import { getAuthorName } from '../../lib/authorPreference'
 import type { Essay, EssayNode } from '../../models/types'
-// Raw CSS text / a base64 data: URI (Vite's `?inline` query — forced
-// regardless of the normal multi-file build's own size-based inlining
-// threshold, see vite.config.ts's `assetsInlineLimit`), not the ordinary
-// side-effect import `main.tsx` uses — the print-preview window below is
-// a whole separate document (`win.document.write(...)`), which has no
-// access to this page's own stylesheets *or* same-origin asset URLs at
-// all (a plain `/assets/...woff2` reference can't be relied on to
+// Raw CSS/JS text / a base64 data: URI (Vite's `?raw`/`?inline` query
+// suffixes — forced regardless of the normal multi-file build's own
+// size-based inlining threshold, see vite.config.ts's
+// `assetsInlineLimit`), not the ordinary side-effect import `main.tsx`
+// uses — the print-preview window below is a whole separate document
+// (`win.document.write(...)`), which has no access to this page's own
+// stylesheets, scripts, *or* same-origin asset URLs at all (a plain
+// `/assets/...woff2` or `/assets/....js` reference can't be relied on to
 // resolve from a `window.open('', ...)` blank document across every
 // browser), so everything the print view needs — KaTeX's own CSS (for an
-// equation rendered into it by `markdownToHtml`'s `renderMathHtml`) and
-// this serif face's two font files — gets inlined directly into that
-// document's own `<style>`, same "nothing loaded at runtime from
-// anywhere else" reasoning the rest of this app's own build already
-// follows.
+// equation rendered into it by `markdownToHtml`'s `renderMathHtml`), this
+// serif face's two font files, and Paged.js itself (see `exportPdf`'s own
+// doc comment on why it's needed at all) — gets inlined directly into
+// that document's own `<style>`/`<script>`, same "nothing loaded at
+// runtime from anywhere else" reasoning the rest of this app's own build
+// already follows.
 import katexCss from 'katex/dist/katex.min.css?inline'
 import garamondRegularUrl from '../../assets/fonts/EBGaramond-Regular.woff2?inline'
 import garamondItalicUrl from '../../assets/fonts/EBGaramond-Italic.woff2?inline'
+// pagedjs's own package.json `exports` map only declares its root entry
+// (`.` -> src/index.js, a dev/Node build) — no subpath for
+// `dist/paged.js`, the pre-bundled browser build actually needed here as
+// raw text (see this function's own doc comment on why Paged.js is
+// needed at all). A bare `'pagedjs/dist/paged.js?raw'` specifier fails
+// Node's own exports-map validation during the production build for
+// exactly that reason — this direct relative path into node_modules
+// reads the same file straight off disk instead, bypassing that map
+// entirely, the same way reaching any other vendored file outside a
+// package's declared exports would.
+import pagedJsSource from '../../../node_modules/pagedjs/dist/paged.js?raw'
 
 /** CSS `@page` margin-box `content` strings are ordinary CSS string literals — backslashes and double quotes need the same escaping any other hand-built CSS string value would. */
 function cssStringEscape(s: string): string {
   return s.replace(/\\/g, '\\\\').replace(/"/g, '\\"')
+}
+
+/**
+ * Defensive escaping for anything spliced into the print-preview window's
+ * own inline `<script>` block (see `exportPdf`): the HTML parser looks for
+ * a literal `</script` substring to end that element *before* any JS
+ * syntax is ever considered, so a stray occurrence inside Paged.js's own
+ * source or a JSON-stringified CSS string would otherwise truncate the
+ * script early. Checked empirically that neither ever actually contains
+ * one today, but this is a one-line guard against a future Paged.js
+ * version (or essay title/author text folded into the CSS string) that
+ * does, same precaution any other inline-`<script>`-templating code needs.
+ */
+function scriptSafe(s: string): string {
+  return s.replace(/<\/script/gi, '<\\/script')
 }
 
 export function ExportDialog({ essay, nodeMap, onClose }: { essay: Essay; nodeMap: Map<string, EssayNode>; onClose: () => void }) {
@@ -61,6 +90,38 @@ export function ExportDialog({ essay, nodeMap, onClose }: { essay: Essay; nodeMa
     }
   }
 
+  /**
+   * Renders the print view through Paged.js (bundled locally, see the
+   * `?raw` import above) rather than handing the browser's native print
+   * engine a single flowing document the way earlier versions of this
+   * export did. Two things neither Chromium's own print engine nor plain
+   * CSS `@page` margin boxes can do at all, confirmed directly against
+   * this app's actual target before committing to this approach:
+   *
+   * - Real per-page footnotes. CSS Paged Media's own `float: footnote`
+   *   (what `floatPrintFootnotes` marks each footnote up for) has no
+   *   native Chromium support — a `float: footnote` element just renders
+   *   inline, exactly where it sits in the flow, which is why footnotes
+   *   used to be collected into one list at the very end of the document
+   *   instead. Paged.js's own Footnotes module reimplements the real
+   *   layout algorithm in JS: each footnote floats to the bottom of
+   *   whichever physical page its own reference actually lands on, with
+   *   its call number auto-generated from a page-scoped CSS counter.
+   * - Alternating recto/verso page numbers. `@page :left`/`:right` are
+   *   real standard CSS pseudo-classes, but only Paged.js's own
+   *   from-scratch pagination actually resolves them against which
+   *   physical page a given one of its own page boxes ends up as —
+   *   Chromium's print engine doesn't implement them at all.
+   *
+   * Paged.js also replaces the native print engine's own `@page` margin
+   * boxes for the header and "Page N" footer from here on — same CSS
+   * mechanism as before, just resolved by Paged.js's own layout pass
+   * instead of the browser's, so it can stay consistent with the
+   * recto/verso footer positioning above. `window.print()` fires once
+   * Paged.js's own `preview()` promise resolves (pagination has actually
+   * finished), rather than the fixed timeout the old plain-print flow
+   * needed to guess how long native layout might take.
+   */
   async function exportPdf() {
     setBusy('pdf')
     try {
@@ -68,67 +129,91 @@ export function ExportDialog({ essay, nodeMap, onClose }: { essay: Essay; nodeMa
       const orderedSourceIds = citedSources(nodeMap, sources).map((s) => s.id)
       const md = essayToMarkdown(essay, nodeMap, { citationOptions: { sources, style: citationStyle, placement: citationPlacement, orderedSourceIds } })
       const numberedReferences = citationPlacement === 'inline' && citationStyle === 'numbered'
-      const bodyHtml = addPrintChrome(markdownToHtml(md)) + referencesHtml(nodeMap, sources, bibliographyStyle, numberedReferences)
+      const rawBodyHtml = addPrintChrome(markdownToHtml(md)) + referencesHtml(nodeMap, sources, bibliographyStyle, numberedReferences)
+      const bodyHtml = floatPrintFootnotes(rawBodyHtml)
       const win = window.open('', '_blank')
       if (!win) {
         alert('Your browser blocked the print preview pop-up — allow pop-ups for this page and try again.')
         return
       }
       const authorName = getAuthorName()
-      // The browser's own print engine — not the on-screen preview, which
-      // never shows a `@page` margin box at all — repeats these on every
-      // physical page: a real, standards-based header/footer (confirmed
-      // directly against this app's actual target, Chromium's print-to-PDF
-      // path), not a `position: fixed` approximation, which is why a real
-      // "Page N of M" is even possible here at all (`counter(pages)` only
-      // has a meaningful value once the browser has actually paginated the
-      // content, something no script running in the page itself can ever
-      // observe — there's no DOM-level "how many pages will this be").
       const headerText = cssStringEscape(authorName ? `${essay.title} — ${authorName}` : essay.title)
+      const printCss = `
+        ${katexCss}
+        @page {
+          size: letter;
+          margin: 85px 50px 65px;
+          @top-center { content: "${headerText}"; font-family: 'EB Garamond', Georgia, serif; font-variant: small-caps; letter-spacing: 0.03em; font-size: 11px; color: #666; }
+        }
+        /* A book's own running folio: the page number sits in the outer
+           bottom corner — left on a verso (left-hand) page, right on a
+           recto (right-hand) one — rather than centered, so it's always
+           the corner nearest the edge of the open book. */
+        @page :left { @bottom-left { content: counter(page); font-family: 'EB Garamond', Georgia, serif; font-variant: small-caps; font-size: 10px; color: #666; } }
+        @page :right { @bottom-right { content: counter(page); font-family: 'EB Garamond', Georgia, serif; font-variant: small-caps; font-size: 10px; color: #666; } }
+        /* EB Garamond (SIL OFL 1.1 — see src/assets/fonts/OFL.txt) is a
+           real variable font (weight 400-800 in one file per style), so
+           one @font-face per style, not one per weight, correctly
+           covers both the body text and every bold heading below. */
+        @font-face { font-family: 'EB Garamond'; font-style: normal; font-weight: 400 800; src: url(${garamondRegularUrl}) format('woff2'); font-display: swap; }
+        @font-face { font-family: 'EB Garamond'; font-style: italic; font-weight: 400 800; src: url(${garamondItalicUrl}) format('woff2'); font-display: swap; }
+        body { font-family: 'EB Garamond', Georgia, 'Times New Roman', serif; line-height: 1.6; color: #1a1a1a; }
+        h1, h2, h3, h4, h5, h6 { font-family: 'EB Garamond', Georgia, 'Times New Roman', serif; font-weight: 700; margin-bottom: 0; }
+        /* Single-direction paragraph spacing (margin-top always 0) so a
+           heading's own margin-bottom is what actually controls the gap
+           below it, rather than being swallowed by the usual CSS
+           margin-collapsing between a heading's bottom margin and the
+           next paragraph's own top one. */
+        p { margin: 0 0 1em; }
+        h3, h4, h5, h6 { margin-top: 1.4em; margin-bottom: 0.3em; }
+        .print-title-rule { border: none; border-top: 4px solid #1a1a1a; margin: 0 0 32px; }
+        .print-section-rule { border: none; border-top: 1px solid #bbb; margin: 0 0 28px; }
+        blockquote { border-left: 3px solid #999; margin: 1em 0; padding-left: 1em; color: #444; }
+        .katex-display { margin: 1em 0; }
+        /* Deliberately outside addPrintChrome's own numbering/rule pass
+           (see referencesHtml's own doc comment) — a plain heading and a
+           hanging-indent list, the conventional bibliography layout. */
+        .print-references-heading { margin-top: 2.4em; }
+        .print-references-list { margin: 0.6em 0 0; }
+        ul.print-references-list { list-style: none; padding: 0; }
+        ul.print-references-list li { margin: 0 0 0.8em 1.6em; text-indent: -1.6em; }
+        ol.print-references-list { padding-left: 1.8em; }
+        ol.print-references-list li { margin: 0 0 0.8em; }
+        /* floatPrintFootnotes() (lib/export.ts) marks each footnote up as
+           one of these — Paged.js's own Footnotes module (see this
+           function's own doc comment) recognizes the bare float: footnote
+           declaration and does the rest: floating it to the bottom of
+           whichever page its call ends up on, and driving the
+           ::footnote-marker/::footnote-call counters below. */
+        .pagedjs-footnote { float: footnote; font-size: 0.85em; line-height: 1.4; }
+        ::footnote-marker { content: counter(footnote) ". "; }
+        ::footnote-call { content: counter(footnote); vertical-align: super; font-size: 0.7em; }
+      `
       win.document.write(
-        `<!doctype html><html><head><title>${escapeHtml(essay.title)}</title><meta charset="utf-8"><style>${katexCss}</style><style>
-          @page {
-            margin: 85px 50px 65px;
-            @top-center { content: "${headerText}"; font-family: Georgia, 'Times New Roman', serif; font-size: 10px; color: #666; }
-            @bottom-center { content: "Page " counter(page) " of " counter(pages); font-family: Georgia, 'Times New Roman', serif; font-size: 10px; color: #666; }
-          }
-          /* EB Garamond (SIL OFL 1.1 — see src/assets/fonts/OFL.txt) is a
-             real variable font (weight 400-800 in one file per style), so
-             one @font-face per style, not one per weight, correctly
-             covers both the body text and every bold heading below. */
-          @font-face { font-family: 'EB Garamond'; font-style: normal; font-weight: 400 800; src: url(${garamondRegularUrl}) format('woff2'); font-display: swap; }
-          @font-face { font-family: 'EB Garamond'; font-style: italic; font-weight: 400 800; src: url(${garamondItalicUrl}) format('woff2'); font-display: swap; }
-          body { font-family: 'EB Garamond', Georgia, 'Times New Roman', serif; max-width: 720px; margin: 40px auto; line-height: 1.6; color: #1a1a1a; padding: 0 20px; }
-          h1, h2, h3, h4, h5, h6 { font-family: 'EB Garamond', Georgia, 'Times New Roman', serif; font-weight: 700; margin-bottom: 0; }
-          /* Single-direction paragraph spacing (margin-top always 0) so a
-             heading's own margin-bottom is what actually controls the gap
-             below it, rather than being swallowed by the usual CSS
-             margin-collapsing between a heading's bottom margin and the
-             next paragraph's own top one. */
-          p { margin: 0 0 1em; }
-          h3, h4, h5, h6 { margin-top: 1.4em; margin-bottom: 0.3em; }
-          .print-title-rule { border: none; border-top: 4px solid #1a1a1a; margin: 0 0 32px; }
-          .print-section-rule { border: none; border-top: 1px solid #bbb; margin: 0 0 28px; }
-          blockquote { border-left: 3px solid #999; margin: 1em 0; padding-left: 1em; color: #444; }
-          .katex-display { margin: 1em 0; }
-          /* Deliberately outside addPrintChrome's own numbering/rule pass
-             (see referencesHtml's own doc comment) — a plain heading and a
-             hanging-indent list, the conventional bibliography layout. */
-          .print-references-heading { margin-top: 2.4em; }
-          .print-references-list { margin: 0.6em 0 0; }
-          ul.print-references-list { list-style: none; padding: 0; }
-          ul.print-references-list li { margin: 0 0 0.8em 1.6em; text-indent: -1.6em; }
-          ol.print-references-list { padding-left: 1.8em; }
-          ol.print-references-list li { margin: 0 0 0.8em; }
-          @media print { body { margin: 0; max-width: none; } }
-        </style></head><body>${bodyHtml}</body></html>`,
+        `<!doctype html><html><head><title>${escapeHtml(essay.title)}</title><meta charset="utf-8">
+        <style>html, body { margin: 0; } #pagedjs-loading { font-family: Georgia, serif; color: #888; padding: 48px; }</style>
+        <script>${scriptSafe(pagedJsSource)}</script>
+        </head><body>
+        <p id="pagedjs-loading">Preparing print layout…</p>
+        <div id="print-source" style="display:none">${bodyHtml}</div>
+        <script>${scriptSafe(`
+          (function () {
+            var sourceEl = document.getElementById('print-source')
+            var html = sourceEl.innerHTML
+            sourceEl.remove()
+            var css = ${JSON.stringify(printCss)}
+            var previewer = new Paged.Previewer()
+            previewer.preview(html, [{ _text: css }], document.body).then(function () {
+              var loading = document.getElementById('pagedjs-loading')
+              if (loading) loading.remove()
+              window.print()
+            })
+          })()
+        `)}</script>
+        </body></html>`,
       )
       win.document.close()
       win.focus()
-      // Give the new document a moment to lay out before the print dialog
-      // (which is itself the "export to PDF" step — most browsers' print
-      // dialogs offer "Save as PDF" as a destination) pops up over it.
-      setTimeout(() => win.print(), 300)
     } finally {
       setBusy(null)
     }
@@ -176,7 +261,11 @@ export function ExportDialog({ essay, nodeMap, onClose }: { essay: Essay; nodeMa
         <div className="export-option">
           <div className="export-option-body">
             <div className="export-option-title">PDF</div>
-            <p className="muted">Renders that same Markdown (References section included) as a printable page in a new tab, then opens your browser's print dialog — choose “Save as PDF.” Adds a page header (title, and your name if set under Sync → Your name) and a “Page N of M” footer.</p>
+            <p className="muted">
+              Renders that same Markdown (References section included) as a printable page in a new tab, then opens your browser's print dialog — choose “Save as PDF.” Adds a small-caps page header
+              (title, and your name if set under Sync → Your name) and a running page number in the bottom outer corner, alternating sides like a printed book. Footnotes print at the bottom of the
+              page they're referenced on.
+            </p>
             <label className="field-inline">
               Citations
               <select value={citationPlacement} onChange={(e) => setCitationPlacement((e.target as HTMLSelectElement).value as PrintCitationPlacement)}>

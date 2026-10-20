@@ -757,20 +757,21 @@ function cssEscapeId(s: string): string {
 
 /**
  * Keeps a citation chip's own `data-note` attribute in sync with
- * whatever's actually typed after its `.citation-base` span — see
- * `citationHtml`'s own doc comment in lib/bibtex.ts for why that span is
- * `contenteditable="false"` (the generated author/date text) while
- * everything after it is ordinary editable content (the freeform note):
- * typing there, including deleting it down to nothing, *is* the edit,
- * with no separate confirm step — this just has to notice it happened.
- * Checked on every `input` event; the `class="citation"` substring check
- * up front skips the common case (an input event nowhere near a
- * citation) without ever touching the DOM below `root`.
+ * whatever's actually typed between its `.citation-base` and
+ * `.citation-close` spans — see `citationHtml`'s own doc comment in
+ * lib/bibtex.ts for why those two spans are `contenteditable="false"`
+ * (the generated author/date text, and the closing paren) while
+ * everything between them is ordinary editable content (the freeform
+ * note): typing there, including deleting it down to nothing, *is* the
+ * edit, with no separate confirm step — this just has to notice it
+ * happened. Checked on every `input` event; the `class="citation"`
+ * substring check up front skips the common case (an input event nowhere
+ * near a citation) without ever touching the DOM below `root`.
  *
  * A chip's own leading separator (", " for the one style that exists
  * today — see `citationNoteSeparator`) is just more of that same
- * editable text, not regenerated here: whatever's left after the base
- * span, comma and surrounding whitespace stripped, is the note,
+ * editable text, not regenerated here: whatever's between the base and
+ * close spans, comma and surrounding whitespace stripped, is the note,
  * verbatim. Typing straight after the base span with no comma at all
  * still works the same way — there's nothing to strip, so the typed text
  * becomes the note directly.
@@ -779,9 +780,12 @@ function syncCitationNotes(root: HTMLElement) {
   if (!root.innerHTML.includes('citation')) return
   root.querySelectorAll<HTMLElement>('.citation[data-cite-v]').forEach((chip) => {
     const base = chip.querySelector(':scope > .citation-base')
+    const close = chip.querySelector(':scope > .citation-close')
     const baseLength = base?.textContent?.length ?? 0
-    const note = (chip.textContent ?? '')
-      .slice(baseLength)
+    const closeLength = close?.textContent?.length ?? 0
+    const full = chip.textContent ?? ''
+    const note = full
+      .slice(baseLength, full.length - closeLength)
       // The lone zero-width space `citationHtml` (lib/bibtex.ts) plants
       // as a caret-landing placeholder when there's no note yet is never
       // real content — stripped first so it can't end up masquerading as

@@ -107,11 +107,12 @@ describe('syncCitations: legacy citation migration (via getNode)', () => {
     expect(reloaded.draftContent).toContain('data-cite-v="2"')
     expect(reloaded.draftContent).toContain('data-note="p5"')
     // The rendered label is split across a non-editable `.citation-base`
-    // span and plain trailing text (see citationHtml's own doc comment in
-    // lib/bibtex.ts) — "(Smith, 2020)" and ", p5" don't sit contiguously
-    // in the markup, so they're checked separately rather than as one
-    // continuous substring.
-    expect(reloaded.draftContent).toContain('class="citation-base" contenteditable="false">(Smith, 2020)</span>, p5')
+    // span, plain trailing text, and a non-editable `.citation-close`
+    // span (see citationHtml's own doc comment in lib/bibtex.ts) — so the
+    // note reads inside the parens, "(Smith, 2020, p5)", even though
+    // "(Smith, 2020" and "p5)" don't sit contiguously in the markup
+    // itself.
+    expect(reloaded.draftContent).toContain('class="citation-base" contenteditable="false">(Smith, 2020</span>, p5<span class="citation-close" contenteditable="false">)</span>')
   })
 
   it('recovers a page range, not just a single page', async () => {
@@ -134,7 +135,11 @@ describe('syncCitations: legacy citation migration (via getNode)', () => {
 
     const reloaded = (await getNode(essay.rootNodeId))!
     expect(reloaded.draftContent).not.toContain('data-note')
-    expect(reloaded.draftContent).toContain('(Smith, 2020)')
+    // The base/close split (see citationHtml's own doc comment) means the
+    // full "(Smith, 2020)" text doesn't sit contiguously in the markup —
+    // checked as its two non-editable pieces instead.
+    expect(reloaded.draftContent).toContain('class="citation-base" contenteditable="false">(Smith, 2020</span>')
+    expect(reloaded.draftContent).toContain('<span class="citation-close" contenteditable="false">)</span>')
   })
 
   it('omits the note when the old label only ever mentioned the publication year', async () => {
@@ -146,7 +151,8 @@ describe('syncCitations: legacy citation migration (via getNode)', () => {
 
     const reloaded = (await getNode(essay.rootNodeId))!
     expect(reloaded.draftContent).not.toContain('data-note')
-    expect(reloaded.draftContent).toContain('(Smith, 2020)')
+    expect(reloaded.draftContent).toContain('class="citation-base" contenteditable="false">(Smith, 2020</span>')
+    expect(reloaded.draftContent).toContain('<span class="citation-close" contenteditable="false">)</span>')
   })
 
   it('falls back to flattening to plain text when the chip has no data-source-id at all', async () => {
@@ -228,7 +234,7 @@ describe('syncCitations: refreshing an already-structured chip\'s label (via get
     await updateSource(source)
 
     const reloaded = (await getNode(essay.rootNodeId))!
-    expect(reloaded.draftContent).toContain('class="citation-base" contenteditable="false">(Smith, 2020)</span>, p. 5')
+    expect(reloaded.draftContent).toContain('class="citation-base" contenteditable="false">(Smith, 2020</span>, p. 5<span class="citation-close" contenteditable="false">)</span>')
     expect(reloaded.draftContent).toContain('data-note="p. 5"') // the chip's own freeform note survives the refresh verbatim
     expect(reloaded.draftContent).not.toContain('2020-2020')
   })
@@ -273,7 +279,8 @@ describe('syncCitations: refreshing an already-structured chip\'s label (via get
 
     const reloaded = (await getNode(essay.rootNodeId))!
     const oldVersion = reloaded.versions.find((v) => v.content.includes('Old text'))!
-    expect(oldVersion.content).toContain('(Smith, 2020)</span>')
+    expect(oldVersion.content).toContain('class="citation-base" contenteditable="false">(Smith, 2020</span>')
+    expect(oldVersion.content).toContain('<span class="citation-close" contenteditable="false">)</span>')
     expect(oldVersion.content).not.toContain('2020-2020')
   })
 })

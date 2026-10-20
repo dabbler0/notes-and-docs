@@ -122,20 +122,50 @@ function shortAuthorNames(authors: string | undefined, fallback: string): string
   return `${names[0]} et al.`
 }
 
-/** Short inline citation label, e.g. "(Smith, 2020)" or "(Smith & Lee, 2020)". */
-export function citationLabel(entry: BibtexEntry): string {
+/** The part of `citationLabel`'s output inside the parens, e.g. "Smith, 2020" — shared with `citationLabelOpen` below, which needs the same text but without the closing paren. */
+function authorYearCore(entry: BibtexEntry): string {
   const year = entry.fields.year ?? 'n.d.'
-  return `(${shortAuthorNames(entry.fields.author, entry.key)}, ${year})`
+  return `${shortAuthorNames(entry.fields.author, entry.key)}, ${year}`
+}
+
+/** The author-title equivalent of `authorYearCore`, e.g. 'Smith, "An Early Paper"'. */
+function authorTitleCore(entry: BibtexEntry): string {
+  const title = entry.fields.title || entry.key
+  return `${shortAuthorNames(entry.fields.author, entry.key)}, "${title}"`
+}
+
+/**
+ * Short inline citation label, e.g. "(Smith, 2020)" — or, with a freeform
+ * note (a page number, "ch. 3", …), "(Smith, 2020, p. 12)": the note sits
+ * *inside* the parens, alongside the author/year, rather than trailing
+ * them outside — e.g. "(Smith, 2020, p. 12)" not "(Smith, 2020), p. 12".
+ */
+export function citationLabel(entry: BibtexEntry, note?: string): string {
+  const core = authorYearCore(entry)
+  return note ? `(${core}, ${note})` : `(${core})`
 }
 
 /**
  * The print export's "author-title" citation style, e.g. '(Smith, "An
- * Early Paper")' or '(Smith et al., "Longer Title")' for 3+ authors — see
- * `PrintCitationStyle` in lib/export.ts for where this is chosen from.
+ * Early Paper")' or '(Smith et al., "Longer Title", p. 12)' with a note —
+ * see `PrintCitationStyle` in lib/export.ts for where this is chosen from.
  */
-export function citationLabelAuthorTitle(entry: BibtexEntry): string {
-  const title = entry.fields.title || entry.key
-  return `(${shortAuthorNames(entry.fields.author, entry.key)}, "${title}")`
+export function citationLabelAuthorTitle(entry: BibtexEntry, note?: string): string {
+  const core = authorTitleCore(entry)
+  return note ? `(${core}, ${note})` : `(${core})`
+}
+
+/**
+ * The citation chip's own non-editable prefix (see `citationHtml`'s doc
+ * comment on why the chip is split into a fixed base and an editable
+ * note): the opening paren plus author/year, deliberately *without* the
+ * closing paren — the note (editable) and a fixed closing-paren span both
+ * come after it, so the rendered result still reads as one parenthetical
+ * with the note inside it ("(Smith, 2020, p. 12)") while only the note
+ * itself is ever actually edited in place.
+ */
+export function citationLabelOpen(entry: BibtexEntry): string {
+  return `(${authorYearCore(entry)}`
 }
 
 export function displayTitle(entry: BibtexEntry): string {
@@ -267,19 +297,17 @@ export type CitationStyle = 'author-date'
  * `CitationStyle`'s own doc comment.
  */
 export function renderCitationLabel(entry: BibtexEntry, note?: string, _style: CitationStyle = 'author-date'): string {
-  const base = citationLabel(entry)
-  return note ? `${base}, ${note}` : base
+  return citationLabel(entry, note)
 }
 
 /**
  * The literal text (", " for `'author-date'`, the only style that exists
- * today) joining `citationLabel`'s own output to a freeform note, when
+ * today) joining `citationLabelOpen`'s own output to a freeform note, when
  * there is one — `citationHtml` needs this on its own, split out from
- * `renderCitationLabel` above, since the note has to be its own real text
- * node in the DOM (see that function's own doc comment on why) rather
- * than baked into one flat label string. A future second style would
- * need its own separator here too, alongside its own case in
- * `renderCitationLabel`.
+ * `citationLabel` above, since the note has to be its own real text node
+ * in the DOM (see that function's own doc comment on why) rather than
+ * baked into one flat label string. A future second style would need its
+ * own separator here too.
  */
 export function citationNoteSeparator(_style: CitationStyle = 'author-date'): string {
   return ', '
@@ -311,18 +339,23 @@ export function pageNote(source: Source, page: number | undefined): string {
  * citation in a different style later, without re-deriving anything from
  * the display text itself.
  *
- * The rendered content is split into two pieces, not one flat label
- * string: `citationLabel`'s own output sits in a `.citation-base` span
- * marked `contenteditable="false"`, and the note (plus its separator,
- * when there is one) follows as plain text, a normal sibling inside the
- * chip. `SectionBlock.tsx`'s `syncCitationNotes` reads that trailing text
- * back out on every keystroke and keeps `data-note` in sync with it — so
- * a citation is editable exactly where it has a real freeform field to
- * edit (the note) and nowhere else: the base span is unfocusable/
- * unenterable the same way any other `contenteditable="false"` marker in
- * this editor is (a subsection embed, a footnote ref), so arrow-key
- * navigation and typing both skip over it rather than editing the
- * generated author/date text in place.
+ * The rendered content is split into three pieces, not one flat label
+ * string, so the note reads *inside* the parens ("(Smith, 2020, p. 12)")
+ * while still being independently editable: `citationLabelOpen`'s own
+ * output (the opening paren plus author/year, no closing paren) sits in a
+ * `.citation-base` span marked `contenteditable="false"`, the note (plus
+ * its separator, when there is one) follows as plain text, a normal
+ * sibling inside the chip, and a fixed closing paren closes it out in its
+ * own `.citation-close` span, also `contenteditable="false"`.
+ * `SectionBlock.tsx`'s `syncCitationNotes` reads that middle text back out
+ * on every keystroke (everything between the base and close spans) and
+ * keeps `data-note` in sync with it — so a citation is editable exactly
+ * where it has a real freeform field to edit (the note) and nowhere else:
+ * both the base and close spans are unfocusable/unenterable the same way
+ * any other `contenteditable="false"` marker in this editor is (a
+ * subsection embed, a footnote ref), so arrow-key navigation and typing
+ * both skip over them rather than editing the generated author/date text
+ * or the closing paren in place.
  *
  * `data-cite-v="2"` marks a chip as using this structured shape.
  * `essaysRepo.ts`'s own `syncCitations` upgrades any `.citation` element
@@ -345,29 +378,30 @@ export function pageNote(source: Source, page: number | undefined): string {
  * via `pageNote`. Passing both prefers `note`.
  *
  * A note-less chip still gets one real, invisible zero-width-space
- * character (`​`) after the base span, rather than nothing — the
- * same caret-landing-placeholder trick `insertFootnote` in
+ * character (`​`) between the base and close spans, rather than
+ * nothing — the same caret-landing-placeholder trick `insertFootnote` in
  * EssayWorkspace.tsx uses for its own otherwise-empty marker (see that
  * function's own doc comment for the fuller browser-behavior story),
  * applied here for the opposite reason: that one keeps a blank click
  * from landing *inside* an empty marker, this one keeps it from landing
- * *outside* the chip entirely. Confirmed live: with truly nothing after
- * `.citation-base` (the chip's last child, `contenteditable="false"`),
- * clicking right after the chip and typing placed the new text as a
- * sibling of the whole `<cite>`/`<a>` in the surrounding paragraph
- * instead of inside it, so a citation with no note yet had no way to
- * gain one by typing — only ever extending an *existing* note worked.
- * `syncCitationNotes` strips any zero-width space out of what it reads
- * back as the note, and the export helpers that escape plain text
- * (`mdEscapeText`/`texEscape`) strip it from exported output too, so it
- * never surfaces as a stray invisible character anywhere downstream.
+ * *outside* the editable gap between two adjacent non-editable spans.
+ * Confirmed live: with truly nothing between `.citation-base` and
+ * `.citation-close` (both `contenteditable="false"`), clicking between
+ * them and typing placed the new text as a sibling of the whole
+ * `<cite>`/`<a>` in the surrounding paragraph instead of inside it, so a
+ * citation with no note yet had no way to gain one by typing — only ever
+ * extending an *existing* note worked. `syncCitationNotes` strips any
+ * zero-width space out of what it reads back as the note, and the export
+ * helpers that escape plain text (`mdEscapeText`/`texEscape`) strip it
+ * from exported output too, so it never surfaces as a stray invisible
+ * character anywhere downstream.
  */
 export function citationHtml(source: Source, opts: { page?: number; note?: string } = {}): string {
   const note = opts.note?.trim() || pageNote(source, opts.page)
-  const base = escapeHtml(citationLabel(source.bibtex))
-  const trailing = note ? escapeHtml(citationNoteSeparator() + note) : '​'
+  const base = escapeHtml(citationLabelOpen(source.bibtex))
+  const middle = note ? escapeHtml(citationNoteSeparator() + note) : '​'
   const noteAttr = note ? ` data-note="${escapeAttr(note)}"` : ''
-  const inner = `<span class="citation-base" contenteditable="false">${base}</span>${trailing}`
+  const inner = `<span class="citation-base" contenteditable="false">${base}</span>${middle}<span class="citation-close" contenteditable="false">)</span>`
   // Double-click to edit the page/note is `EssayWorkspace`'s own
   // `handleCitationDblClick` — this tooltip is the only hint of it in the
   // UI, since the click target otherwise has nothing to show for itself

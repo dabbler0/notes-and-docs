@@ -180,6 +180,12 @@ export function EssayWorkspace({ essayId, onBack }: { essayId: string; onBack: (
     if (next === null) return
     const note = next.trim()
     const base = chip.querySelector(':scope > .citation-base')
+    const close = chip.querySelector(':scope > .citation-close')
+    // Clear everything between the base and close spans (the editable
+    // note), then re-insert the close span — see citationHtml()'s own doc
+    // comment for why the chip is split into base/note/close rather than
+    // base/note, now that the closing paren has to stay outside the note
+    // text so a fresh note still renders inside the parens.
     while (base?.nextSibling) chip.removeChild(base.nextSibling)
     if (note) {
       chip.appendChild(document.createTextNode(citationNoteSeparator() + note))
@@ -190,6 +196,7 @@ export function EssayWorkspace({ essayId, onBack }: { essayId: string; onBack: (
       chip.appendChild(document.createTextNode('​'))
       chip.removeAttribute('data-note')
     }
+    if (close) chip.appendChild(close)
     const html = reconstructContent(node.id)
     if (html != null) {
       node.draftContent = html

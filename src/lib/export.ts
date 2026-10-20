@@ -75,8 +75,9 @@ function renderPrintCitation(el: HTMLElement, fnCtx: MarkdownFootnoteCtx): strin
     return `[^${label}]`
   }
   const refNumber = opts.orderedSourceIds.indexOf(sourceId!) + 1
-  const base = opts.style === 'numbered' ? `[${refNumber}]` : opts.style === 'author-title' ? citationLabelAuthorTitle(source.bibtex) : citationLabel(source.bibtex)
-  return mdEscapeText(note ? `${base}, ${note}` : base)
+  if (opts.style === 'numbered') return mdEscapeText(note ? `[${refNumber}, ${note}]` : `[${refNumber}]`)
+  const rendered = opts.style === 'author-title' ? citationLabelAuthorTitle(source.bibtex, note) : citationLabel(source.bibtex, note)
+  return mdEscapeText(rendered)
 }
 
 function inlineHtmlToMarkdown(node: Node, fnCtx: MarkdownFootnoteCtx): string {
@@ -335,11 +336,21 @@ function inlineMarkdownToHtml(text: string): string {
   // that, and would happily match a "*" they find sitting right after a
   // backslash. So pull every escaped character out into a placeholder
   // *before* running those patterns, and put the literal character back
-  // afterward, once nothing can misread it.
+  // afterward, once nothing can misread it. The placeholder itself is a
+  // private-use control character (`\u0002`, never typed text, never
+  // produced by escapeHtml below) wrapping the index — not plain digits
+  // between spaces, which a real, adjacent number in the escaped text
+  // (a numbered citation's own bracket index, a page number in its
+  // note — "[1, p. 5]" escapes to "\[1, p. 5\]") can collide with: "
+  // 5 " inside that text reads exactly like a placeholder of its own,
+  // confirmed live as a real bug (a stray "undefined" in exactly that
+  // citation's rendering) before this switched to an unambiguous
+  // delimiter, the same one `mathSpans`/`underlineSpans` below already
+  // use for the identical reason.
   const escaped: string[] = []
   const withPlaceholders = withoutUnderline.replace(/\\([*_$[\]\\])/g, (_, ch: string) => {
     escaped.push(ch)
-    return ` ${escaped.length - 1} `
+    return `\u0002${escaped.length - 1}\u0002`
   })
 
   // Same placeholder trick, for the exact same reason, one pass earlier:
@@ -360,7 +371,7 @@ function inlineMarkdownToHtml(text: string): string {
     .replace(/\*(.+?)\*/g, '<em>$1</em>')
     .replace(/\[(.+?)\]\((.+?)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>')
     .replace(/\[\^([^\]]+)\]/g, (_, label: string) => `<sup class="print-footnote-ref"><a href="#fn-${label}">${footnoteDisplayNumber(label)}</a></sup>`)
-    .replace(/ (\d+) /g, (_, i: string) => escaped[Number(i)])
+    .replace(/\u0002(\d+)\u0002/g, (_, i: string) => escaped[Number(i)])
     .replace(/\u0000(\d+)\u0000/g, (_, i: string) => mathSpans[Number(i)])
     .replace(/\u0001(\d+)\u0001/g, (_, i: string) => underlineSpans[Number(i)])
 }
@@ -527,6 +538,44 @@ export function addPrintChrome(bodyHtml: string): string {
     counters.length = depth // drop any deeper counters left over from a previous sibling's own subsections
     heading.prepend(`${counters.join('.')} `)
     if (level === 2) heading.after(hr('print-section-rule'))
+  }
+  return doc.body.innerHTML
+}
+
+/**
+ * Transforms `markdownToHtml()`'s own "collected at the end" footnote
+ * shape — a `<sup class="print-footnote-ref">` marker inline plus a
+ * trailing `<ol class="print-footnotes">` list — into Paged.js's
+ * `float: footnote` shape instead: each footnote's body becomes an
+ * inline `<span class="pagedjs-footnote" data-ref="…">` sitting right
+ * where its marker used to be, which Paged.js's own Footnotes module
+ * (wired up in `ExportDialog.tsx`'s print CSS) then floats down to the
+ * bottom of whichever physical page it actually lands on, auto-numbering
+ * its own marker/call via CSS counters — there's no number baked into
+ * the HTML here at all, unlike the `<sup>` it replaces, since only
+ * Paged.js's own layout pass can know which page a given footnote ends
+ * up sharing with its neighbors, and so what its own page-local number
+ * should read. `ExportDialog`'s `exportPdf` is the only caller — the
+ * plain .md export's reference-style footnotes are untouched, since that
+ * format has no real pages to float a footnote within.
+ */
+export function floatPrintFootnotes(bodyHtml: string): string {
+  const doc = new DOMParser().parseFromString(bodyHtml, 'text/html')
+  const list = doc.body.querySelector('ol.print-footnotes')
+  if (!list) return bodyHtml
+  const bodies = new Map<string, string>()
+  for (const li of Array.from(list.children)) bodies.set(li.id.replace(/^fn-/, ''), li.innerHTML)
+  const precedingHr = list.previousElementSibling
+  if (precedingHr?.tagName === 'HR') precedingHr.remove()
+  list.remove()
+  for (const ref of Array.from(doc.body.querySelectorAll('sup.print-footnote-ref'))) {
+    const href = ref.querySelector('a')?.getAttribute('href') ?? ''
+    const id = href.replace(/^#fn-/, '')
+    const span = doc.createElement('span')
+    span.className = 'pagedjs-footnote'
+    span.setAttribute('data-ref', id)
+    span.innerHTML = bodies.get(id) ?? ''
+    ref.replaceWith(span)
   }
   return doc.body.innerHTML
 }

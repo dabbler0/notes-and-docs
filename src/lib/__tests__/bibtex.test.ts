@@ -84,13 +84,13 @@ describe('renderCitationLabel', () => {
     expect(renderCitationLabel(source().bibtex)).toBe(citationLabel(source().bibtex))
   })
 
-  it('appends the note after the closing paren, comma-separated — the same shape citationHtml has always rendered', () => {
-    expect(renderCitationLabel(source().bibtex, 'p. 5')).toBe('(Smith, 2020), p. 5')
+  it('folds the note inside the closing paren, comma-separated — the same shape citationHtml has always rendered', () => {
+    expect(renderCitationLabel(source().bibtex, 'p. 5')).toBe('(Smith, 2020, p. 5)')
   })
 
   it('accepts any freeform note, not just a page number', () => {
-    expect(renderCitationLabel(source().bibtex, 'ch. 3')).toBe('(Smith, 2020), ch. 3')
-    expect(renderCitationLabel(source().bibtex, 'forthcoming')).toBe('(Smith, 2020), forthcoming')
+    expect(renderCitationLabel(source().bibtex, 'ch. 3')).toBe('(Smith, 2020, ch. 3)')
+    expect(renderCitationLabel(source().bibtex, 'forthcoming')).toBe('(Smith, 2020, forthcoming)')
   })
 })
 
@@ -127,25 +127,31 @@ describe('citationHtml structured data', () => {
   })
 })
 
-describe('citationHtml DOM structure (base span vs. editable note)', () => {
-  it('wraps the generated author/date label in a non-editable .citation-base span', () => {
+describe('citationHtml DOM structure (base/note/close spans)', () => {
+  it('wraps the generated author/date label — minus its closing paren — in a non-editable .citation-base span', () => {
     const html = citationHtml(source())
-    expect(html).toContain('<span class="citation-base" contenteditable="false">(Smith, 2020)</span>')
+    expect(html).toContain('<span class="citation-base" contenteditable="false">(Smith, 2020</span>')
   })
 
-  it('leaves the note as plain trailing text outside the base span, not inside it', () => {
+  it('closes the chip with a fixed, non-editable .citation-close span holding just the closing paren', () => {
+    const html = citationHtml(source())
+    expect(html).toContain('<span class="citation-close" contenteditable="false">)</span>')
+  })
+
+  it('renders a note between the base and close spans, so it reads inside the parens — not outside the base span', () => {
     const html = citationHtml(source(), { note: 'p. 5' })
-    expect(html).toContain('<span class="citation-base" contenteditable="false">(Smith, 2020)</span>, p. 5')
-    // The separator + note must not have ended up inside the non-editable span.
-    expect(html).not.toContain('(Smith, 2020), p. 5</span>')
+    expect(html).toContain('<span class="citation-base" contenteditable="false">(Smith, 2020</span>, p. 5<span class="citation-close" contenteditable="false">)</span>')
+    // The separator + note must not have ended up inside either non-editable span.
+    expect(html).not.toContain('(Smith, 2020, p. 5</span>')
+    expect(html).not.toContain('p. 5)</span>')
   })
 
-  it('adds no visible separator or note text when there is no note — only the invisible zero-width-space caret placeholder', () => {
+  it('adds no visible separator or note text when there is no note — only the invisible zero-width-space caret placeholder between base and close', () => {
     const html = citationHtml(source())
     // See citationHtml's own doc comment: a lone U+200B keeps a click
-    // right after the chip from landing outside it entirely, with
-    // nothing visible to show for it.
-    expect(html).toMatch(/<\/span>​<\/cite>$/)
+    // between the base and close spans from landing outside the chip
+    // entirely, with nothing visible to show for it.
+    expect(html).toMatch(/<\/span>​<span class="citation-close"/)
   })
 })
 
