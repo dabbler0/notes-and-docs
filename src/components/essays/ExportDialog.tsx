@@ -4,6 +4,7 @@ import { Modal } from '../Modal'
 import { listSources } from '../../models/sourcesRepo'
 import {
   addPrintChrome,
+  citedSources,
   collectUsedSourceIds,
   essayToLatex,
   essayToMarkdown,
@@ -12,9 +13,12 @@ import {
   referencesMarkdown,
   sourcesToBibtex,
   type BibliographyStyle,
+  type PrintCitationPlacement,
+  type PrintCitationStyle,
 } from '../../lib/export'
 import { downloadBlob, filenameFor } from '../../lib/download'
 import { escapeHtml } from '../../lib/html'
+import { getAuthorName } from '../../lib/authorPreference'
 import type { Essay, EssayNode } from '../../models/types'
 // Raw CSS text / a base64 data: URI (Vite's `?inline` query — forced
 // regardless of the normal multi-file build's own size-based inlining
@@ -34,9 +38,16 @@ import katexCss from 'katex/dist/katex.min.css?inline'
 import garamondRegularUrl from '../../assets/fonts/EBGaramond-Regular.woff2?inline'
 import garamondItalicUrl from '../../assets/fonts/EBGaramond-Italic.woff2?inline'
 
+/** CSS `@page` margin-box `content` strings are ordinary CSS string literals — backslashes and double quotes need the same escaping any other hand-built CSS string value would. */
+function cssStringEscape(s: string): string {
+  return s.replace(/\\/g, '\\\\').replace(/"/g, '\\"')
+}
+
 export function ExportDialog({ essay, nodeMap, onClose }: { essay: Essay; nodeMap: Map<string, EssayNode>; onClose: () => void }) {
   const [citeCommand, setCiteCommand] = useState<'\\cite' | '\\footcite'>('\\cite')
   const [bibliographyStyle, setBibliographyStyle] = useState<BibliographyStyle>('plain')
+  const [citationStyle, setCitationStyle] = useState<PrintCitationStyle>('author-year')
+  const [citationPlacement, setCitationPlacement] = useState<PrintCitationPlacement>('inline')
   const [busy, setBusy] = useState<'md' | 'pdf' | 'tex' | null>(null)
 
   async function exportMarkdown() {
@@ -54,15 +65,33 @@ export function ExportDialog({ essay, nodeMap, onClose }: { essay: Essay; nodeMa
     setBusy('pdf')
     try {
       const sources = new Map((await listSources()).map((s) => [s.id, s]))
-      const md = essayToMarkdown(essay, nodeMap)
-      const bodyHtml = addPrintChrome(markdownToHtml(md)) + referencesHtml(nodeMap, sources, bibliographyStyle)
+      const orderedSourceIds = citedSources(nodeMap, sources).map((s) => s.id)
+      const md = essayToMarkdown(essay, nodeMap, { citationOptions: { sources, style: citationStyle, placement: citationPlacement, orderedSourceIds } })
+      const numberedReferences = citationPlacement === 'inline' && citationStyle === 'numbered'
+      const bodyHtml = addPrintChrome(markdownToHtml(md)) + referencesHtml(nodeMap, sources, bibliographyStyle, numberedReferences)
       const win = window.open('', '_blank')
       if (!win) {
         alert('Your browser blocked the print preview pop-up — allow pop-ups for this page and try again.')
         return
       }
+      const authorName = getAuthorName()
+      // The browser's own print engine — not the on-screen preview, which
+      // never shows a `@page` margin box at all — repeats these on every
+      // physical page: a real, standards-based header/footer (confirmed
+      // directly against this app's actual target, Chromium's print-to-PDF
+      // path), not a `position: fixed` approximation, which is why a real
+      // "Page N of M" is even possible here at all (`counter(pages)` only
+      // has a meaningful value once the browser has actually paginated the
+      // content, something no script running in the page itself can ever
+      // observe — there's no DOM-level "how many pages will this be").
+      const headerText = cssStringEscape(authorName ? `${essay.title} — ${authorName}` : essay.title)
       win.document.write(
         `<!doctype html><html><head><title>${escapeHtml(essay.title)}</title><meta charset="utf-8"><style>${katexCss}</style><style>
+          @page {
+            margin: 85px 50px 65px;
+            @top-center { content: "${headerText}"; font-family: Georgia, 'Times New Roman', serif; font-size: 10px; color: #666; }
+            @bottom-center { content: "Page " counter(page) " of " counter(pages); font-family: Georgia, 'Times New Roman', serif; font-size: 10px; color: #666; }
+          }
           /* EB Garamond (SIL OFL 1.1 — see src/assets/fonts/OFL.txt) is a
              real variable font (weight 400-800 in one file per style), so
              one @font-face per style, not one per weight, correctly
@@ -86,8 +115,11 @@ export function ExportDialog({ essay, nodeMap, onClose }: { essay: Essay; nodeMa
              (see referencesHtml's own doc comment) — a plain heading and a
              hanging-indent list, the conventional bibliography layout. */
           .print-references-heading { margin-top: 2.4em; }
-          .print-references-list { list-style: none; margin: 0.6em 0 0; padding: 0; }
-          .print-references-list li { margin: 0 0 0.8em 1.6em; text-indent: -1.6em; }
+          .print-references-list { margin: 0.6em 0 0; }
+          ul.print-references-list { list-style: none; padding: 0; }
+          ul.print-references-list li { margin: 0 0 0.8em 1.6em; text-indent: -1.6em; }
+          ol.print-references-list { padding-left: 1.8em; }
+          ol.print-references-list li { margin: 0 0 0.8em; }
           @media print { body { margin: 0; max-width: none; } }
         </style></head><body>${bodyHtml}</body></html>`,
       )
@@ -144,7 +176,27 @@ export function ExportDialog({ essay, nodeMap, onClose }: { essay: Essay; nodeMa
         <div className="export-option">
           <div className="export-option-body">
             <div className="export-option-title">PDF</div>
-            <p className="muted">Renders that same Markdown (References section included) as a printable page in a new tab, then opens your browser's print dialog — choose “Save as PDF.”</p>
+            <p className="muted">Renders that same Markdown (References section included) as a printable page in a new tab, then opens your browser's print dialog — choose “Save as PDF.” Adds a page header (title, and your name if set under Sync → Your name) and a “Page N of M” footer.</p>
+            <label className="field-inline">
+              Citations
+              <select value={citationPlacement} onChange={(e) => setCitationPlacement((e.target as HTMLSelectElement).value as PrintCitationPlacement)}>
+                <option value="inline">Inline</option>
+                <option value="footnote">Footnote</option>
+              </select>
+            </label>
+            <label className="field-inline" style={{ marginTop: 6 }}>
+              Citation style
+              <select
+                value={citationStyle}
+                disabled={citationPlacement === 'footnote'}
+                title={citationPlacement === 'footnote' ? 'Not used for footnote citations — the footnote itself always shows the full reference.' : undefined}
+                onChange={(e) => setCitationStyle((e.target as HTMLSelectElement).value as PrintCitationStyle)}
+              >
+                <option value="author-year">Author, year — (Smith, 2020)</option>
+                <option value="author-title">Author, title — (Smith, “A Paper”)</option>
+                <option value="numbered">Numbered — [3], matching the References list</option>
+              </select>
+            </label>
           </div>
           <button className="btn btn-primary" disabled={!!busy} onClick={exportPdf}>
             {busy === 'pdf' ? 'Opening…' : 'Open print view'}

@@ -113,15 +113,29 @@ export function formatBibtex(entry: BibtexEntry): string {
   return `@${entry.type}{${entry.key},\n${body}\n}`
 }
 
+/** "Smith", "Smith & Lee", or "Smith et al." from a raw BibTeX author field ("Smith, Jane and Lee, Bob and …"), or `fallback` when there's no author field at all — the name-shortening both `citationLabel` and `citationLabelAuthorTitle` need. */
+function shortAuthorNames(authors: string | undefined, fallback: string): string {
+  if (!authors) return fallback
+  const names = authors.split(' and ').map((a) => a.split(',')[0].trim())
+  if (names.length === 1) return names[0]
+  if (names.length === 2) return `${names[0]} & ${names[1]}`
+  return `${names[0]} et al.`
+}
+
 /** Short inline citation label, e.g. "(Smith, 2020)" or "(Smith & Lee, 2020)". */
 export function citationLabel(entry: BibtexEntry): string {
-  const authors = entry.fields.author
   const year = entry.fields.year ?? 'n.d.'
-  if (!authors) return `(${entry.key}, ${year})`
-  const names = authors.split(' and ').map((a) => a.split(',')[0].trim())
-  if (names.length === 1) return `(${names[0]}, ${year})`
-  if (names.length === 2) return `(${names[0]} & ${names[1]}, ${year})`
-  return `(${names[0]} et al., ${year})`
+  return `(${shortAuthorNames(entry.fields.author, entry.key)}, ${year})`
+}
+
+/**
+ * The print export's "author-title" citation style, e.g. '(Smith, "An
+ * Early Paper")' or '(Smith et al., "Longer Title")' for 3+ authors — see
+ * `PrintCitationStyle` in lib/export.ts for where this is chosen from.
+ */
+export function citationLabelAuthorTitle(entry: BibtexEntry): string {
+  const title = entry.fields.title || entry.key
+  return `(${shortAuthorNames(entry.fields.author, entry.key)}, "${title}")`
 }
 
 export function displayTitle(entry: BibtexEntry): string {

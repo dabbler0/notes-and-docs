@@ -411,6 +411,83 @@ describe('citations in Markdown export', () => {
   })
 })
 
+describe('print-mode citation styling (essayToMarkdown\'s citationOptions)', () => {
+  function sourceAndCitation(note?: string): { nodeMap: Map<string, EssayNode>; sources: Map<string, Source>; sourceId: string } {
+    const source = makeSource({
+      id: 's1',
+      bibtex: { type: 'article', key: 'smith2020', fields: { author: 'Smith, Jane', year: '2020', title: 'An Early Paper' } },
+    })
+    // A baked-in label deliberately different from what the source's
+    // *current* bibtex would produce, the same way a real stale chip
+    // looks — proves these options re-render fresh rather than reading
+    // the chip's own frozen text.
+    const root = makeNode({ id: 'root', draftContent: `<p>As argued <cite class="citation" data-source-id="s1" data-cite-v="2"${note ? ` data-note="${note}"` : ''}>(Stale, 1999)</cite>.</p>` })
+    return { nodeMap: new Map([['root', root]]), sources: new Map([['s1', source]]), sourceId: 's1' }
+  }
+
+  it('re-renders author-year fresh from the current source, ignoring the chip\'s own stale baked-in text', () => {
+    const { nodeMap, sources, sourceId } = sourceAndCitation()
+    const md = essayToMarkdown(makeEssay('root'), nodeMap, { citationOptions: { sources, style: 'author-year', placement: 'inline', orderedSourceIds: [sourceId] } })
+    expect(md).toContain('As argued (Smith, 2020).')
+    expect(md).not.toContain('Stale')
+  })
+
+  it('renders author-title style', () => {
+    const { nodeMap, sources, sourceId } = sourceAndCitation()
+    const md = essayToMarkdown(makeEssay('root'), nodeMap, { citationOptions: { sources, style: 'author-title', placement: 'inline', orderedSourceIds: [sourceId] } })
+    expect(md).toContain('As argued (Smith, "An Early Paper").')
+  })
+
+  it('renders numbered style using the bracket position from orderedSourceIds, not insertion order', () => {
+    const { nodeMap, sources, sourceId } = sourceAndCitation()
+    const md = essayToMarkdown(makeEssay('root'), nodeMap, { citationOptions: { sources, style: 'numbered', placement: 'inline', orderedSourceIds: ['other-source', sourceId] } })
+    // The brackets are escaped in the raw Markdown (`\[2\]`) — same as any
+    // other markdown-significant character a citation's own rendering
+    // might produce — and correctly unescaped back to literal "[2]" by
+    // the time markdownToHtml renders it, so that's what's checked here.
+    expect(markdownToHtml(md)).toContain('As argued [2].')
+  })
+
+  it('still appends the note for every style', () => {
+    const { nodeMap, sources, sourceId } = sourceAndCitation('p. 5')
+    const md = essayToMarkdown(makeEssay('root'), nodeMap, { citationOptions: { sources, style: 'author-year', placement: 'inline', orderedSourceIds: [sourceId] } })
+    expect(md).toContain('(Smith, 2020), p. 5')
+  })
+
+  it('footnote placement replaces the citation with a numbered footnote reference whose body is the full citation', () => {
+    const { nodeMap, sources, sourceId } = sourceAndCitation()
+    const md = essayToMarkdown(makeEssay('root'), nodeMap, { citationOptions: { sources, style: 'author-year', placement: 'footnote', orderedSourceIds: [sourceId] } })
+    expect(md).toContain('As argued [^fn1].')
+    expect(md).toContain('[^fn1]: Smith, Jane (2020). An Early Paper.')
+  })
+
+  it('footnote placement shares one numbering sequence with the essay\'s own real footnotes', () => {
+    const source = makeSource({ id: 's1', bibtex: { type: 'article', key: 'smith2020', fields: { author: 'Smith, Jane', year: '2020', title: 'An Early Paper' } } })
+    const root = makeNode({
+      id: 'root',
+      draftContent: '<p>A claim<sup class="footnote-ref" data-footnote-id="f1"></sup>, as argued <cite class="citation" data-source-id="s1" data-cite-v="2">(Stale, 1999)</cite>.</p>',
+      footnotes: [{ id: 'f1', content: '<p>A real footnote.</p>' }],
+    })
+    const md = essayToMarkdown(makeEssay('root'), new Map([['root', root]]), { citationOptions: { sources: new Map([['s1', source]]), style: 'author-year', placement: 'footnote', orderedSourceIds: ['s1'] } })
+    expect(md).toContain('A claim[^fn1]')
+    expect(md).toContain('as argued [^fn2]')
+    expect(md).toContain('[^fn1]: A real footnote.')
+    expect(md).toContain('[^fn2]: Smith, Jane (2020). An Early Paper.')
+  })
+
+  it('falls back to the chip\'s own frozen text when its source no longer exists', () => {
+    const root = makeNode({ id: 'root', draftContent: '<p>As argued <cite class="citation" data-source-id="gone" data-cite-v="2">(Smith, 2020)</cite>.</p>' })
+    const md = essayToMarkdown(makeEssay('root'), new Map([['root', root]]), { citationOptions: { sources: new Map(), style: 'numbered', placement: 'inline', orderedSourceIds: [] } })
+    expect(md).toContain('As argued (Smith, 2020).')
+  })
+
+  it('leaves the plain .md export (no citationOptions) completely unaffected', () => {
+    const { nodeMap } = sourceAndCitation()
+    const md = essayToMarkdown(makeEssay('root'), nodeMap)
+    expect(md).toContain('As argued (Stale, 1999).')
+  })
+})
+
 describe('addPrintChrome', () => {
   function threeSectionEssay(): { essay: Essay; nodeMap: Map<string, EssayNode> } {
     const root = makeNode({ id: 'root', title: 'Essay Title', draftContent: `<p>intro</p>${markerHtml('a')}${markerHtml('b')}` })

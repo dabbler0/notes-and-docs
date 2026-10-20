@@ -13,6 +13,7 @@ import { discardLocalChanges, resetSyncState, sweepOrphanedRemoteBlobs, type Syn
 import { bundleToQrDataUrl } from '../../sync/qr'
 import { downloadBlob } from '../../lib/download'
 import { confirmDialog } from '../../lib/confirm'
+import { getAuthorName, setAuthorName } from '../../lib/authorPreference'
 
 type SyncStatus = { kind: 'idle' | 'running' | 'ok' | 'error'; message: string }
 
@@ -21,6 +22,7 @@ export function SyncSettingsDialog({ onClose }: { onClose: () => void }) {
   const [detecting, setDetecting] = useState(!stored)
   const [detectError, setDetectError] = useState<{ error: string; raw: unknown } | null>(null)
   const [forceManualForm, setForceManualForm] = useState(false)
+  const [authorName, setAuthorNameState] = useState(() => getAuthorName())
 
   // Covers opening this dialog before App.tsx's own startup auto-detect
   // (which runs the same check) has had a chance to resolve yet — without
@@ -44,6 +46,17 @@ export function SyncSettingsDialog({ onClose }: { onClose: () => void }) {
 
   return (
     <Modal onClose={onClose} wide>
+      <h2>Your name</h2>
+      <p className="muted">Shown in a printed/PDF export's own page header, alongside the essay's title. Stored on this device only — set it again on any other device you export from.</p>
+      <div className="field" style={{ marginBottom: 24 }}>
+        <input
+          placeholder="e.g. Jane Smith"
+          value={authorName}
+          onInput={(e) => setAuthorNameState((e.target as HTMLInputElement).value)}
+          onBlur={() => setAuthorName(authorName)}
+        />
+      </div>
+
       <h2>Sync across devices</h2>
       <p className="muted">
         Your data lives locally on every device first; syncing just reconciles that local copy with an encrypted copy in your own Firebase project. Two independent guards protect it there: signing in with Google decides who can

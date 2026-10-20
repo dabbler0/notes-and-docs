@@ -9,18 +9,74 @@
  */
 import { parseSegments } from './childMarkers'
 import { escapeHtml } from './html'
-import { formatBibtex, formatCitation } from './bibtex'
+import { citationLabel, citationLabelAuthorTitle, formatBibtex, formatCitation } from './bibtex'
 import { renderMathHtml } from './math'
 import { nodeFootnotes } from '../models/essaysRepo'
 import type { BibtexEntry, Essay, EssayNode, Source } from '../models/types'
 
 // ---- Markdown --------------------------------------------------------
 
+/**
+ * Which inline form a citation takes and what it says — `print/PDF` export
+ * only (the plain .md download always keeps a citation's own already-baked
+ * label text verbatim, same as before this existed). `'author-year'`/
+ * `'author-title'` render right where the citation sits, the same way a
+ * citation always has; `'numbered'` instead renders a bracketed index
+ * (`[3]`) matching that source's position in the References list — see
+ * `citedSources`, the one ordering both share.
+ */
+export type PrintCitationStyle = 'author-year' | 'author-title' | 'numbered'
+
+/**
+ * Where a citation's full information actually appears — right inline
+ * (a short label, per `PrintCitationStyle`), or moved out to a footnote
+ * (a plain, sequential superscript reference; the footnote body is always
+ * a full `formatCitation()` rendering, regardless of `PrintCitationStyle`,
+ * which has nothing to shorten *to* once the citation isn't sitting in
+ * the middle of a sentence anymore).
+ */
+export type PrintCitationPlacement = 'inline' | 'footnote'
+
+export interface PrintCitationOptions {
+  sources: Map<string, Source>
+  style: PrintCitationStyle
+  placement: PrintCitationPlacement
+  /** This essay's own cited sources, in the exact order the References list renders them — a numbered citation's bracket index is 1 + this array's index of its source, so the two always agree. */
+  orderedSourceIds: string[]
+}
+
 /** Threaded through a node's own conversion so a `sup.footnote-ref` marker can look up its footnote's content (`node.footnotes`, resolved by the caller) and mint a globally-unique `[^label]` — unique across the *whole* document, not just this node, since Markdown footnote labels are matched document-wide by any real Markdown processor regardless of which section "owns" them; reusing per-node-local numbers as labels would silently conflate two different essay's-worth of footnotes that both happened to be "footnote 1." `defs` collects each one's own `[^label]: content` line, in the order encountered, to append once at the very end. */
 interface MarkdownFootnoteCtx {
   footnotesById: Map<string, string>
   defs: string[]
   counter: { next: number }
+  /** Only set for the print/PDF export path — see `PrintCitationOptions`'s own doc comment. */
+  citationOptions?: PrintCitationOptions
+}
+
+/** A `.citation` chip's print-export rendering — `PrintCitationOptions.style`/`.placement` applied fresh against `el`'s own `data-source-id`/`data-note`, rather than the chip's already-baked label text (which `inlineHtmlToMarkdown`'s own `default` case would otherwise just read verbatim, same as the plain .md export always does). Falls back to that same verbatim text when there's no source to re-render from — a deleted source, or a chip predating `data-source-id` entirely — since there's nothing to restyle it from. */
+function renderPrintCitation(el: HTMLElement, fnCtx: MarkdownFootnoteCtx): string {
+  const opts = fnCtx.citationOptions!
+  const sourceId = el.getAttribute('data-source-id')
+  const source = sourceId ? opts.sources.get(sourceId) : undefined
+  if (!source) return mdEscapeText(el.textContent ?? '')
+  const note = el.getAttribute('data-note') ?? undefined
+  if (opts.placement === 'footnote') {
+    // Same "fn<N>" label shape (and the same shared counter) as a real
+    // footnote — see MarkdownFootnoteCtx's own doc comment — so a
+    // footnote-placed citation and the essay's own real footnotes read
+    // as one continuous numbered sequence (the conventional "Notes"
+    // citation style), and footnoteDisplayNumber() picks its visible
+    // number back out the same way for either kind without needing to
+    // know which one it is.
+    const label = `fn${fnCtx.counter.next++}`
+    const body = mdEscapeText(formatCitation(source.bibtex)) + (note ? ` (${mdEscapeText(note)})` : '')
+    fnCtx.defs.push(`[^${label}]: ${body}`)
+    return `[^${label}]`
+  }
+  const refNumber = opts.orderedSourceIds.indexOf(sourceId!) + 1
+  const base = opts.style === 'numbered' ? `[${refNumber}]` : opts.style === 'author-title' ? citationLabelAuthorTitle(source.bibtex) : citationLabel(source.bibtex)
+  return mdEscapeText(note ? `${base}, ${note}` : base)
 }
 
 function inlineHtmlToMarkdown(node: Node, fnCtx: MarkdownFootnoteCtx): string {
@@ -29,6 +85,9 @@ function inlineHtmlToMarkdown(node: Node, fnCtx: MarkdownFootnoteCtx): string {
   const el = node as HTMLElement
   const tag = el.tagName.toLowerCase()
   const inner = () => Array.from(el.childNodes).map((n) => inlineHtmlToMarkdown(n, fnCtx)).join('')
+  if (fnCtx.citationOptions && el.classList.contains('citation')) {
+    return renderPrintCitation(el, fnCtx)
+  }
   if (tag === 'sup' && el.classList.contains('footnote-ref')) {
     return renderMarkdownFootnoteRef(el.getAttribute('data-footnote-id'), fnCtx)
   }
@@ -227,9 +286,9 @@ function listToMarkdown(listEl: HTMLElement, fnCtx: MarkdownFootnoteCtx, depth: 
   return lines.join('\n')
 }
 
-export function essayToMarkdown(essay: Essay, nodeMap: Map<string, EssayNode>): string {
+export function essayToMarkdown(essay: Essay, nodeMap: Map<string, EssayNode>, opts: { citationOptions?: PrintCitationOptions } = {}): string {
   const lines: string[] = [`# ${essay.title}`, '']
-  const fnCtx: MarkdownFootnoteCtx = { footnotesById: new Map(), defs: [], counter: { next: 1 } }
+  const fnCtx: MarkdownFootnoteCtx = { footnotesById: new Map(), defs: [], counter: { next: 1 }, citationOptions: opts.citationOptions }
   function renderNode(node: EssayNode, depth: number) {
     if (depth > 0) {
       const level = '#'.repeat(Math.min(depth + 1, 6))
@@ -723,8 +782,8 @@ export function renderBibliographyEntry(entry: BibtexEntry, _style: Bibliography
   return formatCitation(entry)
 }
 
-/** Every source this essay actually cites, resolved against `sources` (silently dropping a cited id with no matching source — deleted since, or never synced) and sorted by first author/title for a stable, conventional reading order — not by insertion order, which would read as arbitrary. */
-function citedSources(nodeMap: Map<string, EssayNode>, sources: Map<string, Source>): Source[] {
+/** Every source this essay actually cites, resolved against `sources` (silently dropping a cited id with no matching source — deleted since, or never synced) and sorted by first author/title for a stable, conventional reading order — not by insertion order, which would read as arbitrary. Exported so `ExportDialog` can derive the same `orderedSourceIds` a `'numbered'` `PrintCitationStyle` needs — both it and the References list have to agree on one order, so there's exactly one function that decides it. */
+export function citedSources(nodeMap: Map<string, EssayNode>, sources: Map<string, Source>): Source[] {
   const ids = collectUsedSourceIds(nodeMap)
   return Array.from(ids)
     .map((id) => sources.get(id))
@@ -748,10 +807,19 @@ export function referencesMarkdown(nodeMap: Map<string, EssayNode>, sources: Map
  * alongside the essay's real sections, and isn't underlined with the
  * same per-section rule either, so it deliberately sits outside what
  * that function ever sees. Empty string when the essay cites no sources.
+ *
+ * `numbered` — pass `true` exactly when citations are using the
+ * `'numbered'` `PrintCitationStyle`, so each entry's own list number is
+ * the same `[N]` an inline citation to it points back at (a real `<ol>`,
+ * not just visually numbered text, so it still renumbers correctly if a
+ * citation the list would otherwise have included turns out to have no
+ * matching source). Plain author-year/author-title citations have no
+ * number to match, so the list stays an unordered one for those.
  */
-export function referencesHtml(nodeMap: Map<string, EssayNode>, sources: Map<string, Source>, style: BibliographyStyle = 'plain'): string {
+export function referencesHtml(nodeMap: Map<string, EssayNode>, sources: Map<string, Source>, style: BibliographyStyle = 'plain', numbered: boolean = false): string {
   const cited = citedSources(nodeMap, sources)
   if (cited.length === 0) return ''
   const items = cited.map((s) => `<li>${escapeHtml(renderBibliographyEntry(s.bibtex, style))}</li>`)
-  return `<h2 class="print-references-heading">References</h2><ul class="print-references-list">${items.join('')}</ul>`
+  const tag = numbered ? 'ol' : 'ul'
+  return `<h2 class="print-references-heading">References</h2><${tag} class="print-references-list">${items.join('')}</${tag}>`
 }
