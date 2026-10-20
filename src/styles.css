@@ -1012,6 +1012,16 @@ select {
   overflow: hidden;
 }
 
+/* --- split-screen (two essays side by side — EssayWorkspace.tsx) --- */
+
+.split-pane-shell {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  border-left: 1px solid var(--border);
+}
+
 .editor-toolbar {
   display: flex;
   align-items: center;

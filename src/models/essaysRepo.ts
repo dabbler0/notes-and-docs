@@ -307,6 +307,67 @@ export async function createChildNode(essayId: string, title: string, initialCon
   return node
 }
 
+/** `html` with every `[data-child-id]` marker's own id rewritten through `idMap` — `cloneEssay`'s own way of re-pointing a cloned node's embedded subsection markers at its siblings' *new* ids rather than the original tree's. A marker whose id isn't in `idMap` (shouldn't happen for a coherent tree, but matches every other tree walk's own quiet skip of a dangling reference) is left exactly as it is. */
+function remapChildMarkerIds(html: string, idMap: Map<string, string>): string {
+  if (!html) return html
+  const doc = new DOMParser().parseFromString(html, 'text/html')
+  for (const el of Array.from(doc.querySelectorAll('[data-child-id]'))) {
+    const oldId = el.getAttribute('data-child-id')
+    const newId = oldId ? idMap.get(oldId) : undefined
+    if (newId) el.setAttribute('data-child-id', newId)
+  }
+  return doc.body.innerHTML
+}
+
+/**
+ * A full, independent copy of `essayId`'s current live tree — every
+ * reachable node gets a fresh id (so editing the clone can never touch the
+ * original, or vice versa) and its own `draftContent`'s subsection markers
+ * are rewritten to point at its own cloned children (`remapChildMarkerIds`)
+ * rather than the original's. The clone starts with no commit history of
+ * its own (an empty `essayHistory` — this is a brand-new document as far
+ * as history is concerned, not a revert target pointing back at the
+ * original) and no `projectId` (the caller — `EssayWorkspace`'s own
+ * "Clone this essay" split-view option — is responsible for grouping the
+ * two together via `groupEssays`, which this module can't call directly
+ * without an import cycle back from `projectsRepo.ts`).
+ *
+ * Comment and footnote ids are copied verbatim, not remapped — unlike a
+ * node id, neither is ever a storage key or referenced outside the one
+ * node that owns it (a footnote's own marker, an inline comment's own
+ * mark, both sit in that same node's `draftContent`/comment bodies), so
+ * there's no real collision to avoid by minting new ones.
+ */
+export async function cloneEssay(essayId: string): Promise<Essay | undefined> {
+  const original = await getEssay(essayId)
+  if (!original) return undefined
+  const nodeMap = await loadNodeMap(original)
+  const idMap = new Map<string, string>()
+  for (const nodeId of nodeMap.keys()) idMap.set(nodeId, id())
+
+  const now = Date.now()
+  const newEssayId = id()
+  for (const [oldId, node] of nodeMap) {
+    const clone: EssayNode = {
+      id: idMap.get(oldId)!,
+      essayId: newEssayId,
+      title: node.title,
+      versions: [],
+      headVersionId: '',
+      draftContent: remapChildMarkerIds(node.draftContent, idMap),
+      footnotes: nodeFootnotes(node).map((f) => ({ ...f })),
+      comments: nodeComments(node).map((c) => ({ ...c })),
+      createdAt: now,
+      updatedAt: now,
+    }
+    await backend.docs.put(NODES, clone)
+  }
+
+  const clonedEssay: Essay = { id: newEssayId, title: `Copy of ${original.title}`, rootNodeId: idMap.get(original.rootNodeId)!, createdAt: now, updatedAt: now }
+  await backend.docs.put(ESSAYS, clonedEssay)
+  return clonedEssay
+}
+
 /** `node.comments` is optional (absent on a node not yet touched by `migrateComments` — see `getNode`) — this is the one place that reads it directly, so "absent" and "empty" are treated identically everywhere else. */
 export function nodeComments(node: EssayNode): Comment[] {
   migrateComments(node)

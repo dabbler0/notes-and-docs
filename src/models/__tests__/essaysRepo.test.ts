@@ -1,8 +1,9 @@
 /** `archiveEssay`/`unarchiveEssay` — the "mark this essay finished" flag
  * behind the Drafts view's "Show archived" toggle. */
 import { beforeEach, describe, expect, it } from 'vitest'
-import { archiveEssay, createChildNode, createEssay, getEssay, getNode, saveEssay, saveNode, unarchiveEssay } from '../essaysRepo'
+import { archiveEssay, cloneEssay, createChildNode, createEssay, getEssay, getNode, loadNodeMap, saveEssay, saveNode, unarchiveEssay } from '../essaysRepo'
 import { createSource, deleteSource, updateSource } from '../sourcesRepo'
+import { markerHtml } from '../../lib/childMarkers'
 
 interface FakeStorageModule {
   createFakeBackend(): unknown
@@ -285,5 +286,52 @@ describe('syncCitations: refreshing an already-structured chip\'s label (via get
     expect(oldVersion.content).toContain('class="citation-base" contenteditable="false">(Smith, 2020</span>')
     expect(oldVersion.content).toContain('<span class="citation-close" contenteditable="false">)</span>')
     expect(oldVersion.content).not.toContain('2020-2020')
+  })
+})
+
+describe('cloneEssay', () => {
+  it('copies the title (prefixed), content, and tree structure under entirely fresh ids', async () => {
+    const essay = await createEssay('Original Essay')
+    const root = (await getNode(essay.rootNodeId))!
+    const child = await createChildNode(essay.id, 'A Section', '<p>Child text.</p>')
+    root.draftContent = `<p>Root text.</p>${markerHtml(child.id)}`
+    await saveNode(root)
+
+    const clone = await cloneEssay(essay.id)
+    expect(clone).toBeDefined()
+    expect(clone!.id).not.toBe(essay.id)
+    expect(clone!.title).toBe('Copy of Original Essay')
+    expect(clone!.rootNodeId).not.toBe(essay.rootNodeId)
+
+    const cloneMap = await loadNodeMap(clone!)
+    expect(cloneMap.size).toBe(2) // root + child, same shape as the original
+    const cloneRoot = cloneMap.get(clone!.rootNodeId)!
+    expect(cloneRoot.draftContent).toContain('<p>Root text.</p>')
+    expect(cloneRoot.draftContent).not.toContain(child.id) // the marker points at the clone's OWN child id, not the original's
+    const cloneChildId = [...cloneMap.keys()].find((id) => id !== clone!.rootNodeId)!
+    expect(cloneMap.get(cloneChildId)!.title).toBe('A Section')
+    expect(cloneMap.get(cloneChildId)!.draftContent).toBe('<p>Child text.</p>')
+  })
+
+  it('editing the clone never touches the original, and vice versa', async () => {
+    const essay = await createEssay('Original Essay')
+    const clone = (await cloneEssay(essay.id))!
+
+    const cloneRoot = (await getNode(clone.rootNodeId))!
+    cloneRoot.draftContent = '<p>Edited only in the clone.</p>'
+    await saveNode(cloneRoot)
+
+    const originalRoot = (await getNode(essay.rootNodeId))!
+    expect(originalRoot.draftContent).not.toContain('Edited only in the clone')
+  })
+
+  it('starts with no commit history and no project of its own', async () => {
+    const essay = await createEssay('Original Essay')
+    const clone = (await cloneEssay(essay.id))!
+    expect(clone.projectId).toBeUndefined()
+  })
+
+  it('returns undefined for a nonexistent essay', async () => {
+    expect(await cloneEssay('nonexistent-id')).toBeUndefined()
   })
 })

@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'preact/hooks'
-import { addFootnote, createChildNode, addComment, getEssay, getNode, loadNodeMap, moveNode, saveEssay, saveNode } from '../../models/essaysRepo'
+import { addFootnote, createChildNode, addComment, cloneEssay, getEssay, getNode, loadNodeMap, moveNode, saveEssay, saveNode } from '../../models/essaysRepo'
 import { commitEssay } from '../../models/essayHistoryRepo'
+import { groupEssays } from '../../models/projectsRepo'
 import { addToGraveyard } from '../../models/graveyardRepo'
 import { citationHtml, citationNoteSeparator, displayTitle } from '../../lib/bibtex'
 import { promptDialog } from '../../lib/prompt'
@@ -21,6 +22,7 @@ import { CitationPickerDialog } from './CitationPickerDialog'
 import { QuoteInsertDialog } from './QuoteInsertDialog'
 import { ExportDialog } from './ExportDialog'
 import { WordCountDialog } from './WordCountDialog'
+import { SplitPickerDialog } from './SplitPickerDialog'
 import { Modal } from '../Modal'
 import { useIsMobile } from '../../lib/useIsMobile'
 
@@ -30,14 +32,31 @@ import { useIsMobile } from '../../lib/useIsMobile'
  * heading in front of each (see SectionBlock). There is no separate "open a
  * node" navigation — splitting, commenting, citing etc. all act on whichever
  * section currently has the cursor, tracked here as `activeNodeId`.
+ *
+ * Split-screen (two essays in the same project, edited side by side — see
+ * `Project`'s own doc comment in `models/types.ts`) works by nesting this
+ * same component inside itself: the primary instance holds `splitEssayId`
+ * and renders a second `<EssayWorkspace embedded essayId={splitEssayId}>`
+ * as a sibling pane, rather than duplicating the whole editing surface in
+ * a separate component. `embedded` instances never show the outline or
+ * comments/graveyard panel (no room for four side-by-side columns) and
+ * never offer their own further split (no nested splits); the primary
+ * instance hides *its own* outline/comments panels too the moment a split
+ * is open, for the same reason.
  */
-export function EssayWorkspace({ essayId, onBack }: { essayId: string; onBack: () => void }) {
+export function EssayWorkspace({ essayId, onBack, embedded = false }: { essayId: string; onBack: () => void; embedded?: boolean }) {
   const [essay, setEssay] = useState<Essay | null>(null)
   const [nodeMap, setNodeMap] = useState<Map<string, EssayNode>>(new Map())
   const [essayTitle, setEssayTitle] = useState('')
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set())
   const [commentMode, setCommentMode] = useState(false)
   const [showHistory, setShowHistory] = useState(false)
+  // Which other essay (if any) is open side by side with this one — see
+  // this component's own doc comment. Only ever set on the primary
+  // (non-embedded) instance; an embedded instance never has a split of its
+  // own.
+  const [splitEssayId, setSplitEssayId] = useState<string | null>(null)
+  const [showSplitPicker, setShowSplitPicker] = useState(false)
   const [showTree, setShowTree] = useState(true)
   // The right-hand column shows either the comments panel or the graveyard
   // panel, never both — 'null' collapses it entirely, matching showTree's
@@ -459,6 +478,28 @@ export function EssayWorkspace({ essayId, onBack }: { essayId: string; onBack: (
     setShowHistory(true)
   }
 
+  /** "Split view" → `SplitPickerDialog`'s "pick an existing project-mate" option: just opens it side by side, no data touched at all. */
+  function handleSelectExistingForSplit(other: Essay) {
+    setSplitEssayId(other.id)
+    setShowSplitPicker(false)
+  }
+
+  /**
+   * "Split view" → `SplitPickerDialog`'s "Clone this essay" option: makes a
+   * full, independent copy (`cloneEssay` — new node ids throughout, so
+   * editing one side never touches the other), puts it in the same project
+   * as the original (creating one first if the original wasn't in one yet
+   * — see `groupEssays`), and opens it as the split's second pane.
+   */
+  async function handleCloneForSplit() {
+    if (!essay) return
+    const clone = await cloneEssay(essay.id)
+    if (!clone) return
+    await groupEssays(essay, clone)
+    setSplitEssayId(clone.id)
+    setShowSplitPicker(false)
+  }
+
   /** Selecting text while in comment mode opens the same comment composer the toolbar's own "Comment" button does (see `beginComment`) — this is just the mouseup-triggered shortcut for it that only applies while comment mode is on. */
   function handleMouseUpForComments() {
     if (!commentMode) return
@@ -673,7 +714,7 @@ export function EssayWorkspace({ essayId, onBack }: { essayId: string; onBack: (
     <div className="essay-workspace-root">
       <div className="topbar essay-header" style={{ borderBottom: '1px solid var(--border)', padding: '10px 20px' }}>
         <button className="btn btn-ghost btn-sm" onClick={onBack}>
-          ← <span className="btn-label">All drafts</span>
+          {embedded ? '×' : '←'} <span className="btn-label">{embedded ? 'Close' : 'All drafts'}</span>
         </button>
         <input
           value={essayTitle}
@@ -717,13 +758,30 @@ export function EssayWorkspace({ essayId, onBack }: { essayId: string; onBack: (
         <button className="btn btn-ghost btn-sm" onClick={() => setShowExport(true)}>
           <Icon name="export" /> <span className="btn-label">Export</span>
         </button>
+        {/* Split view: never offered on an embedded (secondary) instance —
+            no nested splits — and not on mobile, which has no room for two
+            essays side by side at all. */}
+        {!embedded && !isMobile && (
+          <button
+            className={`btn btn-ghost btn-sm toolbar-toggle${splitEssayId ? ' active' : ''}`}
+            title="Edit a second essay side by side with this one"
+            onClick={() => (splitEssayId ? setSplitEssayId(null) : setShowSplitPicker(true))}
+          >
+            <Icon name="subsection" /> <span className="btn-label">{splitEssayId ? 'Close split' : 'Split view'}</span>
+          </button>
+        )}
       </div>
 
       <div className="workspace">
         {/* On mobile there's no room for the outline as a persistent side
             column, so it isn't rendered as one at all — "☰ Outline" below
-            opens it as its own full-screen view instead. */}
+            opens it as its own full-screen view instead. Also hidden
+            outright (regardless of showTree) on an embedded split pane, or
+            on the primary instance once a split is actually open — see
+            this component's own doc comment on why. */}
         {!isMobile &&
+          !embedded &&
+          !splitEssayId &&
           (showTree ? (
             <div className="tree-panel-shell">
               <NodeTree nodeMap={nodeMap} rootId={essay.rootNodeId} essayTitle={essayTitle} collapsed={collapsed} onToggleCollapse={toggleCollapse} onScrollTo={scrollToNode} onMove={handleMove} />
@@ -881,7 +939,18 @@ export function EssayWorkspace({ essayId, onBack }: { essayId: string; onBack: (
           </div>
         </div>
 
+        {/* The split's second pane — a whole nested, independent
+            EssayWorkspace instance, not a stripped-down renderer of its
+            own (see this component's own doc comment on why). */}
+        {splitEssayId && (
+          <div className="split-pane-shell">
+            <EssayWorkspace essayId={splitEssayId} embedded onBack={() => setSplitEssayId(null)} />
+          </div>
+        )}
+
         {!isMobile &&
+          !embedded &&
+          !splitEssayId &&
           (rightPanel ? (
             <div className="comments-panel-shell">
               <div className="right-panel-tabs">
@@ -977,6 +1046,7 @@ export function EssayWorkspace({ essayId, onBack }: { essayId: string; onBack: (
           onClose={() => setShowWordCount(false)}
         />
       )}
+      {showSplitPicker && <SplitPickerDialog essay={essay} onClose={() => setShowSplitPicker(false)} onSelectExisting={handleSelectExistingForSplit} onClone={handleCloneForSplit} />}
     </div>
   )
 }
