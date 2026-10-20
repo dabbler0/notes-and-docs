@@ -176,6 +176,7 @@ const SENSITIVE_FIELDS: Record<SyncedCollection, string[]> = {
   sources: ['bibtex', 'comment', 'pdfFileName', 'pageHtmlCompressed', 'pageHtml', 'pageTexts'],
   sourceContent: ['pageHtmlCompressed'],
   essayHistory: ['patch', 'label'],
+  projects: ['title'],
   quotes: ['quoteText', 'annotation', 'page'],
   graveyard: ['html', 'nodeTitle'],
   bookmarks: ['label', 'page'],
@@ -296,6 +297,7 @@ export interface SyncCounts {
   sources: number
   sourceContent: number
   essayHistory: number
+  projects: number
   quotes: number
   graveyard: number
   bookmarks: number
@@ -825,8 +827,8 @@ async function runSyncPassNow(onProgress?: (message: string) => void): Promise<S
   const cursors = loadCursors()
   const passStartedAt = Date.now()
   const result: SyncResult = {
-    pushed: { essays: 0, nodes: 0, sources: 0, sourceContent: 0, essayHistory: 0, quotes: 0, graveyard: 0, bookmarks: 0, todos: 0, blobs: 0 },
-    pulled: { essays: 0, nodes: 0, sources: 0, sourceContent: 0, essayHistory: 0, quotes: 0, graveyard: 0, bookmarks: 0, todos: 0, blobs: 0 },
+    pushed: { essays: 0, nodes: 0, sources: 0, sourceContent: 0, essayHistory: 0, projects: 0, quotes: 0, graveyard: 0, bookmarks: 0, todos: 0, blobs: 0 },
+    pulled: { essays: 0, nodes: 0, sources: 0, sourceContent: 0, essayHistory: 0, projects: 0, quotes: 0, graveyard: 0, bookmarks: 0, todos: 0, blobs: 0 },
     deletedBlobs: 0,
   }
 

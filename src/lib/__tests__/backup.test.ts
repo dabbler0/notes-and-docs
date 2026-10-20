@@ -16,8 +16,9 @@ import { addQuoteToBank, listQuoteBank } from '../../models/quoteBankRepo'
 import { addToGraveyard, listGraveyard } from '../../models/graveyardRepo'
 import { addBookmark, listBookmarksForSource } from '../../models/bookmarkRepo'
 import { createSource, getSource, getSourceContent, updateSourceContent } from '../../models/sourcesRepo'
-import { createEssay, getNode, loadNodeMap, saveNode } from '../../models/essaysRepo'
+import { createEssay, getEssay, getNode, loadNodeMap, saveNode } from '../../models/essaysRepo'
 import { commitEssay, listEssayHistory } from '../../models/essayHistoryRepo'
+import { getProject, groupEssays } from '../../models/projectsRepo'
 import type { Essay, EssayNode, Source } from '../../models/types'
 
 interface FakeStorageModule {
@@ -204,6 +205,39 @@ describe("exportBackup includes an essay's own commit history (the essayHistory 
     const oldBackup = await zipWithManifest(manifest)
     const result = await restoreBackup(oldBackup, { mode: 'merge' })
     expect(result.essayHistory).toBe(0)
+    expect(result.essays).toBe(1)
+  })
+})
+
+describe('exportBackup includes projects (the essay-grouping collection — see Project\'s own doc comment in models/types.ts)', () => {
+  it('round-trips a project and its members\' projectId through export + restore', async () => {
+    const a = await createEssay('Essay A')
+    const b = await createEssay('Essay B')
+    await groupEssays(a, b)
+    const projectId = (await getEssay(a.id))!.projectId!
+
+    const zipBlob = await exportBackup()
+
+    const storageMod = (await import('../../storage')) as unknown as FakeStorageModule
+    storageMod.__setActiveBackend(storageMod.createFakeBackend())
+
+    const result = await restoreBackup(zipBlob, { mode: 'replace' })
+    expect(result.projects).toBe(1)
+
+    const project = await getProject(projectId)
+    expect(project).toBeDefined()
+    expect(project?.deleted).toBeFalsy()
+    const restoredA = (await getEssay(a.id))!
+    const restoredB = (await getEssay(b.id))!
+    expect(restoredA.projectId).toBe(projectId)
+    expect(restoredB.projectId).toBe(projectId)
+  })
+
+  it('a backup with no projects key at all (made before projects existed) still restores everything else cleanly', async () => {
+    const manifest: Omit<BackupManifest, 'projects'> = { ...oldFormatManifest(), quotes: [], graveyard: [] }
+    const oldBackup = await zipWithManifest(manifest)
+    const result = await restoreBackup(oldBackup, { mode: 'merge' })
+    expect(result.projects).toBe(0)
     expect(result.essays).toBe(1)
   })
 })

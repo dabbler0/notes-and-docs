@@ -19,8 +19,16 @@
  * see its own doc comment in `models/types.ts`), split out of `essays`/
  * `nodes` for the same reason `sourceContent` is split from `sources`: a
  * commit history can grow large over an essay's lifetime, and nothing about
- * pulling/pushing/listing essays should have to also move it around. */
-export const SYNCED_COLLECTIONS = ['essays', 'nodes', 'sources', 'sourceContent', 'essayHistory', 'quotes', 'graveyard', 'bookmarks', 'todos'] as const
+ * pulling/pushing/listing essays should have to also move it around.
+ *
+ * `projects` holds the lightweight essay-grouping records themselves (see
+ * `Project`'s own doc comment) — a genuinely new collection, not a split
+ * out of an existing one, so (unlike every entry in
+ * `CURRENT_REMOTE_SCHEMA_VERSION`'s own history below) it needed no remote
+ * migration to introduce: there was never any pre-existing `projects` data
+ * anywhere to transform, only a brand new, empty collection that starts
+ * syncing cleanly from here on. */
+export const SYNCED_COLLECTIONS = ['essays', 'nodes', 'sources', 'sourceContent', 'essayHistory', 'projects', 'quotes', 'graveyard', 'bookmarks', 'todos'] as const
 export type SyncedCollection = (typeof SYNCED_COLLECTIONS)[number]
 
 /**

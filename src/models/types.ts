@@ -337,6 +337,40 @@ export interface Essay {
   updatedAt: number
   /** Set once an essay is considered finished — hides it from the main Drafts view (behind a "Show archived" toggle) without deleting anything; see `archiveEssay`/`unarchiveEssay` in `essaysRepo.ts`. Absent (falsy) means active, same as for any essay saved before this existed. */
   archived?: boolean
+  /**
+   * The `Project` (see its own doc comment, below) this essay is currently
+   * grouped under, if any — set by dragging one essay's card onto another's
+   * in the Drafts view (`projectsRepo.ts`'s `groupEssays`), cleared by
+   * ungrouping it. Absent means this essay isn't part of any project, the
+   * same as every essay before projects existed.
+   */
+  projectId?: string
+  /** Tombstone — see the note on Source.deleted. */
+  deleted?: boolean
+}
+
+/**
+ * A lightweight grouping of essays — the "drag one essay onto another"
+ * organizational unit (see `groupEssays` in `projectsRepo.ts`), not a
+ * document in its own right: a project has no content of its own, only
+ * whichever essays currently carry its id as their own `projectId`. Exists
+ * to support split-screen editing (`EssayWorkspace`'s own "Split view",
+ * which only offers other essays in the same project) and merging two
+ * essays' commit histories together (`mergeEssays` in `essaysRepo.ts`,
+ * which requires both essays to already share a project) — grouping two
+ * essays is the prerequisite step for both.
+ *
+ * Auto-deleted (see `cleanupProjectIfTrivial` in `projectsRepo.ts`) the
+ * moment it would otherwise be left with one or zero members — a project
+ * of exactly one essay is meaningless (nothing to split-screen or merge
+ * with), so one never lingers as a pointless wrapper around a single essay.
+ */
+export interface Project {
+  id: string
+  /** Optional — the Drafts view falls back to listing its member essays' own titles wherever this is absent, rather than a generic "Untitled project." */
+  title?: string
+  createdAt: number
+  updatedAt: number
   /** Tombstone — see the note on Source.deleted. */
   deleted?: boolean
 }
