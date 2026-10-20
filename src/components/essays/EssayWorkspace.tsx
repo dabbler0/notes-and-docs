@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'preact/hooks'
 import { addFootnote, createChildNode, addComment, getEssay, getNode, loadNodeMap, moveNode, saveEssay, saveNode } from '../../models/essaysRepo'
+import { commitEssay } from '../../models/essayHistoryRepo'
 import { addToGraveyard } from '../../models/graveyardRepo'
 import { citationHtml, citationNoteSeparator, displayTitle } from '../../lib/bibtex'
 import { promptDialog } from '../../lib/prompt'
@@ -12,6 +13,7 @@ import { emptyMathMarkers } from '../../lib/math'
 import type { Essay, EssayNode, Source } from '../../models/types'
 import { Icon } from '../Icon'
 import { SectionBlock } from './SectionBlock'
+import { EssayHistoryPanel } from './EssayHistoryPanel'
 import { NodeTree } from './NodeTree'
 import { CommentsPanel } from './CommentsPanel'
 import { GraveyardPanel } from './GraveyardPanel'
@@ -35,6 +37,7 @@ export function EssayWorkspace({ essayId, onBack }: { essayId: string; onBack: (
   const [essayTitle, setEssayTitle] = useState('')
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set())
   const [commentMode, setCommentMode] = useState(false)
+  const [showHistory, setShowHistory] = useState(false)
   const [showTree, setShowTree] = useState(true)
   // The right-hand column shows either the comments panel or the graveyard
   // panel, never both — 'null' collapses it entirely, matching showTree's
@@ -433,6 +436,29 @@ export function EssayWorkspace({ essayId, onBack }: { essayId: string; onBack: (
     setCommentMode((v) => !v)
   }
 
+  /**
+   * Freezes the essay's current full state (every node reachable from the
+   * root — see `buildSnapshot` in `essayHistoryRepo.ts`) as a new entry in
+   * its commit history, prompting for an optional label first. A no-op
+   * commit (nothing's changed since the last one) is reported rather than
+   * silently added as a pointless empty diff — see `commitEssay`'s own doc
+   * comment. Opens the History panel afterward so a successful commit is
+   * immediately visible, the same "see what you just did" feedback the old
+   * per-section version pill used to give by switching straight into
+   * comparison view.
+   */
+  async function handleCommit() {
+    if (!essay) return
+    const label = await promptDialog('Label for this commit? (optional)', { placeholder: 'e.g. "First full draft"' })
+    if (label === null) return
+    const commit = await commitEssay(essay, nodeMap, label.trim() || undefined)
+    if (!commit) {
+      alert('Nothing to commit — no changes since the last commit.')
+      return
+    }
+    setShowHistory(true)
+  }
+
   /** Selecting text while in comment mode opens the same comment composer the toolbar's own "Comment" button does (see `beginComment`) — this is just the mouseup-triggered shortcut for it that only applies while comment mode is on. */
   function handleMouseUpForComments() {
     if (!commentMode) return
@@ -658,6 +684,25 @@ export function EssayWorkspace({ essayId, onBack }: { essayId: string; onBack: (
         <button className={`btn btn-ghost btn-sm toolbar-toggle${commentMode ? ' active' : ''}`} onClick={toggleCommentMode}>
           <Icon name="comment" /> <span className="btn-label">{commentMode ? 'Commenting…' : 'Comment mode'}</span>
         </button>
+        <button className="btn btn-ghost btn-sm" title="Commit: save the current state as a point you can come back to later" onClick={handleCommit}>
+          <Icon name="commit" /> <span className="btn-label">Commit</span>
+        </button>
+        <div style={{ position: 'relative' }}>
+          <button className={`btn btn-ghost btn-sm toolbar-toggle${showHistory ? ' active' : ''}`} title="Commit history" onClick={() => setShowHistory((v) => !v)}>
+            <Icon name="history" /> <span className="btn-label">History</span>
+          </button>
+          {showHistory && (
+            <EssayHistoryPanel
+              essay={essay}
+              nodeMap={nodeMap}
+              onReverted={() => {
+                setShowHistory(false)
+                reload()
+              }}
+              onClose={() => setShowHistory(false)}
+            />
+          )}
+        </div>
         <button
           className="btn btn-ghost btn-sm"
           title="Word count"

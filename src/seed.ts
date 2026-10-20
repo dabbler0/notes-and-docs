@@ -1,9 +1,10 @@
 // Seeds one small worked example on first run only, so the prototype opens
-// showing what it does (a section tree, a real version history, a comment,
+// showing what it does (a section tree, a real commit history, a comment,
 // an inline citation) instead of an empty shell. Never overwrites real data:
 // it no-ops the moment either collection is non-empty.
 import { listSources, createSource } from './models/sourcesRepo'
-import { listEssays, createEssay, createChildNode, commitNewVersion, addComment, saveNode, getNode } from './models/essaysRepo'
+import { listEssays, createEssay, createChildNode, addComment, saveNode, getNode, loadNodeMap } from './models/essaysRepo'
+import { commitEssay } from './models/essayHistoryRepo'
 import { emptyEntry } from './lib/bibtex'
 import { markerHtml } from './lib/childMarkers'
 
@@ -23,11 +24,11 @@ export async function seedDemoDataIfEmpty() {
   root.draftContent =
     '<p>Marginal notes have always done two jobs at once: they record a reaction, and they mark a place worth returning to. This draft argues that a good annotation tool should keep those jobs separate.</p>'
   await saveNode(root)
-  await commitNewVersion(root, 'First pass')
+  await commitEssay(essay, await loadNodeMap(essay), 'First pass')
   root.draftContent =
     `<p>Marginal notes have always done two jobs at once: they record a reaction, and they mark a place worth returning to. This draft argues that a good annotation tool should keep those jobs separate <cite class="citation" data-source-id="${ongSource.id}">(Ong, 1982)</cite>, rather than flattening them into a single "comment" feature.</p>`
   await saveNode(root)
-  await commitNewVersion(root, 'Add the Ong framing')
+  await commitEssay(essay, await loadNodeMap(essay), 'Add the Ong framing')
   await addComment(root, { anchorKind: 'node', anchorText: '', body: 'Is this too strong a claim for an opening paragraph? Might want a hedge.' })
 
   const related = await createChildNode(
@@ -43,10 +44,8 @@ export async function seedDemoDataIfEmpty() {
 
   // Subsections are embedded directly in the parent's own content, exactly
   // where the text they were split out of used to be — here, simply
-  // appended after the root's own paragraph. Folded into the same version
-  // as the Ong framing above, so the draft opens clean (no unsaved marker
-  // left dangling past the last committed version).
+  // appended after the root's own paragraph.
   root.draftContent += markerHtml(related.id) + markerHtml(method.id)
   await saveNode(root)
-  await commitNewVersion(root, 'Split off Related work and the data-model sketch')
+  await commitEssay(essay, await loadNodeMap(essay), 'Split off Related work and the data-model sketch')
 }

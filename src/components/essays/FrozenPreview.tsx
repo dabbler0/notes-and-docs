@@ -1,24 +1,27 @@
 import { parseSegments } from '../../lib/childMarkers'
-import type { EssayNode } from '../../models/types'
 
 const HEADING_SIZES = [21, 18, 16.5, 15, 14.5]
 function headingSize(depth: number) {
   return HEADING_SIZES[Math.min(depth, HEADING_SIZES.length - 1)]
 }
 
+/** Everything FrozenPreview actually needs per node — deliberately narrower than a full `EssayNode`, so the same component works whether `nodeMap` comes from the live node tree or from a reconstructed `EssaySnapshot`'s own `nodes` array (see `EssayHistoryPanel.tsx`), with no adapter needed beyond building the `Map`. */
+interface PreviewNode {
+  title: string
+  draftContent: string
+}
+
 /**
  * A read-only mirror of SectionBlock's own rendering — same section-block /
  * section-header / node-content structure and CSS classes, just without
- * contentEditable or any of the editing wiring — used for the frozen half
- * of the version split screen. Without this, a frozen version's own text
- * would show fine but any subsections it referenced would only ever show
- * up as a bare "→ Section title" chip: correct, but it meant the left side
- * routinely looked like a pile of chips with barely any prose, nothing
- * like the actual document. Recursing into subsections' *current* content
- * (there's no separate frozen snapshot of a whole subtree — only this
- * node's own text was ever versioned) is the closest thing to "what this
- * looked like," and reads exactly like the live editor because it reuses
- * the same layout.
+ * contentEditable or any of the editing wiring — used for "View" on a past
+ * essay commit (`EssayHistoryPanel.tsx`). `nodeMap` supplies every node's
+ * own content, keyed by id — a reconstructed `EssayCommitEntry`'s own
+ * snapshot carries real historical content for *every* node, not just the
+ * one being directly previewed, so recursing into a subsection here always
+ * shows what that subsection actually looked like at that point in time,
+ * not (as this component used to have to fall back to, before essay-level
+ * commits existed) whatever it happens to look like live right now.
  */
 export function FrozenPreview({
   content,
@@ -29,7 +32,7 @@ export function FrozenPreview({
 }: {
   content: string
   title?: string
-  nodeMap: Map<string, EssayNode>
+  nodeMap: Map<string, PreviewNode>
   depth: number
   isRoot: boolean
 }) {

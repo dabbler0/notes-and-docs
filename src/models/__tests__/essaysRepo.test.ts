@@ -1,7 +1,7 @@
 /** `archiveEssay`/`unarchiveEssay` — the "mark this essay finished" flag
  * behind the Drafts view's "Show archived" toggle. */
 import { beforeEach, describe, expect, it } from 'vitest'
-import { archiveEssay, commitNewVersion, createChildNode, createEssay, getEssay, getNode, saveEssay, saveNode, unarchiveEssay } from '../essaysRepo'
+import { archiveEssay, createChildNode, createEssay, getEssay, getNode, saveEssay, saveNode, unarchiveEssay } from '../essaysRepo'
 import { createSource, deleteSource, updateSource } from '../sourcesRepo'
 
 interface FakeStorageModule {
@@ -193,8 +193,12 @@ describe('syncCitations: legacy citation migration (via getNode)', () => {
     const essay = await createEssay('Has an old citation in an old version')
     const source = await createSource({ type: 'article', key: 'smith2020', fields: { author: 'Smith', year: '2020' } })
     const root = (await getNode(essay.rootNodeId))!
-    root.draftContent = `<p>Old text with <cite class="citation" data-source-id="${source.id}">(Smith, 2020, p. 5)</cite>.</p>`
-    await commitNewVersion(root)
+    // `versions`/`headVersionId` are deprecated (see NodeVersion's own doc
+    // comment) and nothing writes a new one anymore — but old stored data
+    // keeps them, and syncCitations still has to refresh old pinned version
+    // content too, so this constructs one directly rather than through any
+    // repo function.
+    root.versions.push({ id: 'v-old', content: `<p>Old text with <cite class="citation" data-source-id="${source.id}">(Smith, 2020, p. 5)</cite>.</p>`, createdAt: Date.now() })
     root.draftContent = '<p>Completely different text now.</p>'
     await saveNode(root)
 
@@ -269,8 +273,7 @@ describe('syncCitations: refreshing an already-structured chip\'s label (via get
     const essay = await createEssay('Has a structured citation in an old version')
     const source = await createSource({ type: 'article', key: 'smith2020', fields: { author: 'Smith', year: '2020-2020' } })
     const root = (await getNode(essay.rootNodeId))!
-    root.draftContent = `<p>Old text with <cite class="citation" data-source-id="${source.id}" data-cite-v="2">(Smith, 2020-2020)​</cite>.</p>`
-    await commitNewVersion(root)
+    root.versions.push({ id: 'v-old', content: `<p>Old text with <cite class="citation" data-source-id="${source.id}" data-cite-v="2">(Smith, 2020-2020)​</cite>.</p>`, createdAt: Date.now() })
     root.draftContent = '<p>Completely different text now.</p>'
     await saveNode(root)
 

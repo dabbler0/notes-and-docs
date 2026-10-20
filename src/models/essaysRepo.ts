@@ -3,7 +3,7 @@ import { id } from '../lib/id'
 import { getChildIds, insertMarkerInContent, removeMarkerFromContent, type MarkerPlacement } from '../lib/childMarkers'
 import { citationHtml, citationLabelOpen, extractLegacyCitationNote } from '../lib/bibtex'
 import { listSources } from './sourcesRepo'
-import type { Comment, Essay, EssayNode, Footnote, NodeVersion, Source } from './types'
+import type { Comment, Essay, EssayNode, Footnote, Source } from './types'
 
 const ESSAYS = 'essays'
 const NODES = 'nodes'
@@ -244,19 +244,19 @@ export async function unarchiveEssay(essay: Essay): Promise<void> {
   await saveEssay(essay)
 }
 
-function makeVersion(content: string, label?: string): NodeVersion {
-  return { id: id(), content, createdAt: Date.now(), label }
-}
-
 export async function createEssay(title: string): Promise<Essay> {
   const now = Date.now()
-  const rootVersion = makeVersion('', 'Initial version')
   const root: EssayNode = {
     id: id(),
     essayId: '', // filled below
     title: title || 'Untitled essay',
-    versions: [rootVersion],
-    headVersionId: rootVersion.id,
+    // Deprecated (see NodeVersion's own doc comment) — nothing writes a new
+    // one anymore; history now lives in the essayHistory collection (see
+    // essayHistoryRepo.ts), populated the first time this essay is
+    // committed, not seeded eagerly at creation the way a version used to
+    // be.
+    versions: [],
+    headVersionId: '',
     draftContent: '',
     createdAt: now,
     updatedAt: now,
@@ -291,43 +291,20 @@ export async function deleteEssay(essayId: string): Promise<void> {
   await saveEssay(essay)
 }
 
-export function headVersion(node: EssayNode): NodeVersion {
-  return node.versions.find((v) => v.id === node.headVersionId) ?? node.versions[node.versions.length - 1]
-}
-
 export async function createChildNode(essayId: string, title: string, initialContent = ''): Promise<EssayNode> {
   const now = Date.now()
-  const version = makeVersion(initialContent, 'Initial version')
   const node: EssayNode = {
     id: id(),
     essayId,
     title: title || 'Untitled section',
-    versions: [version],
-    headVersionId: version.id,
+    versions: [], // deprecated — see createEssay's own comment on the same field
+    headVersionId: '',
     draftContent: initialContent,
     createdAt: now,
     updatedAt: now,
   }
   await backend.docs.put(NODES, node)
   return node
-}
-
-/** Commits the node's current draft as a new immutable version and makes it head. */
-export async function commitNewVersion(node: EssayNode, label?: string): Promise<NodeVersion> {
-  const version = makeVersion(node.draftContent, label)
-  node.versions.push(version)
-  node.headVersionId = version.id
-  await saveNode(node)
-  return version
-}
-
-/** Reverts the node's draft + head pointer to an earlier version's content. */
-export async function revertToVersion(node: EssayNode, versionId: string): Promise<void> {
-  const version = node.versions.find((v) => v.id === versionId)
-  if (!version) return
-  node.headVersionId = version.id
-  node.draftContent = version.content
-  await saveNode(node)
 }
 
 /** `node.comments` is optional (absent on a node not yet touched by `migrateComments` — see `getNode`) — this is the one place that reads it directly, so "absent" and "empty" are treated identically everywhere else. */
@@ -655,14 +632,7 @@ export async function moveNode(nodeId: string, fromParentId: string, toParentId:
   await saveNode(toParent)
 }
 
-/**
- * Loads the whole node tree for an essay into a flat map, for rendering.
- * Walks every version's content, not just the live draft — a node that
- * "make a new version" just orphaned (its marker was part of the text that
- * got cleared) is still sitting right there in the *previous* version's
- * content, and the version-compare split screen needs to find it in this
- * map to render it, even though the live document no longer references it.
- */
+/** Loads the whole live node tree for an essay into a flat map, for rendering — walked purely from each node's own current `draftContent` (there's no more reason to also walk old `versions` content for a node a stale version-compare view might have orphaned; that feature no longer exists — see `EssayHistoryPanel.tsx`'s own reconstructed snapshots for how past content is browsed instead). */
 export async function loadNodeMap(essay: Essay): Promise<Map<string, EssayNode>> {
   const map = new Map<string, EssayNode>()
   const stack = [essay.rootNodeId]
@@ -673,9 +643,6 @@ export async function loadNodeMap(essay: Essay): Promise<Map<string, EssayNode>>
     if (!node || node.deleted) continue
     map.set(nid, node)
     stack.push(...getChildIds(node.draftContent))
-    for (const version of node.versions) {
-      stack.push(...getChildIds(version.content))
-    }
   }
   return map
 }

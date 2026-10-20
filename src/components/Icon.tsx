@@ -40,6 +40,7 @@ export type IconName =
   | 'bookmark'
   | 'bookmark-filled'
   | 'history'
+  | 'commit'
   | 'camera'
   | 'qrcode'
   | 'fullscreen'
@@ -303,6 +304,17 @@ export function Icon({ name, size = 18, className }: { name: IconName; size?: nu
         <svg {...props} {...STROKE}>
           <circle cx="12" cy="12" r="9" />
           <polyline points="12 7 12 12 16 14" />
+        </svg>
+      )
+    case 'commit':
+      // The classic "git commit" glyph — a point on a line, standing in for
+      // one snapshot on a timeline of them (see EssayCommitEntry's own doc
+      // comment in models/types.ts).
+      return (
+        <svg {...props} {...STROKE}>
+          <line x1="2" y1="12" x2="8" y2="12" />
+          <line x1="16" y1="12" x2="22" y2="12" />
+          <circle cx="12" cy="12" r="4" />
         </svg>
       )
     case 'camera':

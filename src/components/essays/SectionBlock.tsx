@@ -1,16 +1,15 @@
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks'
 import { createPortal } from 'preact/compat'
-import { commentIdsInContent, commitNewVersion, deleteFootnote, deleteNodeOnly, findCommentById, headVersion, nodeComments, nodeFootnotes, revertToVersion, saveNode, updateFootnoteContent } from '../../models/essaysRepo'
+import { deleteFootnote, deleteNodeOnly, findCommentById, nodeComments, nodeFootnotes, saveNode, updateFootnoteContent } from '../../models/essaysRepo'
 import { deleteComment, promoteComment, toggleCommentDisplayMode } from './commentActions'
 import { CommentCard } from './CommentsPanel'
 import { MathBody } from './MathBody'
 import { isEffectivelyEmptyHtml, parseSegments, reconstructContent } from '../../lib/childMarkers'
-import { FrozenPreview } from './FrozenPreview'
 import { Icon } from '../Icon'
 import { id as newId } from '../../lib/id'
 import { escapeHtml } from '../../lib/html'
 import { confirmDialog } from '../../lib/confirm'
-import type { Comment, EssayNode, Footnote, NodeVersion } from '../../models/types'
+import type { Comment, EssayNode, Footnote } from '../../models/types'
 
 const HEADING_SIZES = [21, 18, 16.5, 15, 14.5]
 function headingSize(depth: number) {
@@ -50,26 +49,13 @@ export function SectionBlock({
   /** Id of a footnote just created by the "Insert footnote" toolbar action, so its own (freshly empty) body can be focused for typing immediately — same idea as focusTitleId for a just-split subsection's title. */
   focusFootnoteId: string | null
   onFootnoteFocused: () => void
-  /** True while the document-wide "Comment mode" toggle is on — see EssayWorkspace.tsx. Turns editing off (contentEditable, title renamed, per-section version/history/demote controls) so the document reads close to a print view; selecting text to comment on still works normally either way. */
+  /** True while the document-wide "Comment mode" toggle is on — see EssayWorkspace.tsx. Turns editing off (contentEditable, title renamed, the demote control) so the document reads close to a print view; selecting text to comment on still works normally either way. */
   commentMode?: boolean
 }) {
   const wrapperRef = useRef<HTMLDivElement>(null)
   const titleRef = useRef<HTMLInputElement>(null)
   const saveTimer = useRef<number | undefined>(undefined)
   const [title, setTitle] = useState(node.title)
-  const head = headVersion(node)
-  const [dirty, setDirty] = useState(node.draftContent !== head.content)
-  // Set right after clicking the version number: the id of the version we
-  // just froze the old content into, which the editor now shows side by
-  // side with this node's (freshly emptied) live editing surface. Local UI
-  // state only — closing it just stops showing the comparison, it doesn't
-  // change any data.
-  const [comparingVersionId, setComparingVersionId] = useState<string | null>(null)
-  // Full version history list, opened from the clock-icon button — separate from
-  // comparingVersionId itself, since browsing history shouldn't have to
-  // also mean "freeze the current text and clear this section," the way
-  // clicking the version pill does.
-  const [showHistory, setShowHistory] = useState(false)
 
   // Recomputed whenever the node's own saved content changes (switching to
   // a different node, or an external mutation like a version revert). Not
@@ -116,18 +102,6 @@ export function SectionBlock({
   useEffect(() => {
     setTitle(node.title)
   }, [node.id, node.title])
-
-  useEffect(() => {
-    setComparingVersionId(null)
-    setShowHistory(false)
-  }, [node.id])
-
-  // Comparing/reverting versions is itself an editing action, out of place
-  // once the document is meant to read like a print view — close out of
-  // it automatically rather than leaving a stale compare view up.
-  useEffect(() => {
-    if (commentMode) setComparingVersionId(null)
-  }, [commentMode])
 
   // Push the freshly-parsed segments' text into their shard DOM elements,
   // but only when the node's saved content actually changed underneath us
@@ -176,7 +150,6 @@ export function SectionBlock({
       i++
     }
     syncedContent.current = { node, html: node.draftContent }
-    setDirty(node.draftContent !== head.content)
     if (anyCleaned) scheduleSave()
     // Re-derive the current marker elements *after* the innerHTML syncs
     // above — an unfocused shard just got fresh ones (its old ones, and
@@ -241,8 +214,6 @@ export function SectionBlock({
     autoFormatEmphasis(e as InputEvent)
     autoMathify(e as InputEvent)
     dedupeMathMarkerIds(e as InputEvent)
-    const html = reconstructContent(node.id)
-    if (html != null) setDirty(html !== head.content)
     scheduleSave()
   }
 
@@ -343,26 +314,6 @@ export function SectionBlock({
     onTitleChanged()
   }
 
-  /**
-   * "Make a new version": freezes whatever's here right now, then clears
-   * the node so there's a blank page to write the new version on — with
-   * the just-frozen one kept in view alongside it, not tucked behind a
-   * history list, for as long as that's useful. This orphans any current
-   * subsections (their markers were part of the text that just got
-   * cleared) until/unless the frozen version is reverted to; they aren't
-   * deleted, just unreferenced in the meantime.
-   */
-  async function handleMakeNewVersion() {
-    window.clearTimeout(saveTimer.current)
-    const html = reconstructContent(node.id) ?? node.draftContent
-    node.draftContent = html
-    const frozen = await commitNewVersion(node)
-    node.draftContent = ''
-    await saveNode(node)
-    setComparingVersionId(frozen.id)
-    onTitleChanged()
-  }
-
   /** Deletes the footnote's own record and, if it's still actually mounted (it might not be — this node could be collapsed, or the marker could already be gone from a since-edited draft), its `<sup>` marker from the live content too, so a deleted footnote doesn't leave a dangling reference behind. */
   async function handleDeleteFootnote(footnoteId: string) {
     window.clearTimeout(saveTimer.current)
@@ -380,56 +331,10 @@ export function SectionBlock({
     onTitleChanged()
   }
 
-  async function handleRevertToComparing() {
-    if (!comparingVersionId) return
-    await revertToVersion(node, comparingVersionId)
-    setComparingVersionId(null)
-    onTitleChanged()
-  }
-
-  /** Non-destructive: just shows an older version side by side with whatever's currently here, without touching any data. */
-  function handleViewVersion(versionId: string) {
-    setComparingVersionId(versionId)
-    setShowHistory(false)
-  }
-
-  // Comments live flat on the node now, not per-version (see
-  // `nodeComments`'s own doc comment) — so, unlike the old per-version
-  // model, this never falls behind a `commitNewVersion` and never needs to
-  // cross-reference the content's own marks to find a comment that's still
-  // "open" but recorded against an older version. Only top-level comments
-  // count here; a reply or a comment-on-a-comment being unresolved doesn't
-  // make the thread itself show as open in this badge.
+  // Only top-level comments count here; a reply or a comment-on-a-comment
+  // being unresolved doesn't make the thread itself show as open in this
+  // badge.
   const openComments = nodeComments(node).filter((c) => c.parentId === null && !c.resolved).length
-  const comparingVersion: NodeVersion | undefined = comparingVersionId ? node.versions.find((v) => v.id === comparingVersionId) : undefined
-  const sortedVersions = [...node.versions].sort((a, b) => b.createdAt - a.createdAt)
-  // Which of this node's text-anchored comments were actually present (by
-  // mark) in `comparingVersion`'s own frozen content — a comment added
-  // after that version was frozen has no mark there at all, and one whose
-  // mark's *text* has since been edited away in later versions still shows
-  // here exactly as it looked at the time this version was made.
-  const frozenComments = comparingVersion ? nodeComments(node).filter((c) => c.anchorKind === 'text' && commentIdsInContent(comparingVersion.content).includes(c.id)) : []
-
-  const historyDropdown = showHistory && (
-    <div className="history-dropdown">
-      <div className="history-dropdown-title">Version history</div>
-      <div className="history-list">
-        {sortedVersions.map((v) => (
-          <div className={`history-row${v.id === node.headVersionId ? ' current' : ''}${v.id === comparingVersionId ? ' active' : ''}`} key={v.id}>
-            <div className="history-row-info">
-              <div className="history-row-label">
-                {v.id === node.headVersionId && <span className="chip">current</span>} {v.label || 'Version'}
-              </div>
-              <div className="history-row-date muted">{new Date(v.createdAt).toLocaleString()}</div>
-            </div>
-            <button className="btn btn-sm" onClick={() => handleViewVersion(v.id)}>
-              View
-            </button>
-          </div>
-        ))}
-      </div>
-    </div>
-  )
 
   const liveEditor = (
     <div className="section-body" ref={wrapperRef} hidden={isCollapsed}>
@@ -484,28 +389,18 @@ export function SectionBlock({
   return (
     <div className="section-block" style={{ paddingLeft: Math.min(depth, 6) * 16 }} data-node-id={node.id}>
       {isRoot ? (
-        // The root has no title of its own (the essay title in the topbar
-        // covers that) and can't be collapsed away, but its own text is
-        // still independently versionable, so it still gets a version pill.
+        // The root has no title of its own — the essay title in the topbar
+        // covers that — and can't be collapsed away. Commit history is now
+        // essay-wide (see EssayWorkspace's own "Commit"/"History" buttons),
+        // not per-section, so there's nothing version-related to show here
+        // anymore.
         <div className="section-header root-header">
           <span style={{ flex: 1 }} />
-          {!commentMode && dirty && <span className="version-pill">unsaved</span>}
-          {!commentMode && (
-            <button className="version-pill version-pill-btn" onClick={handleMakeNewVersion} title="Make a new version: freezes the current text and starts a blank one, side by side">
-              v{node.versions.length}
-            </button>
-          )}
-          {!commentMode && (
-            <button className="icon-btn" onClick={() => setShowHistory((v) => !v)} title="Version history">
-              <Icon name="history" size={15} />
-            </button>
-          )}
           {openComments > 0 && (
             <span className="chip comment-count-chip">
               <Icon name="comment" size={12} /> {openComments}
             </span>
           )}
-          {historyDropdown}
         </div>
       ) : (
         <div className="section-header">
@@ -530,17 +425,6 @@ export function SectionBlock({
               onBlur={saveTitle}
             />
           )}
-          {!commentMode && dirty && <span className="version-pill">unsaved</span>}
-          {!commentMode && (
-            <button className="version-pill version-pill-btn" onClick={handleMakeNewVersion} title="Make a new version: freezes the current text and starts a blank one, side by side">
-              v{node.versions.length}
-            </button>
-          )}
-          {!commentMode && (
-            <button className="icon-btn" onClick={() => setShowHistory((v) => !v)} title="Version history">
-              <Icon name="history" size={15} />
-            </button>
-          )}
           {openComments > 0 && (
             <span className="chip comment-count-chip">
               <Icon name="comment" size={12} /> {openComments}
@@ -551,42 +435,11 @@ export function SectionBlock({
               ⤴
             </button>
           )}
-          {historyDropdown}
         </div>
       )}
 
-      {/* `.section-content-row` and the "live" pane inside it are always
-          *mounted* at the same position with the same key, comparing or
-          collapsed or not — only the `hidden` attribute and the "frozen"
-          pane's presence toggle. Unmounting this on collapse (like the
-          "frozen" pane can safely do) would tear down the live editable
-          DOM too, silently discarding whatever the user had just typed but
-          not yet saved; conditionally *nesting* the live editor deeper
-          (rather than just adding a sibling next to it) has the same
-          failure mode, since Preact remounts anything moved to a different
-          parent. */}
-      <div className={`section-content-row${comparingVersion ? ' comparing' : ''}`} hidden={isCollapsed}>
-          {comparingVersion && (
-            <div className="version-split-pane frozen-pane" key="frozen">
-              <div className="version-split-label">
-                {comparingVersion.label || 'Version'} — {new Date(comparingVersion.createdAt).toLocaleString()}
-                {comparingVersion.id === node.headVersionId && ' (current)'}
-              </div>
-              <FrozenPreview content={comparingVersion.content} nodeMap={nodeMap} depth={0} isRoot />
-              {frozenComments.length > 0 && (
-                <div className="version-split-comments">
-                  {frozenComments.map((c) => (
-                    <div className={`comment-item${c.resolved ? ' resolved' : ''}`} key={c.id}>
-                      <div className="anchor">“{c.anchorText}”</div>
-                      <div dangerouslySetInnerHTML={{ __html: c.body }} />
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-          )}
+      <div className="section-content-row" hidden={isCollapsed}>
           <div className="version-split-pane live-pane" key="live">
-            {comparingVersion && <div className="version-split-label">Current draft — editing</div>}
             {liveEditor}
             {inlineMarkers.map((el) => {
               const commentId = el.getAttribute('data-comment-id')
@@ -649,21 +502,7 @@ export function SectionBlock({
             })}
           </div>
       </div>
-      {!isCollapsed && comparingVersion && (
-        <div className="version-split-actions">
-          <button className="btn btn-sm btn-danger" onClick={handleRevertToComparing}>
-            ↺ Revert to this version
-          </button>
-          <button className="btn btn-sm btn-primary" onClick={() => setComparingVersionId(null)}>
-            ✓ Done comparing
-          </button>
-        </div>
-      )}
-      {/* Footnotes aren't versioned the way a node's own text is (there's
-          no equivalent of draftContent/versions for them) — they just
-          always reflect node.footnotes as it stands right now, regardless
-          of which version's text happens to be shown above during a
-          compare. Numbered locally to this node, in marker order, via the
+      {/* Numbered locally to this node, in marker order, via the
           `.node-footnotes` CSS counter (see styles.css) rather than a
           stored number, so adding/removing/reordering one never leaves a
           stale number sitting on another. */}
