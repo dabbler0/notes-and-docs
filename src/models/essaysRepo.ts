@@ -1,7 +1,7 @@
 import { backend } from '../storage'
 import { id } from '../lib/id'
 import { getChildIds, insertMarkerInContent, removeMarkerFromContent, type MarkerPlacement } from '../lib/childMarkers'
-import { citationHtml, extractLegacyCitationNote } from '../lib/bibtex'
+import { citationHtml, citationLabel, extractLegacyCitationNote } from '../lib/bibtex'
 import { listSources } from './sourcesRepo'
 import type { Comment, Essay, EssayNode, Footnote, NodeVersion, Source } from './types'
 
@@ -21,52 +21,59 @@ export async function getNode(nodeId: string): Promise<EssayNode | undefined> {
   const node = await backend.docs.get<EssayNode>(NODES, nodeId)
   if (node) {
     migrateComments(node)
-    await migrateLegacyCitations(node)
+    await syncCitations(node)
   }
   return node
 }
 
 /**
- * Upgrades any *legacy* citation chip — one inserted before `citationHtml`
- * (lib/bibtex.ts) started tagging its output `data-cite-v="2"` and storing
- * a unique source reference plus a separate freeform note as structured
- * data, rather than baking everything into freeform, hand-editable label
- * text — into that same structured shape, right where the chip was. This
- * is citations' own version of `migrateComments` above: lazy, run every
- * time a node is loaded, mutating in place rather than writing back
- * immediately (the next real edit's own autosave persists it for real,
- * same as that one).
+ * Keeps every `.citation` chip's own displayed label in step with its
+ * `data-source-id`'s *current* bibtex entry — `data-source-id` has always
+ * been the real reference; the label text sitting next to it (inside
+ * `.citation-base`) was only ever a cached rendering of it, taken at
+ * whatever moment the chip was inserted or last upgraded. Without this,
+ * fixing a typo or a wrong year on a source would leave every citation
+ * that already points to it quietly citing the old, wrong text forever —
+ * `data-source-id` alone would be true, but nothing downstream reads it
+ * instead of the label, so a reader never sees the correction. Lazy, run
+ * every time a node is loaded (same as `migrateComments` above), mutating
+ * in place rather than writing back immediately — the next real edit's
+ * own autosave persists it for real.
  *
- * A legacy chip already carries a real `data-source-id` — the one piece
- * of this that was never actually freeform — so there's a source to
- * rebuild a proper chip from; only the freeform note has to be recovered,
- * via `extractLegacyCitationNote` reading whatever page number (or year,
- * correctly excluded — see that function's own doc comment) the old label
- * text happened to mention. The new chip is built the exact same way a
- * fresh "Cite" does, via `citationHtml(source, { note })` — so its label
- * is freshly rendered from the source's own bibtex entry, not whatever
- * the old one's text happened to say (a hand-edited label from before
- * this existed doesn't survive the upgrade verbatim, only the source it
- * pointed to and the page it mentioned do).
+ * Two different chip shapes land here, handled differently:
  *
- * Falls back to flattening to plain text — the same degraded fallback
- * this migration used before `data-source-id` was recognized as already
- * being real structured data — only when there's no source left to
- * rebuild from at all (a missing `data-source-id`, or a source that's
- * since been deleted): nothing to reconstruct a valid chip out of.
+ * - **Legacy** (no `data-cite-v` — from before `citationHtml` started
+ *   tagging its own output and splitting a source reference plus a
+ *   separate freeform note out as structured data at all): the one piece
+ *   of real information its old, hand-editable label text ever carried on
+ *   top of `data-source-id` is wherever it mentioned a page, recovered via
+ *   `extractLegacyCitationNote`. A rebuilt chip is only possible when
+ *   there's still a source to rebuild it from (a missing `data-source-id`,
+ *   or a source that's since been deleted, falls back to flattening to
+ *   plain text instead — the same degraded fallback this used before
+ *   `data-source-id` was recognized as already being real structured
+ *   data).
+ * - **Already structured** (`data-cite-v` present): its own `data-note` is
+ *   real, freeform, user-entered data — never touched. Only the
+ *   `.citation-base` label itself (always a pure function of the source's
+ *   bibtex, never hand-edited — see `citationHtml`'s own doc comment on
+ *   why that span is `contenteditable="false"`) gets re-derived, and only
+ *   rebuilt at all when it's actually gone stale (a plain string
+ *   comparison first, so a node with nothing to fix is never needlessly
+ *   rewritten). A chip whose source has since been deleted is left exactly
+ *   as it is — nothing to refresh it *from*, and unlike the legacy case
+ *   there's no need to degrade it: its label was already valid structured
+ *   HTML, just possibly stale.
  *
- * Only `.citation` elements *without* the version marker are touched — a
- * node holding a mix of old and freshly-inserted citations (the ordinary
- * case right after this shipped) keeps the new ones exactly as they are.
  * Runs against `draftContent` and every historical `version.content`
  * alike, so an old pinned version doesn't go on citing a source through
- * markup nothing downstream still understands as structured.
+ * either unstructured markup or a stale label nothing downstream expects.
  */
-async function migrateLegacyCitations(node: EssayNode): Promise<void> {
+async function syncCitations(node: EssayNode): Promise<void> {
   const htmls = [node.draftContent, ...node.versions.map((v) => v.content)]
   if (!htmls.some((html) => html.includes('citation'))) return
   // Sources are fetched at most once per `getNode` call, lazily, and only
-  // when there's actually a legacy citation to resolve against them —
+  // when there's actually a citation to resolve against them —
   // `listSources()` itself is already the cheap, metadata-only path (no
   // extracted-PDF-text decompression), unlike calling `getSource` once per
   // citation would be.
@@ -75,34 +82,53 @@ async function migrateLegacyCitations(node: EssayNode): Promise<void> {
     if (!sourcesById) sourcesById = new Map((await listSources()).map((s) => [s.id, s]))
     return sourcesById.get(sourceId)
   }
-  node.draftContent = await flattenLegacyCitations(node.draftContent, sourceFor)
-  for (const version of node.versions) version.content = await flattenLegacyCitations(version.content, sourceFor)
+  node.draftContent = await syncCitationsInHtml(node.draftContent, sourceFor)
+  for (const version of node.versions) version.content = await syncCitationsInHtml(version.content, sourceFor)
 }
 
-async function flattenLegacyCitations(html: string, sourceFor: (sourceId: string) => Promise<Source | undefined>): Promise<string> {
+async function syncCitationsInHtml(html: string, sourceFor: (sourceId: string) => Promise<Source | undefined>): Promise<string> {
   // Cheap fast path: the overwhelming majority of nodes never had a
   // citation in them at all, and this skips ever constructing a
   // DOMParser document for any of them.
   if (!html.includes('citation')) return html
   const doc = new DOMParser().parseFromString(html, 'text/html')
-  const legacyEls = Array.from(doc.querySelectorAll('.citation')).filter((el) => !el.hasAttribute('data-cite-v'))
-  if (legacyEls.length === 0) return html
-  for (const el of legacyEls) {
+  const els = Array.from(doc.querySelectorAll('.citation'))
+  if (els.length === 0) return html
+  // Only actually re-serializes (and so only ever persists, on the next
+  // real save) when something below genuinely changed — the common case,
+  // a node whose citations are all already accurate, leaves `html`
+  // completely untouched rather than returning an incidentally
+  // re-formatted copy of the exact same markup.
+  let changed = false
+  for (const el of els) {
     const sourceId = el.getAttribute('data-source-id')
     const source = sourceId ? await sourceFor(sourceId) : undefined
-    if (source) {
-      const note = extractLegacyCitationNote(el.textContent ?? '', source.bibtex.fields.year)
-      const scratch = doc.createElement('div')
-      scratch.innerHTML = citationHtml(source, { note })
-      const replacement = scratch.firstElementChild
-      if (replacement) {
-        el.replaceWith(replacement)
-        continue
+    if (!el.hasAttribute('data-cite-v')) {
+      changed = true
+      if (source) {
+        const note = extractLegacyCitationNote(el.textContent ?? '', source.bibtex.fields.year)
+        replaceWithFreshCitation(doc, el, source, note)
+      } else {
+        el.replaceWith(doc.createTextNode(el.textContent ?? ''))
       }
+      continue
     }
-    el.replaceWith(doc.createTextNode(el.textContent ?? ''))
+    if (!source) continue // nothing to refresh the label from — leave exactly as is
+    const base = el.querySelector(':scope > .citation-base')
+    if (base?.textContent === citationLabel(source.bibtex)) continue // already accurate
+    replaceWithFreshCitation(doc, el, source, el.getAttribute('data-note') ?? undefined)
+    changed = true
   }
-  return doc.body.innerHTML
+  return changed ? doc.body.innerHTML : html
+}
+
+/** Rebuilds `el` in place as a fresh `citationHtml(source, { note })` chip — the exact same shape a brand-new "Cite" produces, so its label is always a pure function of the source's current bibtex. */
+function replaceWithFreshCitation(doc: Document, el: Element, source: Source, note: string | undefined): void {
+  const scratch = doc.createElement('div')
+  scratch.innerHTML = citationHtml(source, { note })
+  const replacement = scratch.firstElementChild
+  if (replacement) el.replaceWith(replacement)
+  else el.replaceWith(doc.createTextNode(el.textContent ?? ''))
 }
 
 /** A comment as it could look in already-stored data predating either migration below — a wider, looser shape than the current `Comment` type allows (in particular, `anchorKind` could be `'reply'`, a kind that no longer exists at all — see the loop below). */

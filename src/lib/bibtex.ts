@@ -311,14 +311,19 @@ export function pageNote(source: Source, page: number | undefined): string {
  * generated author/date text in place.
  *
  * `data-cite-v="2"` marks a chip as using this structured shape.
- * `essaysRepo.ts`'s own `migrateLegacyCitations` upgrades any `.citation`
- * element *without* it — one from before this existed, where the label
- * was the only thing ever stored, freeform and hand-editable — into this
- * same shape (or, failing that, flattens it to plain text): anything
+ * `essaysRepo.ts`'s own `syncCitations` upgrades any `.citation` element
+ * *without* it — one from before this existed, where the label was the
+ * only thing ever stored, freeform and hand-editable — into this same
+ * shape (or, failing that, flattens it to plain text): anything
  * downstream (export, a future style change, `syncCitationNotes` above)
  * that expects structured data now expects it from every `.citation`
  * element it sees, which only holds if there's no silent, unstructured
- * leftover from before passing itself off as one.
+ * leftover from before passing itself off as one. That same function
+ * also keeps an already-structured chip's own label re-derived from its
+ * source's current bibtex on every load, so a later fix to the source
+ * (a corrected year, a typo) actually reaches citations that already
+ * point to it, rather than leaving them citing whatever was true the
+ * moment they were inserted.
  *
  * `opts.note` is used directly when given; `opts.page` is the older,
  * still-supported shorthand for a caller that has a raw PDF page rather

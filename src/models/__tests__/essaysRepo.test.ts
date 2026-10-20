@@ -2,7 +2,7 @@
  * behind the Drafts view's "Show archived" toggle. */
 import { beforeEach, describe, expect, it } from 'vitest'
 import { archiveEssay, commitNewVersion, createChildNode, createEssay, getEssay, getNode, saveEssay, saveNode, unarchiveEssay } from '../essaysRepo'
-import { createSource } from '../sourcesRepo'
+import { createSource, deleteSource, updateSource } from '../sourcesRepo'
 
 interface FakeStorageModule {
   createFakeBackend(): unknown
@@ -94,7 +94,7 @@ describe("saveNode bubbling up to its essay's updatedAt", () => {
  * reference. Falls back to flattening to plain text only when there's no
  * source left to rebuild from (missing id, or a deleted source).
  */
-describe('migrateLegacyCitations (via getNode)', () => {
+describe('syncCitations: legacy citation migration (via getNode)', () => {
   it('upgrades a legacy citation chip into the current structured format, recovering the page from the old label text', async () => {
     const essay = await createEssay('Has an old citation')
     const source = await createSource({ type: 'article', key: 'smith2020', fields: { author: 'Smith', year: '2020' } })
@@ -172,7 +172,7 @@ describe('migrateLegacyCitations (via getNode)', () => {
     expect(reloaded.draftContent).toContain('As argued by (Smith, 2020), the sky is blue.')
   })
 
-  it('leaves a current-format citation chip (data-cite-v) untouched', async () => {
+  it('leaves a current-format citation chip (data-cite-v) untouched when its source no longer exists to refresh from', async () => {
     const essay = await createEssay('Has a new citation')
     const root = (await getNode(essay.rootNodeId))!
     const chip = '<cite class="citation" data-source-id="s1" data-cite-v="2" data-note="p. 5">(Smith, 2020), p. 5</cite>'
@@ -206,5 +206,74 @@ describe('migrateLegacyCitations (via getNode)', () => {
 
     const reloaded = (await getNode(essay.rootNodeId))!
     expect(reloaded.draftContent).toBe('<p>Just ordinary prose, nothing to migrate.</p>')
+  })
+})
+
+/**
+ * `syncCitations`' other job, independent of legacy migration: keeping an
+ * *already*-structured citation chip's own label re-derived from its
+ * source's current bibtex on every load, so a correction to the source
+ * (a fixed year, a typo) actually reaches citations already pointing to
+ * it — see that function's own doc comment for the reasoning.
+ */
+describe('syncCitations: refreshing an already-structured chip\'s label (via getNode)', () => {
+  it('re-renders the label from the source\'s current bibtex after the source is edited, keeping the chip\'s own note untouched', async () => {
+    const essay = await createEssay('Cites a source whose year gets fixed later')
+    const source = await createSource({ type: 'article', key: 'smith2020', fields: { author: 'Smith', year: '2020-2020' } })
+    const root = (await getNode(essay.rootNodeId))!
+    root.draftContent = `<p>As argued<cite class="citation" data-source-id="${source.id}" data-cite-v="2" data-note="p. 5">(Smith, 2020-2020), p. 5</cite>.</p>`
+    await saveNode(root)
+
+    source.bibtex.fields.year = '2020'
+    await updateSource(source)
+
+    const reloaded = (await getNode(essay.rootNodeId))!
+    expect(reloaded.draftContent).toContain('class="citation-base" contenteditable="false">(Smith, 2020)</span>, p. 5')
+    expect(reloaded.draftContent).toContain('data-note="p. 5"') // the chip's own freeform note survives the refresh verbatim
+    expect(reloaded.draftContent).not.toContain('2020-2020')
+  })
+
+  it('does nothing — and leaves the markup byte-for-byte the same — when the label is already accurate', async () => {
+    const essay = await createEssay('Cites an already-accurate source')
+    const source = await createSource({ type: 'article', key: 'smith2020', fields: { author: 'Smith', year: '2020' } })
+    const root = (await getNode(essay.rootNodeId))!
+    root.draftContent = `<p>As argued <cite class="citation" data-source-id="${source.id}" data-cite-v="2">(Smith, 2020)​</cite>.</p>`
+    await saveNode(root)
+
+    const before = (await getNode(essay.rootNodeId))!.draftContent
+    const reloaded = (await getNode(essay.rootNodeId))!
+    expect(reloaded.draftContent).toBe(before)
+  })
+
+  it('leaves an already-structured chip exactly as is when its source has since been deleted', async () => {
+    const essay = await createEssay('Cites a source that gets deleted')
+    const source = await createSource({ type: 'article', key: 'smith2020', fields: { author: 'Smith', year: '2020' } })
+    const root = (await getNode(essay.rootNodeId))!
+    const chip = `<cite class="citation" data-source-id="${source.id}" data-cite-v="2">(Smith, 2020)​</cite>`
+    root.draftContent = `<p>${chip}</p>`
+    await saveNode(root)
+
+    await deleteSource(source.id)
+
+    const reloaded = (await getNode(essay.rootNodeId))!
+    expect(reloaded.draftContent).toContain(chip)
+  })
+
+  it('refreshes a chip in an older, pinned version too, not just the live draft', async () => {
+    const essay = await createEssay('Has a structured citation in an old version')
+    const source = await createSource({ type: 'article', key: 'smith2020', fields: { author: 'Smith', year: '2020-2020' } })
+    const root = (await getNode(essay.rootNodeId))!
+    root.draftContent = `<p>Old text with <cite class="citation" data-source-id="${source.id}" data-cite-v="2">(Smith, 2020-2020)​</cite>.</p>`
+    await commitNewVersion(root)
+    root.draftContent = '<p>Completely different text now.</p>'
+    await saveNode(root)
+
+    source.bibtex.fields.year = '2020'
+    await updateSource(source)
+
+    const reloaded = (await getNode(essay.rootNodeId))!
+    const oldVersion = reloaded.versions.find((v) => v.content.includes('Old text'))!
+    expect(oldVersion.content).toContain('(Smith, 2020)</span>')
+    expect(oldVersion.content).not.toContain('2020-2020')
   })
 })
