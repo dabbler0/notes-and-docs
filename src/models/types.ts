@@ -251,6 +251,15 @@ export interface Comment {
   updatedAt: number
 }
 
+/**
+ * @deprecated Replaced by the essay-level commit history (`EssayCommitEntry`,
+ * below) — see that type's own doc comment, and the design note at the
+ * bottom of this file. Kept here only so already-stored data (local, synced,
+ * or mid-rollout on another device) still deserializes without error; no
+ * code writes a new one of these anymore, and `essaysMigrations.ts` converts
+ * a node's existing ones into `EssayCommitEntry` rows once, non-destructively
+ * (this data is left in place afterward, never deleted).
+ */
 export interface NodeVersion {
   id: string
   /** HTML content of this node's own text (not including children). */
@@ -281,7 +290,9 @@ export interface EssayNode {
   id: string
   essayId: string
   title: string
+  /** @deprecated See `NodeVersion`'s own doc comment — no longer written. */
   versions: NodeVersion[]
+  /** @deprecated See `NodeVersion`'s own doc comment — no longer written. */
   headVersionId: string
   /**
    * Live working copy of content, edited freely without creating a version.
@@ -387,11 +398,81 @@ export interface TodoItem {
 }
 
 /**
- * Design note on versioning (see project brief): each node's own text has an
- * independent, explicit version history (draftContent -> "make a new
- * version" -> snapshot pushed to `versions`, becomes `headVersionId`).
- * Structure (which markers a node's content embeds) is deliberately *not*
- * part of that history — a version is just a frozen HTML snapshot, and
- * reverting one node's text can't disturb any other node, since nothing
- * about any other node is stored on it.
+ * One entry in an essay's own commit history — the replacement for the old
+ * per-node `versions`/`headVersionId` scheme (see `NodeVersion`'s own doc
+ * comment). Unlike the old system, history lives on the *essay* ("document")
+ * as a whole, not on any one node/section: a commit is a deliberate,
+ * explicit, user-triggered snapshot of the entire document (every node
+ * reachable from `Essay.rootNodeId` — see `EssaySnapshot`), not something
+ * created implicitly by ordinary editing.
+ *
+ * A commit never stores its own snapshot directly — only `patch`, a unified
+ * diff (`lib/essayHistory.ts`'s `diffSnapshots`, built on the `diff`
+ * package) from the *previous* commit's reconstructed snapshot text to this
+ * one's. Reconstructing any commit's actual content means replaying every
+ * patch from the very first commit (`seq` 0) up through it, in order (see
+ * `reconstructSnapshot`) — the same append-only, replay-to-reconstruct shape
+ * a git-style commit log has, chosen specifically so a revert never has to
+ * destroy or rewrite history: it just appends one more commit (`kind:
+ * 'revert'`) whose patch happens to move the document *backward*, which
+ * means a revert is itself always revertible the exact same way any other
+ * commit is.
+ *
+ * Lives in its own `essayHistory` collection (`models/essayHistoryRepo.ts`),
+ * split out from `nodes`/`essays` the same way `sourceContent` is split from
+ * `sources` — a commit history can grow large over an essay's lifetime, and
+ * nothing about ordinary editing or listing essays should ever need to load
+ * it; only actually opening the history panel does.
  */
+export interface EssayCommitEntry {
+  id: string
+  essayId: string
+  /** This commit's position in its essay's own history — 0 for the first.
+   * Explicit rather than inferred from `createdAt`, so merging two essays'
+   * histories together (`mergeEssays` in `essaysRepo.ts`) can splice one
+   * directly after the other with a clean, unambiguous order regardless of
+   * either essay's own real-world timestamps. */
+  seq: number
+  createdAt: number
+  /** Optional user-supplied label ("First full draft") — falls back to a
+   * plain timestamp wherever this is displayed if absent. */
+  label?: string
+  /** `'commit'` — an ordinary, explicit commit. `'revert'` — appended by
+   * reverting to an earlier commit (see `EssayCommitEntry`'s own doc
+   * comment). `'merge'` — the one bridging commit `mergeEssays` inserts
+   * between a base essay's own last commit and an appended essay's first
+   * (see that function's own doc comment in `essaysRepo.ts`); every commit
+   * transplanted after it keeps its own original `kind`. `'migrated'` —
+   * synthesized by `essaysMigrations.ts` from the old per-node `versions`
+   * system; see that module's own doc comment for how. */
+  kind: 'commit' | 'revert' | 'merge' | 'migrated'
+  /** A unified diff (`Diff.createPatch`) from the previous commit's own
+   * reconstructed snapshot text (or `''`, for `seq: 0`) to this commit's —
+   * see this type's own doc comment. */
+  patch: string
+}
+
+/**
+ * The "structured serialization" an `EssayCommitEntry`'s own `patch` is a
+ * diff of — a deterministic JSON snapshot of an essay's entire document:
+ * every node reachable from `rootNodeId`, in the same document order
+ * `lib/export.ts`'s `essayToMarkdown` already walks the tree in (see
+ * `buildSnapshot` in `lib/essayHistory.ts`). Comments travel with the
+ * snapshot (unlike the old per-version system, which deliberately kept them
+ * off `NodeVersion` — see `Comment`'s own doc comment) specifically because
+ * a commit is now a deliberate, infrequent action rather than something
+ * every edit implicitly created: reverting to an old commit should bring
+ * back the comments that existed on it too, and nothing about a node's
+ * content should ever become *only* reachable by replaying patches with no
+ * way to recover its comments from them.
+ *
+ * Tree *shape* (which nodes nest under which, via the markers embedded in
+ * each node's own `draftContent` — see `childMarkers.ts`) is implicitly part
+ * of each node's own `draftContent` here, same as it always is; it was never
+ * a thing stored separately even by the old per-node system.
+ */
+export interface EssaySnapshot {
+  title: string
+  rootNodeId: string
+  nodes: { id: string; title: string; draftContent: string; footnotes: Footnote[]; comments: Comment[] }[]
+}

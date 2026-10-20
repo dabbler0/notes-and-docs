@@ -10,7 +10,7 @@
  */
 import JSZip from 'jszip'
 import { backend } from '../storage'
-import type { Bookmark, Essay, EssayNode, GraveyardFragment, QuoteBankEntry, Source, TodoItem } from '../models/types'
+import type { Bookmark, Essay, EssayCommitEntry, EssayNode, GraveyardFragment, QuoteBankEntry, Source, TodoItem } from '../models/types'
 import type { StoredSourceContent } from '../models/sourcesRepo'
 
 const BACKUP_VERSION = 1
@@ -56,12 +56,22 @@ export interface BackupManifest {
    * was simply never written to an old backup in the first place.
    */
   sourceContent?: { id: string; updatedAt: number }[]
+  /**
+   * Every essay's own commit history (`EssayCommitEntry` — see its own doc
+   * comment in `models/types.ts`) — unlike `sourceContent` above, included
+   * directly here rather than as separate zip files: a commit's own payload
+   * (`patch`, a plain unified-diff *string*) has no binary field to avoid
+   * bloating a JSON array with, so there's no reason to reach for the
+   * zip-folder-of-files trick `sourceContent`/`blobs` need. Absent in a
+   * backup made before this field existed — always read with `?? []`.
+   */
+  essayHistory?: EssayCommitEntry[]
   /** Which blob ids the zip's blobs/ folder actually contains — a source can reference a pdfBlobId whose blob went missing locally, so this isn't just "every source's pdfBlobId." */
   blobs: string[]
 }
 
 export async function exportBackup(): Promise<Blob> {
-  const [essays, nodes, sources, quotes, graveyard, bookmarks, todos, sourceContentRecords] = await Promise.all([
+  const [essays, nodes, sources, quotes, graveyard, bookmarks, todos, sourceContentRecords, essayHistory] = await Promise.all([
     backend.docs.list<Essay>('essays'),
     backend.docs.list<EssayNode>('nodes'),
     backend.docs.list<Source>('sources'),
@@ -74,6 +84,7 @@ export async function exportBackup(): Promise<Blob> {
     // collection (and so a whole separate `backend.docs.list` call) rather
     // than something already sitting on each `Source` record above.
     backend.docs.list<StoredSourceContent>('sourceContent'),
+    backend.docs.list<EssayCommitEntry>('essayHistory'),
   ])
 
   const zip = new JSZip()
@@ -102,7 +113,7 @@ export async function exportBackup(): Promise<Blob> {
     sourceContent.push({ id: record.id, updatedAt: record.updatedAt })
   }
 
-  const manifest: BackupManifest = { version: BACKUP_VERSION, exportedAt: Date.now(), essays, nodes, sources, quotes, graveyard, bookmarks, todos, sourceContent, blobs: blobIds }
+  const manifest: BackupManifest = { version: BACKUP_VERSION, exportedAt: Date.now(), essays, nodes, sources, quotes, graveyard, bookmarks, todos, sourceContent, essayHistory, blobs: blobIds }
   zip.file('data.json', JSON.stringify(manifest, null, 2))
   return zip.generateAsync({ type: 'blob' })
 }
@@ -117,6 +128,7 @@ export interface RestoreResult {
   bookmarks: number
   todos: number
   sourceContent: number
+  essayHistory: number
   blobs: number
 }
 
@@ -137,7 +149,7 @@ export async function restoreBackup(file: File | Blob, opts: { mode: 'merge' | '
 
   if (opts.mode === 'replace') await clearAllLocalData()
 
-  const result: RestoreResult = { mode: opts.mode, essays: 0, nodes: 0, sources: 0, quotes: 0, graveyard: 0, bookmarks: 0, todos: 0, sourceContent: 0, blobs: 0 }
+  const result: RestoreResult = { mode: opts.mode, essays: 0, nodes: 0, sources: 0, quotes: 0, graveyard: 0, bookmarks: 0, todos: 0, sourceContent: 0, essayHistory: 0, blobs: 0 }
 
   async function applyDocs<T extends { id: string; updatedAt?: number }>(collection: string, items: T[]): Promise<number> {
     let applied = 0
@@ -173,6 +185,7 @@ export async function restoreBackup(file: File | Blob, opts: { mode: 'merge' | '
     sourceContentItems.push({ id: entry.id, updatedAt: entry.updatedAt, pageHtmlCompressed })
   }
   result.sourceContent = await applyDocs('sourceContent', sourceContentItems)
+  result.essayHistory = await applyDocs('essayHistory', manifest.essayHistory ?? [])
 
   for (const blobId of manifest.blobs) {
     const blobFile = zip.file(`blobs/${blobId}`)
@@ -187,7 +200,7 @@ export async function restoreBackup(file: File | Blob, opts: { mode: 'merge' | '
 }
 
 async function clearAllLocalData(): Promise<void> {
-  const [essays, nodes, sources, quotes, graveyard, bookmarks, todos] = await Promise.all([
+  const [essays, nodes, sources, quotes, graveyard, bookmarks, todos, essayHistory] = await Promise.all([
     backend.docs.list<Essay>('essays'),
     backend.docs.list<EssayNode>('nodes'),
     backend.docs.list<Source>('sources'),
@@ -195,9 +208,16 @@ async function clearAllLocalData(): Promise<void> {
     backend.docs.list<GraveyardFragment>('graveyard'),
     backend.docs.list<Bookmark>('bookmarks'),
     backend.docs.list<TodoItem>('todos'),
+    backend.docs.list<EssayCommitEntry>('essayHistory'),
   ])
   for (const e of essays) await backend.docs.delete('essays', e.id)
   for (const n of nodes) await backend.docs.delete('nodes', n.id)
+  // Same untracked-transient-wipe reasoning as the sourceContent/blob
+  // deletes below — immediately followed by `restoreBackup` writing the
+  // backup's own `essayHistory` rows back in, so an old commit left behind
+  // here would otherwise dangle as an orphan under an essay id the fresh
+  // restore no longer has anything else for.
+  for (const c of essayHistory) await backend.docs.delete('essayHistory', c.id)
   for (const s of sources) {
     // Deliberately the plain, untracked `backend.blobs.delete` here, not
     // `deleteBlobTracked` (see `storage/pendingBlobDeletions.ts`) — this is

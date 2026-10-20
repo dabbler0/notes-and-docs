@@ -13,8 +13,14 @@
  * `StoredSourceMeta`) specifically so listing sources never has to load
  * it — it syncs as its own independent collection for the same reason:
  * nothing about pulling/pushing a library's worth of BibTeX metadata
- * should have to also move everyone's extracted text around with it. */
-export const SYNCED_COLLECTIONS = ['essays', 'nodes', 'sources', 'sourceContent', 'quotes', 'graveyard', 'bookmarks', 'todos'] as const
+ * should have to also move everyone's extracted text around with it.
+ *
+ * `essayHistory` holds an essay's own commit history (`EssayCommitEntry` —
+ * see its own doc comment in `models/types.ts`), split out of `essays`/
+ * `nodes` for the same reason `sourceContent` is split from `sources`: a
+ * commit history can grow large over an essay's lifetime, and nothing about
+ * pulling/pushing/listing essays should have to also move it around. */
+export const SYNCED_COLLECTIONS = ['essays', 'nodes', 'sources', 'sourceContent', 'essayHistory', 'quotes', 'graveyard', 'bookmarks', 'todos'] as const
 export type SyncedCollection = (typeof SYNCED_COLLECTIONS)[number]
 
 /**
@@ -78,5 +84,11 @@ export type SyncedCollection = (typeof SYNCED_COLLECTIONS)[number]
  *     that isn't itself about the encryption policy — just keeping the
  *     on-disk shape honest, the same reasoning version 3-5 above give for
  *     a source's own shape history.
+ * 7 — the old per-node `versions`/`headVersionId` scheme converted into the
+ *     new `essayHistory` commit collection (see `EssayCommitEntry`'s own
+ *     doc comment in `models/types.ts` and `models/essaysMigrations.ts`),
+ *     same transform as local migration version 5. `essayHistory` syncs as
+ *     its own collection, same reasoning as `sourceContent`'s own entry
+ *     above.
  */
-export const CURRENT_REMOTE_SCHEMA_VERSION = 6
+export const CURRENT_REMOTE_SCHEMA_VERSION = 7

@@ -16,6 +16,8 @@ import { addQuoteToBank, listQuoteBank } from '../../models/quoteBankRepo'
 import { addToGraveyard, listGraveyard } from '../../models/graveyardRepo'
 import { addBookmark, listBookmarksForSource } from '../../models/bookmarkRepo'
 import { createSource, getSource, getSourceContent, updateSourceContent } from '../../models/sourcesRepo'
+import { createEssay, getNode, loadNodeMap, saveNode } from '../../models/essaysRepo'
+import { commitEssay, listEssayHistory } from '../../models/essayHistoryRepo'
 import type { Essay, EssayNode, Source } from '../../models/types'
 
 interface FakeStorageModule {
@@ -163,6 +165,46 @@ describe("exportBackup includes a source's own extracted-text content (the sourc
     const result = await restoreBackup(oldBackup, { mode: 'merge' })
     expect(result.sourceContent).toBe(0)
     expect(result.sources).toBe(1)
+  })
+})
+
+describe("exportBackup includes an essay's own commit history (the essayHistory collection, split out the same way sourceContent is — see collections.ts's own doc comment)", () => {
+  it('round-trips a two-commit essay history through export + restore', async () => {
+    const essay = await createEssay('Has a commit history')
+    let nodeMap = await loadNodeMap(essay)
+    const root = nodeMap.get(essay.rootNodeId)!
+    root.draftContent = '<p>First draft.</p>'
+    await saveNode(root)
+    nodeMap = await loadNodeMap(essay)
+    const c1 = await commitEssay(essay, nodeMap, 'Draft one')
+    root.draftContent = '<p>Second draft.</p>'
+    await saveNode(root)
+    nodeMap = await loadNodeMap(essay)
+    const c2 = await commitEssay(essay, nodeMap, 'Draft two')
+    expect(c1).toBeDefined()
+    expect(c2).toBeDefined()
+
+    const zipBlob = await exportBackup()
+
+    const storageMod = (await import('../../storage')) as unknown as FakeStorageModule
+    storageMod.__setActiveBackend(storageMod.createFakeBackend())
+
+    const result = await restoreBackup(zipBlob, { mode: 'replace' })
+    expect(result.essayHistory).toBe(2)
+
+    const history = await listEssayHistory(essay.id)
+    expect(history).toHaveLength(2)
+    expect(history.map((c) => c.label).sort()).toEqual(['Draft one', 'Draft two'])
+    const liveRoot = (await getNode(root.id))!
+    expect(liveRoot.draftContent).toBe('<p>Second draft.</p>')
+  })
+
+  it('a backup with no essayHistory key at all (made before this field existed) still restores everything else cleanly', async () => {
+    const manifest: Omit<BackupManifest, 'essayHistory'> = { ...oldFormatManifest(), quotes: [], graveyard: [] }
+    const oldBackup = await zipWithManifest(manifest)
+    const result = await restoreBackup(oldBackup, { mode: 'merge' })
+    expect(result.essayHistory).toBe(0)
+    expect(result.essays).toBe(1)
   })
 })
 

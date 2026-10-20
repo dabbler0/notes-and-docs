@@ -22,12 +22,17 @@
  * device at some point in the past.
  *
  * A future remote-only shape change (or another encryption-policy change)
- * adds a version 6 here and bumps `CURRENT_REMOTE_SCHEMA_VERSION`, not
- * another one-off migration function wired in by hand.
+ * adds another version here and bumps `CURRENT_REMOTE_SCHEMA_VERSION`, not
+ * another one-off migration function wired in by hand — version 7 (the most
+ * recent) is exactly that: the same `run` function as local migration
+ * version 5 in `models/essaysMigrations.ts`, converting the old per-node
+ * `versions`/`headVersionId` scheme into the new `essayHistory` commit
+ * collection — see that module's own doc comment for the full algorithm.
  */
 import type { Migration } from '../storage/migrations'
 import { migrateCompressPageHtml, migratePageTextsToPageHtml, migrateSplitSourceContent } from '../models/sourcesMigrations'
 import { migrateDefaultQuoteKind } from '../models/quoteBankMigrations'
+import { migrateVersionsToEssayHistory } from '../models/essaysMigrations'
 import { SYNCED_COLLECTIONS } from './collections'
 
 /**
@@ -58,4 +63,5 @@ export const remoteMigrations: Migration[] = [
   { ...migrateCompressPageHtml, version: 4 },
   { ...migrateSplitSourceContent, version: 5 },
   { ...migrateDefaultQuoteKind, version: 6 },
+  { ...migrateVersionsToEssayHistory, version: 7 },
 ]

@@ -96,7 +96,7 @@ export function BackupDialog({ onClose }: { onClose: () => void }) {
 }
 
 function summarize(result: RestoreResult): string {
-  const total = result.essays + result.nodes + result.sources + result.quotes + result.graveyard + result.bookmarks + result.todos + result.sourceContent + result.blobs
+  const total = result.essays + result.nodes + result.sources + result.quotes + result.graveyard + result.bookmarks + result.todos + result.sourceContent + result.essayHistory + result.blobs
   if (total === 0) return result.mode === 'replace' ? '✓ Restored (backup was empty).' : '✓ Nothing to apply — local data was already newer or identical everywhere.'
   const parts: string[] = []
   if (result.essays) parts.push(`${result.essays} essay${result.essays === 1 ? '' : 's'}`)
@@ -107,6 +107,7 @@ function summarize(result: RestoreResult): string {
   if (result.bookmarks) parts.push(`${result.bookmarks} bookmark${result.bookmarks === 1 ? '' : 's'}`)
   if (result.todos) parts.push(`${result.todos} TODO item${result.todos === 1 ? '' : 's'}`)
   if (result.sourceContent) parts.push(`${result.sourceContent} source text record${result.sourceContent === 1 ? '' : 's'}`)
+  if (result.essayHistory) parts.push(`${result.essayHistory} history commit${result.essayHistory === 1 ? '' : 's'}`)
   if (result.blobs) parts.push(`${result.blobs} PDF${result.blobs === 1 ? '' : 's'}`)
   return `✓ Restored ${parts.join(', ')}.`
 }
