@@ -372,13 +372,24 @@ export async function commitOcrPreview(source: Source, blobId: string, fileName:
   if (oldBlobId) await deleteBlobTracked(oldBlobId)
 }
 
-/** Detaches a source's PDF entirely, reverting it to BibTeX + comment only. */
+/**
+ * Detaches a source's PDF entirely, reverting it to BibTeX + comment only.
+ * Also resets `pageOffset`/`noPageNumbers` (see their own doc comments on
+ * `Source`) — both only ever mean anything relative to an actual PDF's own
+ * page numbering, which this source no longer has any of. Left stale, a
+ * nonzero `pageOffset` would go on silently swallowing every page number
+ * typed into a now-PDF-less source's manual quote-insertion field (shifted
+ * below zero, `citationPage` quietly drops it, same as "no page given at
+ * all") — a real bug this fixes, not just tidying.
+ */
 export async function removeSourcePdf(source: Source): Promise<void> {
   const oldBlobId = source.pdfBlobId
   if (!oldBlobId) return
   source.pdfBlobId = undefined
   source.pdfFileName = undefined
   source.textOnly = false
+  source.pageOffset = undefined
+  source.noPageNumbers = undefined
   await updateSourceContent(source, [])
   await deleteBlobTracked(oldBlobId)
 }

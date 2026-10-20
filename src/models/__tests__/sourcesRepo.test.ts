@@ -104,6 +104,16 @@ describe('convertSourceToTextOnly', () => {
     expect(source.pdfBlobId).toBeUndefined()
     expect(source.pageHtml).toEqual([])
   })
+
+  it('removing the PDF entirely also resets pageOffset/noPageNumbers — stale otherwise, both only mean anything relative to a PDF this source no longer has, and a leftover pageOffset would silently swallow any page number typed into the now-PDF-less quote-insertion fallback', async () => {
+    const source = await createSource(emptyEntry('x2020'), { pdfFile: pdfFile(1000), pageHtml: ['text'] })
+    source.pageOffset = 10
+    source.noPageNumbers = true
+    await updateSource(source)
+    await removeSourcePdf(source)
+    expect(source.pageOffset).toBeUndefined()
+    expect(source.noPageNumbers).toBeUndefined()
+  })
 })
 
 describe('createSource with textOnly', () => {
