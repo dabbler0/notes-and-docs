@@ -1,9 +1,11 @@
-import { useState } from 'preact/hooks'
+import { useEffect, useState } from 'preact/hooks'
 import { Modal } from '../Modal'
 import { parseBibtex, emptyEntry } from '../../lib/bibtex'
 import { parseCitationFields } from '../../lib/citationParse'
 import { loadPdf } from '../../lib/pdf'
 import { extractPageHtml } from '../../lib/textExtraction'
+import { gzipCompress } from '../../lib/compression'
+import { formatBytes } from '../../lib/format'
 import { createSource } from '../../models/sourcesRepo'
 import type { BibtexEntry } from '../../models/types'
 
@@ -23,6 +25,18 @@ export function AddSourceDialog({ onClose, onCreated }: { onClose: () => void; o
   const [includeImages, setIncludeImages] = useState(true)
   const [busy, setBusy] = useState(false)
   const [status, setStatus] = useState('')
+  // A background preview of what extraction will actually produce for the
+  // currently-selected file — reused verbatim by handleSubmit (via its own
+  // `pageHtml`/`sourceId` match check below) so the real extraction pass
+  // never runs twice for the same file/includeImages combination, only
+  // recomputed when either changes. `compressedBytes` is gzip-compressed
+  // the exact same way `sourcesRepo.ts`'s own `writeSourceContent` does —
+  // the number the storage/sync usage this source will actually cost, not
+  // just a rough guess — so it's directly comparable to the raw PDF size
+  // for deciding whether "extract text only" is worth it.
+  const [extractPreview, setExtractPreview] = useState<{ file: File; includeImages: boolean; pageHtml: string[]; compressedBytes: number } | null>(null)
+  const [extracting, setExtracting] = useState(false)
+  const [extractError, setExtractError] = useState('')
 
   /**
    * Best-effort fill from a pasted, already-formatted citation (APA, MLA,
@@ -49,6 +63,41 @@ export function AddSourceDialog({ onClose, onCreated }: { onClose: () => void; o
     if (fields.note) setManualNote(fields.note)
   }
 
+  // Runs the same extraction pass `handleSubmit` would, purely to preview
+  // its resulting size — so the "extract text only" decision (right above
+  // the file input) can be made with real numbers instead of a guess.
+  // Cancels itself (via the `cancelled` flag) rather than setting state
+  // from a stale run if `file`/`includeImages` changes again before this
+  // one finishes.
+  useEffect(() => {
+    if (!file) {
+      setExtractPreview(null)
+      setExtractError('')
+      return
+    }
+    let cancelled = false
+    setExtracting(true)
+    setExtractError('')
+    ;(async () => {
+      try {
+        const buf = await file.arrayBuffer()
+        const doc = await loadPdf(buf)
+        const pageHtml = await extractPageHtml(doc, undefined, { includeImages })
+        if (cancelled) return
+        const compressedBytes = (await gzipCompress(JSON.stringify(pageHtml))).byteLength
+        if (cancelled) return
+        setExtractPreview({ file, includeImages, pageHtml, compressedBytes })
+      } catch {
+        if (!cancelled) setExtractError("Couldn't preview this PDF's extracted size — it'll still be extracted normally when you add the source.")
+      } finally {
+        if (!cancelled) setExtracting(false)
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [file, includeImages])
+
   async function handleSubmit(e: Event) {
     e.preventDefault()
     setBusy(true)
@@ -71,9 +120,17 @@ export function AddSourceDialog({ onClose, onCreated }: { onClose: () => void; o
 
       let pageHtml: string[] = []
       if (file) {
-        const buf = await file.arrayBuffer()
-        const doc = await loadPdf(buf)
-        pageHtml = await extractPageHtml(doc, (page, total) => setStatus(`Extracting page ${page} of ${total}…`), { includeImages })
+        // Reuse the size-preview extraction above when it's still current
+        // for this exact file/includeImages combination, rather than
+        // running the whole (possibly slow, multi-page) extraction a
+        // second time for no reason.
+        if (extractPreview && extractPreview.file === file && extractPreview.includeImages === includeImages) {
+          pageHtml = extractPreview.pageHtml
+        } else {
+          const buf = await file.arrayBuffer()
+          const doc = await loadPdf(buf)
+          pageHtml = await extractPageHtml(doc, (page, total) => setStatus(`Extracting page ${page} of ${total}…`), { includeImages })
+        }
       }
 
       await createSource(entry, { comment, pdfFile: file ?? undefined, pageHtml, textOnly })
@@ -102,7 +159,23 @@ export function AddSourceDialog({ onClose, onCreated }: { onClose: () => void; o
         </div>
         {file && (
           <>
-            <label className="muted" style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: -8, marginBottom: 6 }}>
+            <p className="muted" style={{ marginTop: -8, marginBottom: 6 }}>
+              PDF file: {formatBytes(file.size)}
+              {' — '}
+              {extracting ? (
+                'estimating extracted text size…'
+              ) : extractError ? (
+                extractError
+              ) : extractPreview && extractPreview.file === file && extractPreview.includeImages === includeImages ? (
+                <>
+                  extracted text would be {formatBytes(extractPreview.compressedBytes)}
+                  {extractPreview.compressedBytes < file.size ? ` (${Math.round((1 - extractPreview.compressedBytes / file.size) * 100)}% smaller)` : ''}
+                </>
+              ) : (
+                'estimating extracted text size…'
+              )}
+            </p>
+            <label className="muted" style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 6 }}>
               <input type="checkbox" checked={textOnly} onChange={(e) => setTextOnly((e.target as HTMLInputElement).checked)} />
               Extract text only — don't keep the PDF file itself (good for a very large PDF you don't want stored or synced at all)
             </label>
