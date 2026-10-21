@@ -200,20 +200,27 @@ export function ExportDialog({ essay, nodeMap, onClose }: { essay: Essay; nodeMa
         ::footnote-marker { content: counter(footnote-marker) ". "; }
         ::footnote-call { content: counter(footnote); vertical-align: super; font-size: 0.7em; }
         /* A short rule above the footnote area, the conventional visual
-           break between a page's own body text and its footnotes —
-           skipped on a page with no footnotes at all via Paged.js's own
-           "pagedjs_footnote_empty" class (chunker/chunker.js), which it
-           keeps on .pagedjs_footnote_content until the first footnote
-           actually lands there, so an otherwise-empty footnote area never
-           shows a stray rule floating above nothing. */
-        .pagedjs_footnote_content {
-          border-top: 1px solid #999;
-          padding-top: 6px;
+           break between a page's own body text and its footnotes — a
+           separate ::before element sized to just ~35% of the column
+           width, rather than a border-top (or a width) on the footnote
+           content itself, which would cap the footnote *text* to that
+           same narrow width and wrap it pointlessly instead of letting it
+           use the full page margin-to-margin width like the body text
+           above it. Skipped on a page with no footnotes at all via
+           Paged.js's own "pagedjs_footnote_empty" class
+           (chunker/chunker.js), which it keeps on
+           .pagedjs_footnote_content until the first footnote actually
+           lands there, so an otherwise-empty footnote area never shows a
+           stray rule floating above nothing. */
+        .pagedjs_footnote_content::before {
+          content: '';
+          display: block;
           width: 35%;
+          border-top: 1px solid #999;
+          margin-bottom: 6px;
         }
-        .pagedjs_footnote_content.pagedjs_footnote_empty {
-          border-top: none;
-          padding-top: 0;
+        .pagedjs_footnote_content.pagedjs_footnote_empty::before {
+          display: none;
         }
       `
       win.document.write(
