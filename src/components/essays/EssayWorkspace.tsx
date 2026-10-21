@@ -725,36 +725,6 @@ export function EssayWorkspace({ essayId, onBack, embedded = false }: { essayId:
         <button className={`btn btn-ghost btn-sm toolbar-toggle${commentMode ? ' active' : ''}`} onClick={toggleCommentMode}>
           <Icon name="comment" /> <span className="btn-label">{commentMode ? 'Commenting…' : 'Comment mode'}</span>
         </button>
-        <button className="btn btn-ghost btn-sm" title="Commit: save the current state as a point you can come back to later" onClick={handleCommit}>
-          <Icon name="commit" /> <span className="btn-label">Commit</span>
-        </button>
-        <div style={{ position: 'relative' }}>
-          <button className={`btn btn-ghost btn-sm toolbar-toggle${showHistory ? ' active' : ''}`} title="Commit history" onClick={() => setShowHistory((v) => !v)}>
-            <Icon name="history" /> <span className="btn-label">History</span>
-          </button>
-          {showHistory && (
-            <EssayHistoryPanel
-              essay={essay}
-              nodeMap={nodeMap}
-              onReverted={() => {
-                setShowHistory(false)
-                reload()
-              }}
-              onClose={() => setShowHistory(false)}
-            />
-          )}
-        </div>
-        <button
-          className="btn btn-ghost btn-sm"
-          title="Word count"
-          onMouseDown={(e) => {
-            e.preventDefault()
-            captureRange()
-          }}
-          onClick={() => setShowWordCount(true)}
-        >
-          <Icon name="word-count" /> <span className="btn-label">Word count</span>
-        </button>
         <button className="btn btn-ghost btn-sm" onClick={() => setShowExport(true)}>
           <Icon name="export" /> <span className="btn-label">Export</span>
         </button>
@@ -911,6 +881,36 @@ export function EssayWorkspace({ essayId, onBack, embedded = false }: { essayId:
               </>
             )}
             <div className="spacer" />
+            <button
+              className="btn btn-sm icon-btn-toolbar"
+              title="Word count"
+              onMouseDown={(e) => {
+                e.preventDefault()
+                captureRange()
+              }}
+              onClick={() => setShowWordCount(true)}
+            >
+              <Icon name="word-count" />
+            </button>
+            <button className="btn btn-sm icon-btn-toolbar" title="Commit: save the current state as a point you can come back to later" onClick={handleCommit}>
+              <Icon name="commit" />
+            </button>
+            <div style={{ position: 'relative' }}>
+              <button className={`btn btn-sm icon-btn-toolbar toolbar-toggle${showHistory ? ' active' : ''}`} title="Commit history" onClick={() => setShowHistory((v) => !v)}>
+                <Icon name="history" />
+              </button>
+              {showHistory && (
+                <EssayHistoryPanel
+                  essay={essay}
+                  nodeMap={nodeMap}
+                  onReverted={() => {
+                    setShowHistory(false)
+                    reload()
+                  }}
+                  onClose={() => setShowHistory(false)}
+                />
+              )}
+            </div>
           </div>
 
           <div

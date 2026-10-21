@@ -137,13 +137,15 @@ export function ExportDialog({ essay, nodeMap, onClose }: { essay: Essay; nodeMa
         return
       }
       const authorName = getAuthorName()
-      const headerText = cssStringEscape(authorName ? `${essay.title} — ${authorName}` : essay.title)
+      const titleText = cssStringEscape(essay.title)
+      const authorText = cssStringEscape(authorName ?? '')
       const printCss = `
         ${katexCss}
         @page {
           size: letter;
           margin: 85px 50px 65px;
-          @top-center { content: "${headerText}"; font-family: 'EB Garamond', Georgia, serif; font-variant: small-caps; letter-spacing: 0.03em; font-size: 11px; color: #666; }
+          @top-left { content: "${titleText}"; font-family: 'EB Garamond', Georgia, serif; font-variant: small-caps; letter-spacing: 0.03em; font-size: 11px; color: #666; }
+          ${authorName ? `@top-right { content: "${authorText}"; font-family: 'EB Garamond', Georgia, serif; font-variant: small-caps; letter-spacing: 0.03em; font-size: 11px; color: #666; }` : ''}
         }
         /* A book's own running folio: the page number sits in the outer
            bottom corner — left on a verso (left-hand) page, right on a
@@ -186,7 +188,16 @@ export function ExportDialog({ essay, nodeMap, onClose }: { essay: Essay; nodeMa
            whichever page its call ends up on, and driving the
            ::footnote-marker/::footnote-call counters below. */
         .pagedjs-footnote { float: footnote; font-size: 0.85em; line-height: 1.4; }
-        ::footnote-marker { content: counter(footnote) ". "; }
+        /* Two distinct counters, same as Paged.js's own default stylesheet
+           uses internally (confirmed by reading its Footnotes module
+           directly): ::footnote-call increments/reads "footnote" at each
+           inline reference, but ::footnote-marker's own counter-increment
+           is "footnote-marker", not "footnote" — reading counter(footnote)
+           here too (an easy mix-up, since both are named so similarly) made
+           every footnote's own marker number read the page's final call
+           count instead of its own position, so with 2+ footnotes on one
+           page every single marker showed the same (highest) number. */
+        ::footnote-marker { content: counter(footnote-marker) ". "; }
         ::footnote-call { content: counter(footnote); vertical-align: super; font-size: 0.7em; }
       `
       win.document.write(

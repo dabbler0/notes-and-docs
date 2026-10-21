@@ -524,11 +524,34 @@ select {
   text-transform: uppercase;
   letter-spacing: 0.04em;
   color: var(--ink-dim);
+  cursor: pointer;
 }
 
 .project-cluster .card {
   flex: 1 1 240px;
   max-width: 320px;
+}
+
+/* A collapsed project — same grid cell footprint as one plain essay card
+   (unlike the expanded `.project-cluster` above, which deliberately spans
+   the whole row), so collapsing a project is a real space trade: all of
+   its members' detail in exchange for the room a single card takes. */
+.project-cluster-collapsed {
+  position: relative;
+  border-style: dashed;
+  border-width: 2px;
+}
+
+.project-cluster-expand {
+  position: absolute;
+  top: 14px;
+  right: 14px;
+  color: var(--ink-dim);
+  font-size: 13px;
+}
+
+.project-cluster-expand:hover {
+  color: var(--ink);
 }
 
 .card-title {

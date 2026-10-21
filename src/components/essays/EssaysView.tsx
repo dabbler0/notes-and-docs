@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'preact/hooks'
+import { useEffect, useRef, useState } from 'preact/hooks'
 import { archiveEssay, createEssay, deleteEssay, listEssays, unarchiveEssay } from '../../models/essaysRepo'
 import { mergeEssays } from '../../models/essayHistoryRepo'
 import { groupEssays, removeEssayFromProject } from '../../models/projectsRepo'
@@ -76,6 +76,21 @@ export function EssaysView() {
   // there's no ordering to preserve here, only grouping).
   const [dragEssayId, setDragEssayId] = useState<string | null>(null)
   const [dragOverId, setDragOverId] = useState<string | null>(null)
+  // Which projects are currently shown collapsed (a single card-sized
+  // summary instead of the full dashed cluster) — see `EssayCard`'s own
+  // sibling, the collapsed-cluster rendering below. Starts empty: every
+  // project renders expanded until the user collapses it themselves.
+  const [collapsedProjects, setCollapsedProjects] = useState<Set<string>>(new Set())
+  const rootRef = useRef<HTMLDivElement>(null)
+
+  function toggleProjectCollapsed(projectId: string) {
+    setCollapsedProjects((prev) => {
+      const next = new Set(prev)
+      if (next.has(projectId)) next.delete(projectId)
+      else next.add(projectId)
+      return next
+    })
+  }
 
   async function reload() {
     setEssays(await listEssays())
@@ -89,6 +104,44 @@ export function EssaysView() {
     // here until this view happened to unmount and remount on its own.
     return onSyncApplied(reload)
   }, [])
+
+  // Auto-scrolls the view while a card is being dragged near the top or
+  // bottom edge of the scrollable area, so a card can be dropped onto
+  // another one that's currently off-screen rather than only ones already
+  // visible. `.main-area` (App.tsx's own layout shell) is the actual
+  // scrolling element — this view's own root (`.page-pad`) just grows to
+  // its full content height inside it — so this walks up to find it
+  // rather than scrolling `window`, which never actually scrolls here.
+  useEffect(() => {
+    if (!dragEssayId) return
+    const scrollEl = rootRef.current?.closest<HTMLElement>('.main-area')
+    if (!scrollEl) return
+    const EDGE = 72
+    const MAX_SPEED = 16
+    let clientY = -1
+    let rafId: number
+    function onDragOver(e: DragEvent) {
+      clientY = e.clientY
+    }
+    function tick() {
+      if (clientY >= 0) {
+        const rect = scrollEl!.getBoundingClientRect()
+        const distTop = clientY - rect.top
+        const distBottom = rect.bottom - clientY
+        let dy = 0
+        if (distTop < EDGE) dy = -MAX_SPEED * (1 - Math.max(0, distTop) / EDGE)
+        else if (distBottom < EDGE) dy = MAX_SPEED * (1 - Math.max(0, distBottom) / EDGE)
+        if (dy) scrollEl!.scrollTop += dy
+      }
+      rafId = requestAnimationFrame(tick)
+    }
+    window.addEventListener('dragover', onDragOver)
+    rafId = requestAnimationFrame(tick)
+    return () => {
+      window.removeEventListener('dragover', onDragOver)
+      cancelAnimationFrame(rafId)
+    }
+  }, [dragEssayId])
 
   async function handleCreate() {
     // `window.prompt()`'s own Cancel and "OK with nothing typed" both came
@@ -186,7 +239,7 @@ export function EssaysView() {
   const visible = sortEssays(bySearch, sortOrder)
 
   return (
-    <div className="page-pad">
+    <div className="page-pad" ref={rootRef}>
       <div className="page-header">
         <h1>Drafts</h1>
         <div className="search-bar">
@@ -248,9 +301,40 @@ export function EssaysView() {
                   if (dragEssayId) handleDrop(dragEssayId, item.essay.id)
                 }}
               />
+            ) : collapsedProjects.has(item.projectId) ? (
+              <div
+                key={item.projectId}
+                className={`card project-cluster-collapsed${dragOverId === item.essays[0].id ? ' card-drag-over' : ''}`}
+                onClick={() => toggleProjectCollapsed(item.projectId)}
+                onDragOver={(ev) => {
+                  if (!dragEssayId || dragEssayId === item.essays[0].id) return
+                  ev.preventDefault()
+                  setDragOverId(item.essays[0].id)
+                }}
+                onDragLeave={() => setDragOverId((v) => (v === item.essays[0].id ? null : v))}
+                onDrop={(ev) => {
+                  ev.preventDefault()
+                  if (dragEssayId) handleDrop(dragEssayId, item.essays[0].id)
+                }}
+              >
+                <button
+                  className="btn-sm icon-btn project-cluster-expand"
+                  title="Expand project"
+                  onClick={(ev) => {
+                    ev.stopPropagation()
+                    toggleProjectCollapsed(item.projectId)
+                  }}
+                >
+                  ▸
+                </button>
+                <div className="card-title">{item.essays[0].title}</div>
+                <div className="card-meta">Project · {item.essays.length} essays</div>
+              </div>
             ) : (
               <div className="project-cluster" key={item.projectId}>
-                <div className="project-cluster-label">Project</div>
+                <div className="project-cluster-label" onClick={() => toggleProjectCollapsed(item.projectId)} title="Collapse project">
+                  ▾ Project
+                </div>
                 {item.essays.map((e) => (
                   <EssayCard
                     key={e.id}
