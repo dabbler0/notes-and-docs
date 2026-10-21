@@ -181,6 +181,18 @@ describe('formatCitation', () => {
   it('uses booktitle and volume alone (no issue number) when there is no journal', () => {
     expect(formatCitation(entry({ title: 'A Chapter', booktitle: 'Collected Works', volume: '2' }, 'incollection'))).toBe('A Chapter. Collected Works, 2.')
   })
+
+  it('omits the pages field when includePages is false, keeping the rest of the venue bits', () => {
+    expect(
+      formatCitation(entry({ author: 'Jane Tester', year: '2024', title: 'A Test PDF Document', journal: 'Journal of Examples', volume: '12', number: '3', pages: '45-67' }), { includePages: false }),
+    ).toBe('Jane Tester (2024). A Test PDF Document. Journal of Examples, 12(3).')
+  })
+
+  it('still falls back to the publisher with includePages false when there is no journal/booktitle at all', () => {
+    expect(formatCitation(entry({ author: 'Jane Tester', year: '2024', title: 'A Book', publisher: 'Example Press', pages: '1-10' }, 'book'), { includePages: false })).toBe(
+      'Jane Tester (2024). A Book. Example Press.',
+    )
+  })
 })
 
 describe('extractLegacyCitationNote', () => {

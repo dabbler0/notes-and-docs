@@ -826,9 +826,9 @@ export function sourcesToBibtex(sources: Source[]): string {
  */
 export type BibliographyStyle = 'plain'
 
-/** One formatted References entry — the single function a future bibliography-style setting would extend, mirroring `renderCitationLabel` in bibtex.ts for the inline form. */
+/** One formatted References entry — the single function a future bibliography-style setting would extend, mirroring `renderCitationLabel` in bibtex.ts for the inline form. Omits the entry's own `pages` field (see `formatCitation`'s own doc comment on `includePages`) — a bibliography cites the work as a whole, not the page range a `journal`/`booktitle` field happens to record. */
 export function renderBibliographyEntry(entry: BibtexEntry, _style: BibliographyStyle = 'plain'): string {
-  return formatCitation(entry)
+  return formatCitation(entry, { includePages: false })
 }
 
 /** Every source this essay actually cites, resolved against `sources` (silently dropping a cited id with no matching source — deleted since, or never synced) and sorted by first author/title for a stable, conventional reading order — not by insertion order, which would read as arbitrary. Exported so `ExportDialog` can derive the same `orderedSourceIds` a `'numbered'` `PrintCitationStyle` needs — both it and the References list have to agree on one order, so there's exactly one function that decides it. */

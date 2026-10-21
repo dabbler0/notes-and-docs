@@ -143,7 +143,7 @@ export function ExportDialog({ essay, nodeMap, onClose }: { essay: Essay; nodeMa
         ${katexCss}
         @page {
           size: letter;
-          margin: 85px 50px 65px;
+          margin: 1in;
           @top-left { content: "${titleText}"; font-family: 'EB Garamond', Georgia, serif; font-variant: small-caps; letter-spacing: 0.03em; font-size: 11px; color: #666; }
           ${authorName ? `@top-right { content: "${authorText}"; font-family: 'EB Garamond', Georgia, serif; font-variant: small-caps; letter-spacing: 0.03em; font-size: 11px; color: #666; }` : ''}
         }
@@ -199,6 +199,22 @@ export function ExportDialog({ essay, nodeMap, onClose }: { essay: Essay; nodeMa
            page every single marker showed the same (highest) number. */
         ::footnote-marker { content: counter(footnote-marker) ". "; }
         ::footnote-call { content: counter(footnote); vertical-align: super; font-size: 0.7em; }
+        /* A short rule above the footnote area, the conventional visual
+           break between a page's own body text and its footnotes —
+           skipped on a page with no footnotes at all via Paged.js's own
+           "pagedjs_footnote_empty" class (chunker/chunker.js), which it
+           keeps on .pagedjs_footnote_content until the first footnote
+           actually lands there, so an otherwise-empty footnote area never
+           shows a stray rule floating above nothing. */
+        .pagedjs_footnote_content {
+          border-top: 1px solid #999;
+          padding-top: 6px;
+          width: 35%;
+        }
+        .pagedjs_footnote_content.pagedjs_footnote_empty {
+          border-top: none;
+          padding-top: 0;
+        }
       `
       win.document.write(
         `<!doctype html><html><head><title>${escapeHtml(essay.title)}</title><meta charset="utf-8">
