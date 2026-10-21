@@ -184,28 +184,14 @@ export function displayTitle(entry: BibtexEntry): string {
  * only a title still renders as just the title, not a sentence of empty
  * punctuation).
  */
-/**
- * `includePages` (default `true`) controls whether the entry's own
- * `pages` BibTeX field (the source's page *range* within its journal/
- * book — "pp. 45-67" — real bibliographic metadata, not a specific
- * in-text citation's own page note) is included. A full citation — the
- * body of a footnote-placed citation (`renderPrintCitation` in
- * `lib/export.ts`), or the inline display in `SourceWorkspace` — wants
- * it; a References/bibliography *list* entry (`renderBibliographyEntry`)
- * doesn't, since a bibliography conventionally cites a *work*, not a
- * page within it — the one place within it any given in-text citation
- * actually pointed to belongs on that citation, not restated once more,
- * disconnected from any of them, in the list of works overall.
- */
-export function formatCitation(entry: BibtexEntry, opts: { includePages?: boolean } = {}): string {
-  const { includePages = true } = opts
+export function formatCitation(entry: BibtexEntry): string {
   const f = entry.fields
   const sentences: string[] = []
   const authorYear = [f.author, f.year ? `(${f.year})` : ''].filter(Boolean).join(' ')
   if (authorYear) sentences.push(authorYear)
   sentences.push(f.title || entry.key)
   const venue = f.journal || f.booktitle
-  const venueBits = [venue, f.volume ? (f.number ? `${f.volume}(${f.number})` : f.volume) : '', includePages && f.pages ? `pp. ${f.pages}` : ''].filter(Boolean)
+  const venueBits = [venue, f.volume ? (f.number ? `${f.volume}(${f.number})` : f.volume) : '', f.pages ? `pp. ${f.pages}` : ''].filter(Boolean)
   if (venueBits.length > 0) sentences.push(venueBits.join(', '))
   else if (f.publisher) sentences.push(f.publisher)
   return sentences.join('. ') + '.'

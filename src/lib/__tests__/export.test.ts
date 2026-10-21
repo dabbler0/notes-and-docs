@@ -612,16 +612,13 @@ describe('referencesMarkdown / referencesHtml', () => {
     expect(html).toContain('<li>Smith, Jane (2020). An Early Paper. Journal of Examples.</li>')
   })
 
-  it("omits a cited source's own `pages` field from the References entry, even though a footnote citation of the same source includes it", () => {
+  it("includes a cited source's own `pages` field (its page range within the journal/book) in the References entry", () => {
     const smith = makeSource({ id: 's-smith', bibtex: { type: 'article', key: 'smith2020', fields: { author: 'Smith, Jane', year: '2020', title: 'An Early Paper', journal: 'Journal of Examples', pages: '45-67' } } })
     const root = makeNode({ id: 'root', draftContent: `<p>As argued by ${citationHtml(smith)}, the sky is blue.</p>` })
     const nodeMap = new Map([['root', root]])
     const sources = new Map([['s-smith', smith]])
-    expect(referencesMarkdown(nodeMap, sources)).toContain('- Smith, Jane (2020). An Early Paper. Journal of Examples.')
-    expect(referencesMarkdown(nodeMap, sources)).not.toContain('pp.')
-    expect(referencesHtml(nodeMap, sources)).toContain('<li>Smith, Jane (2020). An Early Paper. Journal of Examples.</li>')
-    const md = essayToMarkdown(makeEssay('root'), nodeMap, { citationOptions: { sources, style: 'author-year', placement: 'footnote', orderedSourceIds: ['s-smith'] } })
-    expect(md).toContain('Smith, Jane (2020). An Early Paper. Journal of Examples, pp. 45-67.')
+    expect(referencesMarkdown(nodeMap, sources)).toContain('- Smith, Jane (2020). An Early Paper. Journal of Examples, pp. 45-67.')
+    expect(referencesHtml(nodeMap, sources)).toContain('<li>Smith, Jane (2020). An Early Paper. Journal of Examples, pp. 45-67.</li>')
   })
 
   it('lists a source only once even if cited multiple times', () => {
