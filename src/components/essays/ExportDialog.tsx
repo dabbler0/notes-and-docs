@@ -4,6 +4,7 @@ import { Modal } from '../Modal'
 import { listSources } from '../../models/sourcesRepo'
 import {
   addPrintChrome,
+  applyMathlikeHeadings,
   citedSources,
   collectUsedSourceIds,
   essayToLatex,
@@ -72,12 +73,38 @@ function scriptSafe(s: string): string {
   return s.replace(/<\/script/gi, '<\\/script')
 }
 
+/**
+ * The print/PDF view's own overall styling — distinct from
+ * `PrintCitationStyle`/`PrintCitationPlacement` (how a citation itself
+ * reads), which each mode below just picks a starting default for; the
+ * citation selects right under the mode picker stay live and override
+ * it same as before. See `exportPdf`'s own doc comment for exactly what
+ * each one changes in the generated CSS/HTML.
+ */
+type PrintMode = 'handout' | 'manuscript' | 'mathlike' | 'substack'
+
+const PRINT_MODE_DEFAULT_CITATIONS: Record<PrintMode, { placement: PrintCitationPlacement; style: PrintCitationStyle }> = {
+  handout: { placement: 'inline', style: 'author-year' },
+  manuscript: { placement: 'footnote', style: 'author-year' },
+  mathlike: { placement: 'inline', style: 'author-year' },
+  substack: { placement: 'inline', style: 'numbered' },
+}
+
 export function ExportDialog({ essay, nodeMap, onClose }: { essay: Essay; nodeMap: Map<string, EssayNode>; onClose: () => void }) {
   const [citeCommand, setCiteCommand] = useState<'\\cite' | '\\footcite'>('\\cite')
   const [bibliographyStyle, setBibliographyStyle] = useState<BibliographyStyle>('plain')
+  const [printMode, setPrintMode] = useState<PrintMode>('handout')
   const [citationStyle, setCitationStyle] = useState<PrintCitationStyle>('author-year')
   const [citationPlacement, setCitationPlacement] = useState<PrintCitationPlacement>('inline')
   const [busy, setBusy] = useState<'md' | 'pdf' | 'tex' | null>(null)
+
+  /** Switching print style resets the citation selects to that style's own default — still freely overridable afterward, same as picking either of them by hand always was. */
+  function handlePrintModeChange(mode: PrintMode) {
+    setPrintMode(mode)
+    const defaults = PRINT_MODE_DEFAULT_CITATIONS[mode]
+    setCitationPlacement(defaults.placement)
+    setCitationStyle(defaults.style)
+  }
 
   async function exportMarkdown() {
     setBusy('md')
@@ -121,16 +148,38 @@ export function ExportDialog({ essay, nodeMap, onClose }: { essay: Essay; nodeMa
    * Paged.js's own `preview()` promise resolves (pagination has actually
    * finished), rather than the fixed timeout the old plain-print flow
    * needed to guess how long native layout might take.
+   *
+   * `printMode` (Handout/Manuscript/Mathlike/Substack — see the type's
+   * own doc comment) changes several things below together:
+   * - Mathlike runs `applyMathlikeHeadings` on the body (after
+   *   `addPrintChrome` has already numbered everything) and centers/
+   *   small-caps the root-level section headings via CSS alone.
+   * - Manuscript doubles `line-height`.
+   * - Substack is the one real structural fork: no pagination at all
+   *   (Paged.js never runs, so no header/footer margin boxes and no
+   *   `window.print()` either — the window is left open for copying out
+   *   of, not printed), a sans-serif font, and every `<hr>` (the title/
+   *   section rules `addPrintChrome` adds, and the plain footnote-list
+   *   separator `markdownToHtml` adds) hidden via one shared CSS rule —
+   *   `floatPrintFootnotes` is skipped too, since Paged.js's own
+   *   per-page floating is meaningless without real pages; the footnotes
+   *   just stay as that same plain end-of-document list instead.
    */
   async function exportPdf() {
     setBusy('pdf')
     try {
+      const substack = printMode === 'substack'
+      const doubleSpaced = printMode === 'manuscript'
+      const mathlikeMode = printMode === 'mathlike'
+
       const sources = new Map((await listSources()).map((s) => [s.id, s]))
       const orderedSourceIds = citedSources(nodeMap, sources).map((s) => s.id)
       const md = essayToMarkdown(essay, nodeMap, { citationOptions: { sources, style: citationStyle, placement: citationPlacement, orderedSourceIds } })
       const numberedReferences = citationPlacement === 'inline' && citationStyle === 'numbered'
-      const rawBodyHtml = addPrintChrome(markdownToHtml(md)) + referencesHtml(nodeMap, sources, bibliographyStyle, numberedReferences)
-      const bodyHtml = floatPrintFootnotes(rawBodyHtml)
+      let rawBodyHtml = addPrintChrome(markdownToHtml(md)) + referencesHtml(nodeMap, sources, bibliographyStyle, numberedReferences)
+      if (mathlikeMode) rawBodyHtml = applyMathlikeHeadings(rawBodyHtml)
+      const bodyHtml = substack ? rawBodyHtml : floatPrintFootnotes(rawBodyHtml)
+
       const win = window.open('', '_blank')
       if (!win) {
         alert('Your browser blocked the print preview pop-up — allow pop-ups for this page and try again.')
@@ -139,8 +188,74 @@ export function ExportDialog({ essay, nodeMap, onClose }: { essay: Essay; nodeMa
       const authorName = getAuthorName()
       const titleText = cssStringEscape(essay.title)
       const authorText = cssStringEscape(authorName ?? '')
-      const printCss = `
+      const bodyFontFamily = substack ? `-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif` : `'EB Garamond', Georgia, 'Times New Roman', serif`
+
+      // Shared by every mode, paginated or not — fonts, base typography,
+      // the abstract/references/footnote-list styling, and the two
+      // mode-specific tweaks (mathlike's centered small-caps h2, and
+      // substack's hidden rules) that don't depend on actual pagination.
+      const sharedCss = `
         ${katexCss}
+        /* EB Garamond (SIL OFL 1.1 — see src/assets/fonts/OFL.txt) is a
+           real variable font (weight 400-800 in one file per style), so
+           one @font-face per style, not one per weight, correctly
+           covers both the body text and every bold heading below. Loaded
+           even in Substack mode's sans-serif body — harmless, since a
+           browser only ever actually fetches an @font-face it finds
+           used — on the chance an equation or something else still
+           wants it. */
+        @font-face { font-family: 'EB Garamond'; font-style: normal; font-weight: 400 800; src: url(${garamondRegularUrl}) format('woff2'); font-display: swap; }
+        @font-face { font-family: 'EB Garamond'; font-style: italic; font-weight: 400 800; src: url(${garamondItalicUrl}) format('woff2'); font-display: swap; }
+        body { font-family: ${bodyFontFamily}; line-height: ${doubleSpaced ? 2 : 1.6}; color: #1a1a1a; }
+        h1, h2, h3, h4, h5, h6 { font-family: ${bodyFontFamily}; font-weight: 700; margin-bottom: 0; }
+        /* Single-direction paragraph spacing (margin-top always 0) so a
+           heading's own margin-bottom is what actually controls the gap
+           below it, rather than being swallowed by the usual CSS
+           margin-collapsing between a heading's bottom margin and the
+           next paragraph's own top one. */
+        p { margin: 0 0 1em; }
+        h3, h4, h5, h6 { margin-top: 1.4em; margin-bottom: 0.3em; }
+        .print-title-rule { border: none; border-top: 4px solid #1a1a1a; margin: 0 0 32px; }
+        .print-section-rule { border: none; border-top: 1px solid #bbb; margin: 0 0 28px; }
+        blockquote { border-left: 3px solid #999; margin: 1em 0; padding-left: 1em; color: #444; }
+        .katex-display { margin: 1em 0; }
+        /* The abstract (see addPrintChrome's own doc comment) — smaller
+           type, indented in from both sides, same treatment in every
+           print mode regardless of how that mode styles everything else. */
+        .print-abstract { font-size: 0.92em; margin: 0 8% 28px; }
+        /* Deliberately outside addPrintChrome's own numbering/rule pass
+           (see referencesHtml's own doc comment) — a plain heading and a
+           hanging-indent list, the conventional bibliography layout. */
+        .print-references-heading { margin-top: 2.4em; }
+        .print-references-list { margin: 0.6em 0 0; }
+        ul.print-references-list { list-style: none; padding: 0; }
+        ul.print-references-list li { margin: 0 0 0.8em 1.6em; text-indent: -1.6em; }
+        ol.print-references-list { padding-left: 1.8em; }
+        ol.print-references-list li { margin: 0 0 0.8em; }
+        ${mathlikeMode ? "h2 { text-align: center; font-variant: small-caps; letter-spacing: 0.04em; }" : ''}
+        ${substack ? 'hr { display: none; }' : ''}
+      `
+
+      if (substack) {
+        // No Paged.js at all — a single continuous, unpaginated document,
+        // meant to be read top to bottom (or copied straight into a
+        // Substack post), not printed.
+        win.document.write(
+          `<!doctype html><html><head><title>${escapeHtml(essay.title)}</title><meta charset="utf-8">
+          <style>
+            ${sharedCss}
+            html, body { margin: 0; background: #fff; }
+            .substack-column { max-width: 700px; margin: 0 auto; padding: 48px 24px 72px; }
+          </style>
+          </head><body><div class="substack-column">${bodyHtml}</div></body></html>`,
+        )
+        win.document.close()
+        win.focus()
+        return
+      }
+
+      const printCss = `
+        ${sharedCss}
         @page {
           size: letter;
           margin: 1in;
@@ -153,34 +268,6 @@ export function ExportDialog({ essay, nodeMap, onClose }: { essay: Essay; nodeMa
            the corner nearest the edge of the open book. */
         @page :left { @bottom-left { content: counter(page); font-family: 'EB Garamond', Georgia, serif; font-variant: small-caps; font-size: 10px; color: #666; } }
         @page :right { @bottom-right { content: counter(page); font-family: 'EB Garamond', Georgia, serif; font-variant: small-caps; font-size: 10px; color: #666; } }
-        /* EB Garamond (SIL OFL 1.1 — see src/assets/fonts/OFL.txt) is a
-           real variable font (weight 400-800 in one file per style), so
-           one @font-face per style, not one per weight, correctly
-           covers both the body text and every bold heading below. */
-        @font-face { font-family: 'EB Garamond'; font-style: normal; font-weight: 400 800; src: url(${garamondRegularUrl}) format('woff2'); font-display: swap; }
-        @font-face { font-family: 'EB Garamond'; font-style: italic; font-weight: 400 800; src: url(${garamondItalicUrl}) format('woff2'); font-display: swap; }
-        body { font-family: 'EB Garamond', Georgia, 'Times New Roman', serif; line-height: 1.6; color: #1a1a1a; }
-        h1, h2, h3, h4, h5, h6 { font-family: 'EB Garamond', Georgia, 'Times New Roman', serif; font-weight: 700; margin-bottom: 0; }
-        /* Single-direction paragraph spacing (margin-top always 0) so a
-           heading's own margin-bottom is what actually controls the gap
-           below it, rather than being swallowed by the usual CSS
-           margin-collapsing between a heading's bottom margin and the
-           next paragraph's own top one. */
-        p { margin: 0 0 1em; }
-        h3, h4, h5, h6 { margin-top: 1.4em; margin-bottom: 0.3em; }
-        .print-title-rule { border: none; border-top: 4px solid #1a1a1a; margin: 0 0 32px; }
-        .print-section-rule { border: none; border-top: 1px solid #bbb; margin: 0 0 28px; }
-        blockquote { border-left: 3px solid #999; margin: 1em 0; padding-left: 1em; color: #444; }
-        .katex-display { margin: 1em 0; }
-        /* Deliberately outside addPrintChrome's own numbering/rule pass
-           (see referencesHtml's own doc comment) — a plain heading and a
-           hanging-indent list, the conventional bibliography layout. */
-        .print-references-heading { margin-top: 2.4em; }
-        .print-references-list { margin: 0.6em 0 0; }
-        ul.print-references-list { list-style: none; padding: 0; }
-        ul.print-references-list li { margin: 0 0 0.8em 1.6em; text-indent: -1.6em; }
-        ol.print-references-list { padding-left: 1.8em; }
-        ol.print-references-list li { margin: 0 0 0.8em; }
         /* floatPrintFootnotes() (lib/export.ts) marks each footnote up as
            one of these — Paged.js's own Footnotes module (see this
            function's own doc comment) recognizes the bare float: footnote
@@ -301,6 +388,15 @@ export function ExportDialog({ essay, nodeMap, onClose }: { essay: Essay; nodeMa
               page they're referenced on.
             </p>
             <label className="field-inline">
+              Print style
+              <select value={printMode} onChange={(e) => handlePrintModeChange((e.target as HTMLSelectElement).value as PrintMode)}>
+                <option value="handout">Handout</option>
+                <option value="manuscript">Manuscript (double-spaced, footnote citations)</option>
+                <option value="mathlike">Mathlike (amsart-style headings)</option>
+                <option value="substack">Substack (unpaginated, for pasting into a post)</option>
+              </select>
+            </label>
+            <label className="field-inline" style={{ marginTop: 6 }}>
               Citations
               <select value={citationPlacement} onChange={(e) => setCitationPlacement((e.target as HTMLSelectElement).value as PrintCitationPlacement)}>
                 <option value="inline">Inline</option>
@@ -322,7 +418,7 @@ export function ExportDialog({ essay, nodeMap, onClose }: { essay: Essay; nodeMa
             </label>
           </div>
           <button className="btn btn-primary" disabled={!!busy} onClick={exportPdf}>
-            {busy === 'pdf' ? 'Opening…' : 'Open print view'}
+            {busy === 'pdf' ? 'Opening…' : printMode === 'substack' ? 'Open view' : 'Open print view'}
           </button>
         </div>
 

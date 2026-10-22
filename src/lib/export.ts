@@ -7,10 +7,11 @@
  * order — so what's exported matches what's on screen, not some separate
  * frozen/versioned snapshot.
  */
-import { parseSegments } from './childMarkers'
+import { getChildIds, parseSegments } from './childMarkers'
 import { escapeHtml } from './html'
 import { citationLabel, citationLabelAuthorTitle, formatBibtex, formatCitation } from './bibtex'
 import { renderMathHtml } from './math'
+import { isAbstractTitle } from './treeNumbering'
 import { nodeFootnotes } from '../models/essaysRepo'
 import type { BibtexEntry, Essay, EssayNode, Source } from '../models/types'
 
@@ -517,6 +518,13 @@ export function markdownToHtml(md: string): string {
  * own subsections): it reads as underlining the heading, the same role
  * the title's thick rule plays for the title above it, not as a divider
  * between one section's content and the next.
+ *
+ * An abstract (see `isAbstractTitle` in `treeNumbering.ts`) — always the
+ * very first `<h2>`, if it's there at all, the same structural spot
+ * `pathOf` already special-cases — gets no number and no rule of its
+ * own; `renderAbstractSection` below folds it into a run-in "Abstract."
+ * lead instead, the same exception `pathOf` makes for it when numbering
+ * every *other* root-level section.
  */
 export function addPrintChrome(bodyHtml: string): string {
   const doc = new DOMParser().parseFromString(bodyHtml, 'text/html')
@@ -527,17 +535,99 @@ export function addPrintChrome(bodyHtml: string): string {
   }
   const headings = Array.from(doc.body.querySelectorAll('h1, h2, h3, h4, h5, h6'))
   const counters: number[] = []
+  let seenH2 = false
+  let abstractHeading: Element | null = null
   for (const heading of headings) {
     const level = Number(heading.tagName[1])
     if (level === 1) {
       heading.after(hr('print-title-rule'))
       continue
     }
+    if (level === 2) {
+      if (!seenH2 && isAbstractTitle(heading.textContent ?? undefined)) {
+        seenH2 = true
+        abstractHeading = heading
+        continue
+      }
+      seenH2 = true
+    }
     const depth = level - 1 // h2 -> root-level section (depth 1), h3 -> its child (depth 2), ...
     counters[depth - 1] = (counters[depth - 1] ?? 0) + 1
     counters.length = depth // drop any deeper counters left over from a previous sibling's own subsections
     heading.prepend(`${counters.join('.')} `)
     if (level === 2) heading.after(hr('print-section-rule'))
+  }
+  if (abstractHeading) renderAbstractSection(doc, abstractHeading)
+  return doc.body.innerHTML
+}
+
+/**
+ * Replaces `heading` and everything after it up to the next heading (its
+ * own section's content) with a `.print-abstract`-wrapped block whose
+ * lead is a bold "Abstract." run-in — folded into the start of the
+ * section's own first paragraph when it has one, or standing alone if
+ * the abstract has no body text yet — rather than `heading` itself,
+ * which would otherwise render as a normal large `<h2>`. The wrapper
+ * class is what `ExportDialog`'s own print CSS hooks the smaller
+ * font/wider side margins onto.
+ */
+function renderAbstractSection(doc: Document, heading: Element): void {
+  const content: Element[] = []
+  for (let sib = heading.nextElementSibling; sib && !/^H[1-6]$/.test(sib.tagName); ) {
+    const next = sib.nextElementSibling
+    content.push(sib)
+    sib = next
+  }
+  const firstPara = content.find((el) => el.tagName === 'P')
+  const label = doc.createElement('strong')
+  label.textContent = 'Abstract. '
+  if (firstPara) {
+    firstPara.prepend(label)
+  } else {
+    const p = doc.createElement('p')
+    p.appendChild(label)
+    content.unshift(p)
+  }
+  const wrapper = doc.createElement('div')
+  wrapper.className = 'print-abstract'
+  for (const el of content) wrapper.appendChild(el)
+  heading.replaceWith(wrapper)
+}
+
+/**
+ * "Mathlike" print mode's own subsection rendering (`ExportDialog`'s
+ * `printMode === 'mathlike'`) — every `<h3>` or deeper (root-level
+ * `<h2>`s are left alone; that's a pure-CSS treatment, centered
+ * small-caps, see the print CSS itself) becomes a bold run-in lead
+ * folded into its own first paragraph, numbering and all (run *after*
+ * `addPrintChrome`, so `heading.textContent` already carries the "2.1 "
+ * prefix it prepended), the same "Section N.M. " + no paragraph break
+ * shape `amsart`'s own `\subsection` uses — rather than a separate block
+ * heading sitting above a new paragraph. Must run after `addPrintChrome`
+ * for the numbering to already be in place; doesn't touch the abstract
+ * (never an `<h3>+`) or anything `addPrintChrome` already folded away.
+ */
+export function applyMathlikeHeadings(bodyHtml: string): string {
+  const doc = new DOMParser().parseFromString(bodyHtml, 'text/html')
+  for (const heading of Array.from(doc.body.querySelectorAll('h3, h4, h5, h6'))) {
+    const content: Element[] = []
+    for (let sib = heading.nextElementSibling; sib && !/^H[1-6]$/.test(sib.tagName); ) {
+      const next = sib.nextElementSibling
+      content.push(sib)
+      sib = next
+    }
+    const text = (heading.textContent ?? '').trim()
+    const label = doc.createElement('strong')
+    label.textContent = (text.endsWith('.') ? text : `${text}.`) + ' '
+    const firstPara = content.find((el) => el.tagName === 'P')
+    if (firstPara) {
+      firstPara.prepend(label)
+      heading.remove()
+    } else {
+      const p = doc.createElement('p')
+      p.appendChild(label)
+      heading.replaceWith(p)
+    }
   }
   return doc.body.innerHTML
 }
@@ -754,11 +844,39 @@ export function essayToLatex(essay: Essay, nodeMap: Map<string, EssayNode>, sour
   const citeCmd = opts.citeCommand ?? '\\cite'
   const ctx: LatexCtx = { sources, citeCmd, footnotesById: new Map() }
   const body: string[] = []
+  const root = nodeMap.get(essay.rootNodeId)
+  // See `addPrintChrome`'s own matching exception — the abstract (if
+  // there is one) is always the root's own first child, so its id is
+  // known up front rather than needing an insertIndex threaded through
+  // every recursive call.
+  const abstractId = root ? getChildIds(root.draftContent)[0] : undefined
   function renderNode(node: EssayNode, depth: number) {
-    if (depth > 0) {
+    const isAbstract = depth === 1 && node.id === abstractId && isAbstractTitle(node.title)
+    if (depth > 0 && !isAbstract) {
       body.push(`\\${sectionCmd(depth)}{${texEscape(node.title || 'Untitled section')}}`, '')
     }
     for (const footnote of nodeFootnotes(node)) ctx.footnotesById.set(footnote.id, footnote.content)
+    if (isAbstract) {
+      // `\abstract{}` takes its content as one macro argument — plain
+      // text/inline markup, same as everywhere else in this file, but
+      // not a place for the block-level `\section{}`/list/quote
+      // structure a normal node's own child subsections could produce,
+      // so only this node's own text segments go inside the braces; any
+      // (unusual, but not disallowed) subsections of their own still
+      // render normally, right after it, as real `\section{}`s.
+      const ownBlocks: string[] = []
+      for (const seg of parseSegments(node.draftContent)) {
+        if (seg.kind === 'text') ownBlocks.push(...htmlToLatexBlocks(seg.html, ctx))
+      }
+      body.push(`\\abstract{${ownBlocks.join('\n\n')}}`, '')
+      for (const seg of parseSegments(node.draftContent)) {
+        if (seg.kind === 'child') {
+          const child = nodeMap.get(seg.childId)
+          if (child) renderNode(child, depth + 1)
+        }
+      }
+      return
+    }
     for (const seg of parseSegments(node.draftContent)) {
       if (seg.kind === 'text') {
         for (const block of htmlToLatexBlocks(seg.html, ctx)) body.push(block, '')
@@ -769,7 +887,6 @@ export function essayToLatex(essay: Essay, nodeMap: Map<string, EssayNode>, sour
       // Comments (inline or margin) are commentary, not document text — never exported.
     }
   }
-  const root = nodeMap.get(essay.rootNodeId)
   if (root) renderNode(root, 0)
 
   const usesBiblatex = citeCmd === '\\footcite'

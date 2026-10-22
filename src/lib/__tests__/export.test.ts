@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { addPrintChrome, essayToLatex, essayToMarkdown, floatPrintFootnotes, markdownToHtml, referencesHtml, referencesMarkdown } from '../export'
+import { addPrintChrome, applyMathlikeHeadings, essayToLatex, essayToMarkdown, floatPrintFootnotes, markdownToHtml, referencesHtml, referencesMarkdown } from '../export'
 import { citationHtml } from '../bibtex'
 import { markerHtml } from '../childMarkers'
 import type { Essay, EssayNode, Source } from '../../models/types'
@@ -393,6 +393,36 @@ describe('citations in the LaTeX export', () => {
   })
 })
 
+describe('essayToLatex: abstract', () => {
+  it('renders the root\'s first child, titled exactly "Abstract", as \\abstract{} instead of \\section{}', () => {
+    const root = makeNode({ id: 'root', draftContent: `${markerHtml('abs')}${markerHtml('a')}` })
+    const abs = makeNode({ id: 'abs', title: 'Abstract', draftContent: '<p>A short summary.</p>' })
+    const a = makeNode({ id: 'a', title: 'Introduction', draftContent: '<p>Body.</p>' })
+    const tex = essayToLatex(makeEssay('root'), new Map([['root', root], ['abs', abs], ['a', a]]), new Map())
+    expect(tex).toContain('\\abstract{A short summary.}')
+    expect(tex).not.toContain('\\section{Abstract}')
+    expect(tex).toContain('\\section{Introduction}')
+  })
+
+  it("doesn't treat a later section titled \"Abstract\" (not the root's own first child) specially", () => {
+    const root = makeNode({ id: 'root', draftContent: `${markerHtml('a')}${markerHtml('b')}` })
+    const a = makeNode({ id: 'a', title: 'Introduction', draftContent: '<p>Body.</p>' })
+    const b = makeNode({ id: 'b', title: 'Abstract', draftContent: '<p>Not really an abstract.</p>' })
+    const tex = essayToLatex(makeEssay('root'), new Map([['root', root], ['a', a], ['b', b]]), new Map())
+    expect(tex).toContain('\\section{Abstract}')
+    expect(tex).not.toContain('\\abstract{')
+  })
+
+  it('renders any (unusual, but real) subsections of the abstract as normal \\subsection{}s right after it', () => {
+    const root = makeNode({ id: 'root', draftContent: markerHtml('abs') })
+    const abs = makeNode({ id: 'abs', title: 'Abstract', draftContent: `<p>Summary.</p>${markerHtml('sub')}` })
+    const sub = makeNode({ id: 'sub', title: 'A Subpoint', draftContent: '<p>Detail.</p>' })
+    const tex = essayToLatex(makeEssay('root'), new Map([['root', root], ['abs', abs], ['sub', sub]]), new Map())
+    expect(tex).toContain('\\abstract{Summary.}')
+    expect(tex).toContain('\\subsection{A Subpoint}')
+  })
+})
+
 describe('citations in Markdown export', () => {
   it('exports a citation as its own rendered label text, note included — Markdown has no special-case for .citation at all', () => {
     const root = makeNode({
@@ -580,6 +610,80 @@ describe('addPrintChrome', () => {
     const html = addPrintChrome(markdownToHtml(essayToMarkdown(makeEssay('root'), new Map([['root', root]]))))
     expect(html).not.toContain('print-section-rule')
     expect(html).toContain('print-title-rule') // the title itself still gets its own rule
+  })
+
+  function essayWithAbstract(): { essay: Essay; nodeMap: Map<string, EssayNode> } {
+    const root = makeNode({ id: 'root', title: 'Essay Title', draftContent: `${markerHtml('abs')}${markerHtml('a')}` })
+    const abs = makeNode({ id: 'abs', title: 'Abstract', draftContent: '<p>A short summary of the whole essay.</p>' })
+    const a = makeNode({ id: 'a', title: 'Introduction', draftContent: '<p>Body text.</p>' })
+    return { essay: makeEssay('root'), nodeMap: new Map([['root', root], ['abs', abs], ['a', a]]) }
+  }
+
+  it('folds a leading "Abstract" section into a run-in bold lead inside a .print-abstract wrapper, with no number and no rule', () => {
+    const { essay, nodeMap } = essayWithAbstract()
+    const html = addPrintChrome(markdownToHtml(essayToMarkdown(essay, nodeMap)))
+    expect(html).not.toContain('<h2>Abstract</h2>')
+    expect(html).not.toMatch(/<h2>\d[^<]*Abstract/)
+    expect(html).toContain('<div class="print-abstract"><p><strong>Abstract. </strong>A short summary of the whole essay.</p></div>')
+  })
+
+  it("numbers the section right after the abstract 1, not 2, and the abstract itself isn't counted toward any rule", () => {
+    const { essay, nodeMap } = essayWithAbstract()
+    const html = addPrintChrome(markdownToHtml(essayToMarkdown(essay, nodeMap)))
+    expect(html).toContain('<h2>1 Introduction</h2>')
+    expect((html.match(/<hr class="print-section-rule">/g) ?? []).length).toBe(1)
+  })
+
+  it('gives a contentless abstract a standalone bold "Abstract." lead', () => {
+    const root = makeNode({ id: 'root', title: 'Essay Title', draftContent: markerHtml('abs') })
+    const abs = makeNode({ id: 'abs', title: 'Abstract', draftContent: '' })
+    const html = addPrintChrome(markdownToHtml(essayToMarkdown(makeEssay('root'), new Map([['root', root], ['abs', abs]]))))
+    expect(html).toContain('<div class="print-abstract"><p><strong>Abstract. </strong></p></div>')
+  })
+
+  it("doesn't treat a later section titled \"Abstract\" (not the root's own first child) specially", () => {
+    const root = makeNode({ id: 'root', title: 'Essay Title', draftContent: `${markerHtml('a')}${markerHtml('b')}` })
+    const a = makeNode({ id: 'a', title: 'Introduction', draftContent: '<p>first</p>' })
+    const b = makeNode({ id: 'b', title: 'Abstract', draftContent: '<p>second</p>' })
+    const html = addPrintChrome(markdownToHtml(essayToMarkdown(makeEssay('root'), new Map([['root', root], ['a', a], ['b', b]]))))
+    expect(html).toContain('<h2>1 Introduction</h2>')
+    expect(html).toContain('<h2>2 Abstract</h2>')
+    expect(html).not.toContain('print-abstract')
+  })
+})
+
+describe('applyMathlikeHeadings', () => {
+  it('folds a numbered subsection into a bold run-in lead inside its own first paragraph, removing the heading', () => {
+    const root = makeNode({ id: 'root', draftContent: `${markerHtml('a')}` })
+    const a = makeNode({ id: 'a', title: 'Background', draftContent: `${markerHtml('a1')}` })
+    const a1 = makeNode({ id: 'a1', title: 'Prior Work', draftContent: '<p>Some discussion.</p>' })
+    const html = addPrintChrome(markdownToHtml(essayToMarkdown(makeEssay('root'), new Map([['root', root], ['a', a], ['a1', a1]]))))
+    const folded = applyMathlikeHeadings(html)
+    expect(folded).not.toContain('<h3>')
+    expect(folded).toContain('<p><strong>1.1 Prior Work. </strong>Some discussion.</p>')
+    // The root-level section heading itself is left alone — that one's a pure-CSS treatment.
+    expect(folded).toContain('<h2>1 Background</h2>')
+  })
+
+  it('gives a contentless subsection a standalone run-in paragraph', () => {
+    const root = makeNode({ id: 'root', draftContent: `${markerHtml('a')}` })
+    const a = makeNode({ id: 'a', title: 'Empty Subsection', draftContent: '' })
+    const essayRoot = makeNode({ id: 'r2', draftContent: `${markerHtml('p')}` })
+    const parent = makeNode({ id: 'p', title: 'Parent', draftContent: `${markerHtml('a')}` })
+    const html = addPrintChrome(markdownToHtml(essayToMarkdown(makeEssay('r2'), new Map([['r2', essayRoot], ['p', parent], ['a', a]]))))
+    const folded = applyMathlikeHeadings(html)
+    expect(folded).not.toContain('<h3>')
+    expect(folded).toContain('<p><strong>1.1 Empty Subsection. </strong></p>')
+  })
+
+  it('leaves a title already ending in a period alone rather than doubling it', () => {
+    const root = makeNode({ id: 'root', draftContent: `${markerHtml('a')}` })
+    const a = makeNode({ id: 'a', title: 'Parent', draftContent: markerHtml('a1') })
+    const a1 = makeNode({ id: 'a1', title: 'Already Ends.', draftContent: '<p>Text.</p>' })
+    const html = addPrintChrome(markdownToHtml(essayToMarkdown(makeEssay('root'), new Map([['root', root], ['a', a], ['a1', a1]]))))
+    const folded = applyMathlikeHeadings(html)
+    expect(folded).toContain('1.1 Already Ends. ')
+    expect(folded).not.toContain('Already Ends.. ')
   })
 })
 
