@@ -93,7 +93,7 @@ const PRINT_MODE_DEFAULT_CITATIONS: Record<PrintMode, { placement: PrintCitation
 
 export function ExportDialog({ essay, nodeMap, onClose }: { essay: Essay; nodeMap: Map<string, EssayNode>; onClose: () => void }) {
   const [citeCommand, setCiteCommand] = useState<'\\cite' | '\\footcite'>('\\cite')
-  const [bibliographyStyle, setBibliographyStyle] = useState<BibliographyStyle>('plain')
+  const [bibliographyStyle, setBibliographyStyle] = useState<BibliographyStyle>('chicago')
   const [printMode, setPrintMode] = useState<PrintMode>('handout')
   const [citationStyle, setCitationStyle] = useState<PrintCitationStyle>('author-year')
   const [citationPlacement, setCitationPlacement] = useState<PrintCitationPlacement>('inline')
@@ -155,7 +155,8 @@ export function ExportDialog({ essay, nodeMap, onClose }: { essay: Essay; nodeMa
    * - Mathlike runs `applyMathlikeHeadings` on the body (after
    *   `addPrintChrome` has already numbered everything) and centers/
    *   small-caps the root-level section headings via CSS alone.
-   * - Manuscript doubles `line-height`.
+   * - Manuscript doubles `line-height`; Handout tightens it (and paragraph
+   *   spacing) below the 1.6/1em every other mode shares.
    * - Substack is the one real structural fork: no pagination at all
    *   (Paged.js never runs, so no header/footer margin boxes and no
    *   `window.print()` either — the window is left open for copying out
@@ -172,6 +173,16 @@ export function ExportDialog({ essay, nodeMap, onClose }: { essay: Essay; nodeMa
       const substack = printMode === 'substack'
       const doubleSpaced = printMode === 'manuscript'
       const mathlikeMode = printMode === 'mathlike'
+      // Handout's own line-height/paragraph-spacing — tighter than every
+      // other mode's shared 1.6/1em (Manuscript wants its own, deliberately
+      // loose, double-spacing; Mathlike and Substack keep the original
+      // 1.6/1em look) — 1.6 read as noticeably airier than a normal printed
+      // document once compared side by side; 1.35 is much closer to a
+      // typical book/manuscript's own leading while staying comfortably
+      // readable.
+      const handoutCompact = printMode === 'handout'
+      const lineHeight = doubleSpaced ? 2 : handoutCompact ? 1.35 : 1.6
+      const paragraphMargin = handoutCompact ? '0.75em' : '1em'
 
       const sources = new Map((await listSources()).map((s) => [s.id, s]))
       const orderedSourceIds = citedSources(nodeMap, sources).map((s) => s.id)
@@ -207,14 +218,14 @@ export function ExportDialog({ essay, nodeMap, onClose }: { essay: Essay; nodeMa
            wants it. */
         @font-face { font-family: 'EB Garamond'; font-style: normal; font-weight: 400 800; src: url(${garamondRegularUrl}) format('woff2'); font-display: swap; }
         @font-face { font-family: 'EB Garamond'; font-style: italic; font-weight: 400 800; src: url(${garamondItalicUrl}) format('woff2'); font-display: swap; }
-        body { font-family: ${bodyFontFamily}; line-height: ${doubleSpaced ? 2 : 1.6}; color: #1a1a1a; }
+        body { font-family: ${bodyFontFamily}; line-height: ${lineHeight}; color: #1a1a1a; }
         h1, h2, h3, h4, h5, h6 { font-family: ${bodyFontFamily}; font-weight: 700; margin-bottom: 0; }
         /* Single-direction paragraph spacing (margin-top always 0) so a
            heading's own margin-bottom is what actually controls the gap
            below it, rather than being swallowed by the usual CSS
            margin-collapsing between a heading's bottom margin and the
            next paragraph's own top one. */
-        p { margin: 0 0 1em; }
+        p { margin: 0 0 ${paragraphMargin}; }
         h3, h4, h5, h6 { margin-top: 1.4em; margin-bottom: 0.3em; }
         .print-title-rule { border: none; border-top: 4px solid #1a1a1a; margin: 0 0 32px; }
         .print-section-rule { border: none; border-top: 1px solid #bbb; margin: 0 0 28px; }
