@@ -18,6 +18,8 @@ export function AddSourceDialog({ onClose, onCreated }: { onClose: () => void; o
   const [manualUrl, setManualUrl] = useState('')
   const [manualDoi, setManualDoi] = useState('')
   const [manualJournal, setManualJournal] = useState('')
+  const [manualEditor, setManualEditor] = useState('')
+  const [manualTranslator, setManualTranslator] = useState('')
   const [manualNote, setManualNote] = useState('')
   const [comment, setComment] = useState('')
   const [file, setFile] = useState<File | null>(null)
@@ -115,6 +117,8 @@ export function AddSourceDialog({ onClose, onCreated }: { onClose: () => void; o
         if (manualUrl) entry.fields.url = manualUrl
         if (manualDoi) entry.fields.doi = manualDoi
         if (manualJournal) entry.fields.journal = manualJournal
+        if (manualEditor) entry.fields.editor = manualEditor
+        if (manualTranslator) entry.fields.translator = manualTranslator
         if (manualNote) entry.fields.note = manualNote
       }
 
@@ -230,6 +234,16 @@ export function AddSourceDialog({ onClose, onCreated }: { onClose: () => void; o
             <div className="field">
               <label>Journal / venue (optional)</label>
               <input value={manualJournal} onInput={(e) => setManualJournal((e.target as HTMLInputElement).value)} />
+            </div>
+            <div className="field-row">
+              <div className="field">
+                <label>Editor(s) (optional)</label>
+                <input placeholder="For a chapter in an edited volume" value={manualEditor} onInput={(e) => setManualEditor((e.target as HTMLInputElement).value)} />
+              </div>
+              <div className="field">
+                <label>Translator(s) (optional)</label>
+                <input value={manualTranslator} onInput={(e) => setManualTranslator((e.target as HTMLInputElement).value)} />
+              </div>
             </div>
             <div className="field">
               <label>Note (optional)</label>

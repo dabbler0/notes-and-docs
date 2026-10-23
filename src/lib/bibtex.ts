@@ -97,6 +97,8 @@ export function formatBibtex(entry: BibtexEntry): string {
   const fieldOrder = [
     'title',
     'author',
+    'editor',
+    'translator',
     'year',
     'journal',
     'booktitle',
@@ -190,6 +192,11 @@ export function formatCitation(entry: BibtexEntry): string {
   const authorYear = [f.author, f.year ? `(${f.year})` : ''].filter(Boolean).join(' ')
   if (authorYear) sentences.push(authorYear)
   sentences.push(f.title || entry.key)
+  // Shown as its own short sentence, right after the title — whichever of
+  // the two is actually present (an edited volume's own editor, a
+  // translated work's own translator, both, or neither).
+  const editorTranslator = [f.editor ? `Ed. ${f.editor}` : '', f.translator ? `Trans. ${f.translator}` : ''].filter(Boolean).join('. ')
+  if (editorTranslator) sentences.push(editorTranslator)
   const venue = f.journal || f.booktitle
   const venueBits = [venue, f.volume ? (f.number ? `${f.volume}(${f.number})` : f.volume) : '', f.pages ? `pp. ${f.pages}` : ''].filter(Boolean)
   if (venueBits.length > 0) sentences.push(venueBits.join(', '))

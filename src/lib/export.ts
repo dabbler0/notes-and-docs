@@ -1090,59 +1090,70 @@ function formatAuthorsNameOrder(authors: ParsedAuthor[]): string {
 /**
  * APA 7th-edition reference-list entry: `Author, I. (Year). Title. *Venue*,
  * vol(no), pages.` for a journal article (no publisher — a journal article
- * never lists one in APA); `Author, I. (Year). Chapter title. In *Book
- * Title* (pp. P). Publisher.` for a chapter in an edited book (`booktitle`
- * set, no `journal`) — unlike a journal article, a book chapter's own
- * entry *does* need the publisher, just like a standalone book does (no
- * editor name, since that isn't a field this app stores); `Author, I.
- * (Year). *Title*. Publisher.` for a standalone book. Degrades the same
- * way `formatCitation` already does as fields go missing, down to just
- * the (italicized, as APA treats a standalone work) title when there's
- * nothing else at all. Titles are kept exactly as entered — APA's own
- * sentence-case title rule isn't applied, since reliably sentence-casing
- * an arbitrary user-entered title isn't something this can get right
- * automatically.
+ * never lists one in APA); `Author, I. (Year). Chapter title. In Editor
+ * (Ed.), *Book Title* (pp. P). Publisher.` for a chapter in an edited book
+ * (`booktitle` set, no `journal`) — unlike a journal article, a book
+ * chapter's own entry *does* need the publisher, just like a standalone
+ * book does; `Author, I. (Year). *Title*. Publisher.` for a standalone
+ * book. A translated work's own title gets a trailing "(T. Translator,
+ * Trans.)" in every case, editor or no. Both `editor`/`translator` are
+ * simply omitted when absent — this is the one difference from a plain
+ * `formatCitation` entry, otherwise degrading the same way as fields go
+ * missing, down to just the (italicized, as APA treats a standalone work)
+ * title when there's nothing else at all. Titles are kept exactly as
+ * entered — APA's own sentence-case title rule isn't applied, since
+ * reliably sentence-casing an arbitrary user-entered title isn't
+ * something this can get right automatically.
  */
 function formatApaEntry(entry: BibtexEntry): string {
   const f = entry.fields
   const authors = formatAuthorsApa(parseAuthorList(f.author))
   const year = f.year ? `(${mdEscapeText(f.year)})` : ''
   const title = mdEscapeText(f.title || entry.key)
+  const translatorSuffix = f.translator ? ` (${mdEscapeText(f.translator)}, Trans.)` : ''
   const sentences: string[] = []
   if (authors || year) sentences.push([authors, year].filter(Boolean).join(' '))
   if (f.journal) {
-    sentences.push(title)
+    sentences.push(`${title}${translatorSuffix}`)
     const venueBits = [`*${mdEscapeText(f.journal)}*`, f.volume ? (f.number ? `${mdEscapeText(f.volume)}(${mdEscapeText(f.number)})` : mdEscapeText(f.volume)) : '', f.pages ? mdEscapeText(f.pages) : ''].filter(Boolean)
     sentences.push(venueBits.join(', '))
   } else if (f.booktitle) {
-    sentences.push(title)
-    sentences.push(`In *${mdEscapeText(f.booktitle)}*${f.pages ? ` (pp. ${mdEscapeText(f.pages)})` : ''}`)
+    sentences.push(`${title}${translatorSuffix}`)
+    const editorPart = f.editor ? `${mdEscapeText(f.editor)} (Ed.), ` : ''
+    sentences.push(`In ${editorPart}*${mdEscapeText(f.booktitle)}*${f.pages ? ` (pp. ${mdEscapeText(f.pages)})` : ''}`)
     if (f.publisher) sentences.push(mdEscapeText(f.publisher))
   } else if (f.publisher) {
-    sentences.push(`*${title}*`)
+    sentences.push(`*${title}*${translatorSuffix}`)
     sentences.push(mdEscapeText(f.publisher))
   } else {
-    sentences.push(`*${title}*`)
+    sentences.push(`*${title}*${translatorSuffix}`)
   }
   return sentences.join('. ') + '.'
 }
 
 /**
- * MLA 9th-edition Works-Cited entry: `Last, First. "Title." *Venue*, vol.
- * V, no. N, Year, pp. P-P.` for a journal article (no publisher — a
- * journal issue doesn't get one in MLA); `Last, First. "Chapter Title."
- * *Book Title*, Publisher, Year, pp. P-P.` for a chapter in an edited
- * book (`booktitle` set, no `journal`) — unlike a journal article, MLA
- * *does* want the publisher for a book chapter, the same as for a
- * standalone book (no "edited by ..." — this app doesn't store an
- * editor); `Last, First. *Title*. Publisher, Year.` for a standalone book
- * (an independent work's own title is what gets italicized instead, with
- * nothing to quote). Degrades the same way `formatApaEntry` does.
+ * MLA 9th-edition Works-Cited entry: `Last, First. "Title." *Venue*,
+ * translated by Translator, vol. V, no. N, Year, pp. P-P.` for a journal
+ * article (no publisher — a journal issue doesn't get one in MLA); `Last,
+ * First. "Chapter Title." *Book Title*, edited by Editor, translated by
+ * Translator, Publisher, Year, pp. P-P.` for a chapter in an edited book
+ * (`booktitle` set, no `journal`) — unlike a journal article, MLA *does*
+ * want the publisher for a book chapter, the same as for a standalone
+ * book; `Last, First. *Title*, translated by Translator, Publisher,
+ * Year.` for a standalone book (an independent work's own title is what
+ * gets italicized instead, with nothing to quote). `editor`/`translator`
+ * are simply omitted when absent (editor only applies to the book-chapter
+ * shape — MLA has no "edited by" clause for a standalone work's own
+ * citation, since the editor there would normally stand in as the
+ * work's own author instead). Degrades the same way `formatApaEntry`
+ * does otherwise.
  */
 function formatMlaEntry(entry: BibtexEntry): string {
   const f = entry.fields
   const authors = formatAuthorsNameOrder(parseAuthorList(f.author))
   const title = mdEscapeText(f.title || entry.key)
+  const translatedBy = f.translator ? `translated by ${mdEscapeText(f.translator)}` : ''
+  const editedBy = f.editor ? `edited by ${mdEscapeText(f.editor)}` : ''
   // Each sentence below carries its own trailing period already (joined
   // with a plain space, not '. ' + a final period) — MLA's own
   // period-inside-the-closing-quote convention ("Title.") means the
@@ -1152,16 +1163,16 @@ function formatMlaEntry(entry: BibtexEntry): string {
   if (authors) sentences.push(`${authors}.`)
   if (f.journal) {
     sentences.push(`"${title}."`)
-    const venueBits = [`*${mdEscapeText(f.journal)}*`, f.volume ? `vol. ${mdEscapeText(f.volume)}` : '', f.number ? `no. ${mdEscapeText(f.number)}` : '', f.year ? mdEscapeText(f.year) : '', f.pages ? `pp. ${mdEscapeText(f.pages)}` : '']
+    const venueBits = [`*${mdEscapeText(f.journal)}*`, translatedBy, f.volume ? `vol. ${mdEscapeText(f.volume)}` : '', f.number ? `no. ${mdEscapeText(f.number)}` : '', f.year ? mdEscapeText(f.year) : '', f.pages ? `pp. ${mdEscapeText(f.pages)}` : '']
       .filter(Boolean)
     sentences.push(`${venueBits.join(', ')}.`)
   } else if (f.booktitle) {
     sentences.push(`"${title}."`)
-    const venueBits = [`*${mdEscapeText(f.booktitle)}*`, f.publisher ? mdEscapeText(f.publisher) : '', f.year ? mdEscapeText(f.year) : '', f.pages ? `pp. ${mdEscapeText(f.pages)}` : ''].filter(Boolean)
+    const venueBits = [`*${mdEscapeText(f.booktitle)}*`, editedBy, translatedBy, f.publisher ? mdEscapeText(f.publisher) : '', f.year ? mdEscapeText(f.year) : '', f.pages ? `pp. ${mdEscapeText(f.pages)}` : ''].filter(Boolean)
     sentences.push(`${venueBits.join(', ')}.`)
   } else if (f.publisher) {
     sentences.push(`*${title}*.`)
-    sentences.push(`${[mdEscapeText(f.publisher), f.year ? mdEscapeText(f.year) : ''].filter(Boolean).join(', ')}.`)
+    sentences.push(`${[translatedBy, mdEscapeText(f.publisher), f.year ? mdEscapeText(f.year) : ''].filter(Boolean).join(', ')}.`)
   } else {
     sentences.push(f.year ? `*${title}*, ${mdEscapeText(f.year)}.` : `*${title}*.`)
   }
@@ -1170,15 +1181,19 @@ function formatMlaEntry(entry: BibtexEntry): string {
 
 /**
  * Chicago 17th-edition (notes-bibliography) entry: `Last, First. "Title."
- * *Venue* vol, no. N (Year): pages.` for a journal article (no publisher
- * — a journal article doesn't get one in Chicago either); `Last, First.
- * "Chapter Title." In *Book Title*, pages. Publisher, Year.` for a
- * chapter in an edited book (`booktitle` set, no `journal`) — unlike a
- * journal article, Chicago *does* want the publisher (and year) for a
- * book chapter, same as for a standalone book; `Last, First. *Title*.
- * Publisher, Year.` for a standalone book. No place-of-publication for
- * either book form — Chicago's full convention wants one, but this app
- * doesn't store one, so it's left out rather than guessed at, the same
+ * Translated by Translator. *Venue* vol, no. N (Year): pages.` for a
+ * journal article (no publisher — a journal article doesn't get one in
+ * Chicago either); `Last, First. "Chapter Title." Translated by
+ * Translator. In *Book Title*, edited by Editor, pages. Publisher,
+ * Year.` for a chapter in an edited book (`booktitle` set, no `journal`)
+ * — unlike a journal article, Chicago *does* want the publisher (and
+ * year) for a book chapter, same as for a standalone book; `Last, First.
+ * *Title*. Translated by Translator. Publisher, Year.` for a standalone
+ * book. `editor`/`translator` are simply omitted when absent (editor
+ * only applies to the book-chapter shape, same reasoning as
+ * `formatMlaEntry`). No place-of-publication for either book form —
+ * Chicago's full convention wants one, but this app doesn't store one,
+ * so it's left out rather than guessed at, the same
  * degrade-gracefully-as-fields-go-missing approach `formatCitation`
  * already takes.
  */
@@ -1186,23 +1201,28 @@ function formatChicagoEntry(entry: BibtexEntry): string {
   const f = entry.fields
   const authors = formatAuthorsNameOrder(parseAuthorList(f.author))
   const title = mdEscapeText(f.title || entry.key)
+  const translatedBy = f.translator ? `Translated by ${mdEscapeText(f.translator)}.` : ''
   // See formatMlaEntry's own comment — same period-inside-the-quote
   // reasoning applies here too.
   const sentences: string[] = []
   if (authors) sentences.push(`${authors}.`)
   if (f.journal) {
     sentences.push(`"${title}."`)
+    if (translatedBy) sentences.push(translatedBy)
     const volNo = [f.volume ? mdEscapeText(f.volume) : '', f.number ? `no. ${mdEscapeText(f.number)}` : ''].filter(Boolean).join(', ')
     const yearPart = f.year ? ` (${mdEscapeText(f.year)})` : ''
     const pagesPart = f.pages ? `: ${mdEscapeText(f.pages)}` : ''
     sentences.push(`*${mdEscapeText(f.journal)}*${volNo ? ' ' + volNo : ''}${yearPart}${pagesPart}.`)
   } else if (f.booktitle) {
     sentences.push(`"${title}."`)
-    sentences.push(`In *${mdEscapeText(f.booktitle)}*${f.pages ? `, ${mdEscapeText(f.pages)}` : ''}.`)
+    if (translatedBy) sentences.push(translatedBy)
+    const editedBy = f.editor ? `, edited by ${mdEscapeText(f.editor)}` : ''
+    sentences.push(`In *${mdEscapeText(f.booktitle)}*${editedBy}${f.pages ? `, ${mdEscapeText(f.pages)}` : ''}.`)
     const pubYear = [f.publisher ? mdEscapeText(f.publisher) : '', f.year ? mdEscapeText(f.year) : ''].filter(Boolean).join(', ')
     if (pubYear) sentences.push(`${pubYear}.`)
   } else if (f.publisher) {
     sentences.push(`*${title}*.`)
+    if (translatedBy) sentences.push(translatedBy)
     sentences.push(`${[mdEscapeText(f.publisher), f.year ? mdEscapeText(f.year) : ''].filter(Boolean).join(', ')}.`)
   } else {
     sentences.push(f.year ? `*${title}*, ${mdEscapeText(f.year)}.` : `*${title}*.`)

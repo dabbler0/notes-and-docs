@@ -915,6 +915,47 @@ describe('renderBibliographyEntry: apa/mla/chicago', () => {
     expect(md).toBe('Smith, Jane. "A Chapter." In *An Edited Volume*, 10-20.')
   })
 
+  it('includes the editor for an APA-style book-chapter entry, in the "In Editor (Ed.), *Book*" phrasing', () => {
+    const md = renderBibliographyEntry(inbookEntry({ editor: 'Bob Editor' }), 'apa')
+    expect(md).toBe('Smith, J. (2020). A Chapter. In Bob Editor (Ed.), *An Edited Volume* (pp. 10-20). Example Press.')
+  })
+
+  it('includes the translator for an APA-style entry of any shape, right after the title', () => {
+    expect(renderBibliographyEntry(articleEntry({ translator: 'Ann Translator' }), 'apa')).toBe('Smith, J. (2020). An Early Paper (Ann Translator, Trans.). *Journal of Examples*, 12(3), 45-67.')
+    expect(renderBibliographyEntry(bookEntry({ translator: 'Ann Translator' }), 'apa')).toBe('Smith, J. (2020). *A Whole Book* (Ann Translator, Trans.). Example Press.')
+  })
+
+  it('includes editor and translator together for an APA-style book-chapter entry', () => {
+    const md = renderBibliographyEntry(inbookEntry({ editor: 'Bob Editor', translator: 'Ann Translator' }), 'apa')
+    expect(md).toBe('Smith, J. (2020). A Chapter (Ann Translator, Trans.). In Bob Editor (Ed.), *An Edited Volume* (pp. 10-20). Example Press.')
+  })
+
+  it('includes "edited by"/"translated by" for an MLA-style book-chapter entry', () => {
+    const md = renderBibliographyEntry(inbookEntry({ editor: 'Bob Editor', translator: 'Ann Translator' }), 'mla')
+    expect(md).toBe('Smith, Jane. "A Chapter." *An Edited Volume*, edited by Bob Editor, translated by Ann Translator, Example Press, 2020, pp. 10-20.')
+  })
+
+  it('includes "translated by" for an MLA-style journal article (no editor clause for a journal)', () => {
+    const md = renderBibliographyEntry(articleEntry({ translator: 'Ann Translator' }), 'mla')
+    expect(md).toBe('Smith, Jane. "An Early Paper." *Journal of Examples*, translated by Ann Translator, vol. 12, no. 3, 2020, pp. 45-67.')
+  })
+
+  it('includes "Translated by"/"edited by" for a Chicago-style book-chapter entry', () => {
+    const md = renderBibliographyEntry(inbookEntry({ editor: 'Bob Editor', translator: 'Ann Translator' }), 'chicago')
+    expect(md).toBe('Smith, Jane. "A Chapter." Translated by Ann Translator. In *An Edited Volume*, edited by Bob Editor, 10-20. Example Press, 2020.')
+  })
+
+  it('includes "Translated by" as its own sentence for a Chicago-style journal article', () => {
+    const md = renderBibliographyEntry(articleEntry({ translator: 'Ann Translator' }), 'chicago')
+    expect(md).toBe('Smith, Jane. "An Early Paper." Translated by Ann Translator. *Journal of Examples* 12, no. 3 (2020): 45-67.')
+  })
+
+  it('omits editor/translator phrasing entirely from every style when neither is present', () => {
+    expect(renderBibliographyEntry(articleEntry(), 'apa')).not.toContain('Trans.')
+    expect(renderBibliographyEntry(inbookEntry(), 'mla')).not.toContain('edited by')
+    expect(renderBibliographyEntry(articleEntry(), 'chicago')).not.toContain('Translated by')
+  })
+
   it('degrades gracefully with only a title, for every style', () => {
     const entry: BibtexEntry = { type: 'misc', key: 'untitled', fields: { title: 'Untitled Paper' } }
     expect(renderBibliographyEntry(entry, 'apa')).toBe('*Untitled Paper*.')

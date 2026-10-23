@@ -181,6 +181,21 @@ describe('formatCitation', () => {
   it('uses booktitle and volume alone (no issue number) when there is no journal', () => {
     expect(formatCitation(entry({ title: 'A Chapter', booktitle: 'Collected Works', volume: '2' }, 'incollection'))).toBe('A Chapter. Collected Works, 2.')
   })
+
+  it('includes the editor and translator, right after the title, when present', () => {
+    expect(
+      formatCitation(entry({ author: 'Jane Tester', year: '2024', title: 'A Test PDF Document', editor: 'Bob Editor', translator: 'Ann Translator', journal: 'Journal of Examples' })),
+    ).toBe('Jane Tester (2024). A Test PDF Document. Ed. Bob Editor. Trans. Ann Translator. Journal of Examples.')
+  })
+
+  it('includes only the editor when there is no translator, and vice versa', () => {
+    expect(formatCitation(entry({ title: 'A Chapter', editor: 'Bob Editor', booktitle: 'Collected Works' }, 'incollection'))).toBe('A Chapter. Ed. Bob Editor. Collected Works.')
+    expect(formatCitation(entry({ title: 'A Translated Work', translator: 'Ann Translator', publisher: 'Example Press' }, 'book'))).toBe('A Translated Work. Trans. Ann Translator. Example Press.')
+  })
+
+  it('omits the editor/translator sentence entirely when neither is present', () => {
+    expect(formatCitation(entry({ title: 'A Test PDF Document', journal: 'Journal of Examples' }))).not.toContain('Ed.')
+  })
 })
 
 describe('extractLegacyCitationNote', () => {
