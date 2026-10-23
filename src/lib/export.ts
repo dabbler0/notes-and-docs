@@ -9,7 +9,7 @@
  */
 import { getChildIds, parseSegments } from './childMarkers'
 import { escapeHtml } from './html'
-import { citationLabel, citationLabelAuthorTitle, formatBibtex, formatCitation } from './bibtex'
+import { citationLabel, citationLabelAuthorTitle, formatBibtex, formatCitation, trailingCitationFields } from './bibtex'
 import { renderMathHtml } from './math'
 import { isAbstractTitle } from './treeNumbering'
 import { nodeFootnotes } from '../models/essaysRepo'
@@ -1094,11 +1094,16 @@ function formatAuthorsNameOrder(authors: ParsedAuthor[]): string {
  * (Ed.), *Book Title* (pp. P). Publisher.` for a chapter in an edited book
  * (`booktitle` set, no `journal`) — unlike a journal article, a book
  * chapter's own entry *does* need the publisher, just like a standalone
- * book does; `Author, I. (Year). *Title*. Publisher.` for a standalone
- * book. A translated work's own title gets a trailing "(T. Translator,
- * Trans.)" in every case, editor or no. Both `editor`/`translator` are
- * simply omitted when absent — this is the one difference from a plain
- * `formatCitation` entry, otherwise degrading the same way as fields go
+ * book does; `Author, I. (Year). *Title*. Edited by Editor. Publisher.`
+ * for a standalone book with its own separate editor (an edited
+ * collection with no single "author" of its own, or an edited edition of
+ * an authored work — either way, shown as its own sentence, not folded
+ * into the "In Editor (Ed.), *Book*" phrasing a book-chapter entry uses,
+ * since there's no containing work here for that phrasing to introduce).
+ * A translated work's own title gets a trailing "(T. Translator, Trans.)"
+ * in every case. `editor`/`translator`, and the trailing ISBN/DOI/URL/
+ * note fields (`trailingCitationFields`, lib/bibtex.ts), are simply
+ * omitted when absent — otherwise degrading the same way as fields go
  * missing, down to just the (italicized, as APA treats a standalone work)
  * title when there's nothing else at all. Titles are kept exactly as
  * entered — APA's own sentence-case title rule isn't applied, since
@@ -1124,10 +1129,13 @@ function formatApaEntry(entry: BibtexEntry): string {
     if (f.publisher) sentences.push(mdEscapeText(f.publisher))
   } else if (f.publisher) {
     sentences.push(`*${title}*${translatorSuffix}`)
+    if (f.editor) sentences.push(`Edited by ${mdEscapeText(f.editor)}`)
     sentences.push(mdEscapeText(f.publisher))
   } else {
     sentences.push(`*${title}*${translatorSuffix}`)
+    if (f.editor) sentences.push(`Edited by ${mdEscapeText(f.editor)}`)
   }
+  sentences.push(...trailingCitationFields(f, mdEscapeText))
   return sentences.join('. ') + '.'
 }
 
@@ -1139,13 +1147,13 @@ function formatApaEntry(entry: BibtexEntry): string {
  * Translator, Publisher, Year, pp. P-P.` for a chapter in an edited book
  * (`booktitle` set, no `journal`) — unlike a journal article, MLA *does*
  * want the publisher for a book chapter, the same as for a standalone
- * book; `Last, First. *Title*, translated by Translator, Publisher,
- * Year.` for a standalone book (an independent work's own title is what
- * gets italicized instead, with nothing to quote). `editor`/`translator`
- * are simply omitted when absent (editor only applies to the book-chapter
- * shape — MLA has no "edited by" clause for a standalone work's own
- * citation, since the editor there would normally stand in as the
- * work's own author instead). Degrades the same way `formatApaEntry`
+ * book; `Last, First. *Title*. Edited by Editor. Publisher, Year.` for a
+ * standalone book with its own separate editor — shown as its own
+ * sentence here (an independent work's own title is what gets italicized
+ * instead of quoted, with nothing to quote, same as every other
+ * standalone-book shape below). `editor`/`translator`, and the trailing
+ * ISBN/DOI/URL/note fields (`trailingCitationFields`, lib/bibtex.ts), are
+ * simply omitted when absent. Degrades the same way `formatApaEntry`
  * does otherwise.
  */
 function formatMlaEntry(entry: BibtexEntry): string {
@@ -1172,10 +1180,13 @@ function formatMlaEntry(entry: BibtexEntry): string {
     sentences.push(`${venueBits.join(', ')}.`)
   } else if (f.publisher) {
     sentences.push(`*${title}*.`)
+    if (editedBy) sentences.push(`${editedBy.charAt(0).toUpperCase()}${editedBy.slice(1)}.`)
     sentences.push(`${[translatedBy, mdEscapeText(f.publisher), f.year ? mdEscapeText(f.year) : ''].filter(Boolean).join(', ')}.`)
   } else {
     sentences.push(f.year ? `*${title}*, ${mdEscapeText(f.year)}.` : `*${title}*.`)
+    if (editedBy) sentences.push(`${editedBy.charAt(0).toUpperCase()}${editedBy.slice(1)}.`)
   }
+  sentences.push(...trailingCitationFields(f, mdEscapeText).map((s) => `${s}.`))
   return sentences.join(' ')
 }
 
@@ -1188,13 +1199,14 @@ function formatMlaEntry(entry: BibtexEntry): string {
  * Year.` for a chapter in an edited book (`booktitle` set, no `journal`)
  * — unlike a journal article, Chicago *does* want the publisher (and
  * year) for a book chapter, same as for a standalone book; `Last, First.
- * *Title*. Translated by Translator. Publisher, Year.` for a standalone
- * book. `editor`/`translator` are simply omitted when absent (editor
- * only applies to the book-chapter shape, same reasoning as
- * `formatMlaEntry`). No place-of-publication for either book form —
- * Chicago's full convention wants one, but this app doesn't store one,
- * so it's left out rather than guessed at, the same
- * degrade-gracefully-as-fields-go-missing approach `formatCitation`
+ * *Title*. Edited by Editor. Translated by Translator. Publisher, Year.`
+ * for a standalone book with its own separate editor — shown as its own
+ * sentence here, same as `formatMlaEntry` does. `editor`/`translator`,
+ * and the trailing ISBN/DOI/URL/note fields (`trailingCitationFields`,
+ * lib/bibtex.ts), are simply omitted when absent. No place-of-publication
+ * for either book form — Chicago's full convention wants one, but this
+ * app doesn't store one, so it's left out rather than guessed at, the
+ * same degrade-gracefully-as-fields-go-missing approach `formatCitation`
  * already takes.
  */
 function formatChicagoEntry(entry: BibtexEntry): string {
@@ -1202,6 +1214,7 @@ function formatChicagoEntry(entry: BibtexEntry): string {
   const authors = formatAuthorsNameOrder(parseAuthorList(f.author))
   const title = mdEscapeText(f.title || entry.key)
   const translatedBy = f.translator ? `Translated by ${mdEscapeText(f.translator)}.` : ''
+  const editedByOwnSentence = f.editor ? `Edited by ${mdEscapeText(f.editor)}.` : ''
   // See formatMlaEntry's own comment — same period-inside-the-quote
   // reasoning applies here too.
   const sentences: string[] = []
@@ -1222,11 +1235,14 @@ function formatChicagoEntry(entry: BibtexEntry): string {
     if (pubYear) sentences.push(`${pubYear}.`)
   } else if (f.publisher) {
     sentences.push(`*${title}*.`)
+    if (editedByOwnSentence) sentences.push(editedByOwnSentence)
     if (translatedBy) sentences.push(translatedBy)
     sentences.push(`${[mdEscapeText(f.publisher), f.year ? mdEscapeText(f.year) : ''].filter(Boolean).join(', ')}.`)
   } else {
     sentences.push(f.year ? `*${title}*, ${mdEscapeText(f.year)}.` : `*${title}*.`)
+    if (editedByOwnSentence) sentences.push(editedByOwnSentence)
   }
+  sentences.push(...trailingCitationFields(f, mdEscapeText).map((s) => `${s}.`))
   return sentences.join(' ')
 }
 

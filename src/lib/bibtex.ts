@@ -106,6 +106,7 @@ export function formatBibtex(entry: BibtexEntry): string {
     'volume',
     'number',
     'pages',
+    'isbn',
     'doi',
     'url',
     'note',
@@ -186,6 +187,35 @@ export function displayTitle(entry: BibtexEntry): string {
  * only a title still renders as just the title, not a sentence of empty
  * punctuation).
  */
+/**
+ * ISBN, a DOI (rendered as a clickable `https://doi.org/…` link via plain
+ * Markdown link syntax — resolved to a real `<a>` by `inlineMarkdownToHtml`
+ * wherever a citation ends up in the print view, and still perfectly
+ * readable as literal `[text](url)` in the plain .md export), a URL (same
+ * treatment, verbatim), and a free-text BibTeX `note` field — in that
+ * order, one clause per field actually present, appended to the very end
+ * of a citation/bibliography entry by every renderer in this app
+ * (`formatCitation` right below, and the APA/MLA/Chicago formatters in
+ * lib/export.ts). `escape` lets a caller Markdown-escape each field's own
+ * text first (the export.ts formatters do, via `mdEscapeText`; this
+ * function's own default — identity — matches how `formatCitation` has
+ * never escaped any of its other fields either) — never applied to the
+ * `[text](url)` link syntax itself, only to the raw field value
+ * substituted inside it, so a stray Markdown-special character sitting in
+ * a URL can't accidentally break or extend the link.
+ */
+export function trailingCitationFields(f: Record<string, string>, escape: (s: string) => string = (s) => s): string[] {
+  const out: string[] = []
+  if (f.isbn) out.push(`ISBN: ${escape(f.isbn)}`)
+  if (f.doi) {
+    const doiUrl = /^https?:\/\//.test(f.doi) ? f.doi : `https://doi.org/${f.doi}`
+    out.push(`[${escape(doiUrl)}](${escape(doiUrl)})`)
+  }
+  if (f.url) out.push(`[${escape(f.url)}](${escape(f.url)})`)
+  if (f.note) out.push(escape(f.note))
+  return out
+}
+
 export function formatCitation(entry: BibtexEntry): string {
   const f = entry.fields
   const sentences: string[] = []
@@ -201,6 +231,7 @@ export function formatCitation(entry: BibtexEntry): string {
   const venueBits = [venue, f.volume ? (f.number ? `${f.volume}(${f.number})` : f.volume) : '', f.pages ? `pp. ${f.pages}` : ''].filter(Boolean)
   if (venueBits.length > 0) sentences.push(venueBits.join(', '))
   else if (f.publisher) sentences.push(f.publisher)
+  sentences.push(...trailingCitationFields(f))
   return sentences.join('. ') + '.'
 }
 

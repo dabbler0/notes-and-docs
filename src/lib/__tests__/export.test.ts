@@ -956,6 +956,44 @@ describe('renderBibliographyEntry: apa/mla/chicago', () => {
     expect(renderBibliographyEntry(articleEntry(), 'chicago')).not.toContain('Translated by')
   })
 
+  it('includes the editor as its own sentence for a standalone @book entry (no booktitle) in every style', () => {
+    expect(renderBibliographyEntry(bookEntry({ editor: 'Bob Editor' }), 'apa')).toBe('Smith, J. (2020). *A Whole Book*. Edited by Bob Editor. Example Press.')
+    expect(renderBibliographyEntry(bookEntry({ editor: 'Bob Editor' }), 'mla')).toBe('Smith, Jane. *A Whole Book*. Edited by Bob Editor. Example Press, 2020.')
+    expect(renderBibliographyEntry(bookEntry({ editor: 'Bob Editor' }), 'chicago')).toBe('Smith, Jane. *A Whole Book*. Edited by Bob Editor. Example Press, 2020.')
+  })
+
+  it('includes editor and translator together as separate sentences for a standalone @book entry', () => {
+    const md = renderBibliographyEntry(bookEntry({ editor: 'Bob Editor', translator: 'Ann Translator' }), 'chicago')
+    expect(md).toBe('Smith, Jane. *A Whole Book*. Edited by Bob Editor. Translated by Ann Translator. Example Press, 2020.')
+  })
+
+  it('appends ISBN, DOI (as a link), URL (as a link), and note for every style when present', () => {
+    const fields = { isbn: '978-0-00-000000-0', doi: '10.1000/xyz123', url: 'https://example.com/book', note: 'A reprint edition' }
+    expect(renderBibliographyEntry(bookEntry(fields), 'apa')).toBe(
+      'Smith, J. (2020). *A Whole Book*. Example Press. ISBN: 978-0-00-000000-0. [https://doi.org/10.1000/xyz123](https://doi.org/10.1000/xyz123). [https://example.com/book](https://example.com/book). A reprint edition.',
+    )
+    expect(renderBibliographyEntry(bookEntry(fields), 'mla')).toBe(
+      'Smith, Jane. *A Whole Book*. Example Press, 2020. ISBN: 978-0-00-000000-0. [https://doi.org/10.1000/xyz123](https://doi.org/10.1000/xyz123). [https://example.com/book](https://example.com/book). A reprint edition.',
+    )
+    expect(renderBibliographyEntry(bookEntry(fields), 'chicago')).toBe(
+      'Smith, Jane. *A Whole Book*. Example Press, 2020. ISBN: 978-0-00-000000-0. [https://doi.org/10.1000/xyz123](https://doi.org/10.1000/xyz123). [https://example.com/book](https://example.com/book). A reprint edition.',
+    )
+  })
+
+  it('resolves the ISBN/DOI/URL/note fields to real links/text once run through the HTML references list', () => {
+    const smith = makeSource({ id: 's-smith', bibtex: bookEntry({ doi: '10.1000/xyz123', note: 'A reprint edition' }) })
+    const root = makeNode({ id: 'root', draftContent: `<p>As argued by ${citationHtml(smith)}, the sky is blue.</p>` })
+    const html = referencesHtml(new Map([['root', root]]), new Map([['s-smith', smith]]), 'apa')
+    expect(html).toContain('<a href="https://doi.org/10.1000/xyz123" target="_blank" rel="noopener">https://doi.org/10.1000/xyz123</a>')
+    expect(html).toContain('A reprint edition.')
+  })
+
+  it('omits every trailing field that is absent, for every style', () => {
+    expect(renderBibliographyEntry(bookEntry(), 'apa')).not.toMatch(/ISBN|doi\.org|note/i)
+    expect(renderBibliographyEntry(bookEntry(), 'mla')).not.toMatch(/ISBN|doi\.org|note/i)
+    expect(renderBibliographyEntry(bookEntry(), 'chicago')).not.toMatch(/ISBN|doi\.org|note/i)
+  })
+
   it('degrades gracefully with only a title, for every style', () => {
     const entry: BibtexEntry = { type: 'misc', key: 'untitled', fields: { title: 'Untitled Paper' } }
     expect(renderBibliographyEntry(entry, 'apa')).toBe('*Untitled Paper*.')

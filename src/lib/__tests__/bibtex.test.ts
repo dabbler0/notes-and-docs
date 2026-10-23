@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { citationHtml, citationLabel, citationPage, extractLegacyCitationNote, formatCitation, pageNote, renderCitationLabel } from '../bibtex'
+import { citationHtml, citationLabel, citationPage, extractLegacyCitationNote, formatCitation, pageNote, renderCitationLabel, trailingCitationFields } from '../bibtex'
 import type { BibtexEntry, Source } from '../../models/types'
 
 function source(overrides: Partial<Source> = {}): Source {
@@ -195,6 +195,36 @@ describe('formatCitation', () => {
 
   it('omits the editor/translator sentence entirely when neither is present', () => {
     expect(formatCitation(entry({ title: 'A Test PDF Document', journal: 'Journal of Examples' }))).not.toContain('Ed.')
+  })
+
+  it('includes the editor for a regular @book entry (no booktitle/journal), same as any other entry shape', () => {
+    expect(formatCitation(entry({ title: 'A Whole Book', editor: 'Bob Editor', publisher: 'Example Press' }, 'book'))).toBe('A Whole Book. Ed. Bob Editor. Example Press.')
+  })
+
+  it('appends ISBN, DOI (as a link), URL (as a link), and note, in that order, when present', () => {
+    const md = formatCitation(entry({ title: 'A Whole Book', publisher: 'Example Press', isbn: '978-0-00-000000-0', doi: '10.1000/xyz123', url: 'https://example.com/book', note: 'A reprint edition' }, 'book'))
+    expect(md).toBe('A Whole Book. Example Press. ISBN: 978-0-00-000000-0. [https://doi.org/10.1000/xyz123](https://doi.org/10.1000/xyz123). [https://example.com/book](https://example.com/book). A reprint edition.')
+  })
+
+  it('leaves an already-fully-qualified DOI URL untouched rather than double-prefixing it', () => {
+    const md = formatCitation(entry({ title: 'A Paper', doi: 'https://doi.org/10.1000/xyz123' }))
+    expect(md).toContain('[https://doi.org/10.1000/xyz123](https://doi.org/10.1000/xyz123)')
+    expect(md).not.toContain('doi.org/https://')
+  })
+
+  it('omits every trailing field that is absent', () => {
+    expect(formatCitation(entry({ title: 'A Paper' }))).toBe('A Paper.')
+  })
+})
+
+describe('trailingCitationFields', () => {
+  it('returns an empty array when none of isbn/doi/url/note are present', () => {
+    expect(trailingCitationFields({ title: 'x' })).toEqual([])
+  })
+
+  it('applies the given escape function to each field value, but not to the [text](url) link syntax itself', () => {
+    const out = trailingCitationFields({ url: 'https://example.com/a*b' }, (s) => s.replace(/\*/g, '\\*'))
+    expect(out).toEqual(['[https://example.com/a\\*b](https://example.com/a\\*b)'])
   })
 })
 

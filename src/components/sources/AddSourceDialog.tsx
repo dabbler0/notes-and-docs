@@ -17,6 +17,7 @@ export function AddSourceDialog({ onClose, onCreated }: { onClose: () => void; o
   const [manualYear, setManualYear] = useState('')
   const [manualUrl, setManualUrl] = useState('')
   const [manualDoi, setManualDoi] = useState('')
+  const [manualIsbn, setManualIsbn] = useState('')
   const [manualJournal, setManualJournal] = useState('')
   const [manualEditor, setManualEditor] = useState('')
   const [manualTranslator, setManualTranslator] = useState('')
@@ -116,6 +117,7 @@ export function AddSourceDialog({ onClose, onCreated }: { onClose: () => void; o
         if (manualYear) entry.fields.year = manualYear
         if (manualUrl) entry.fields.url = manualUrl
         if (manualDoi) entry.fields.doi = manualDoi
+        if (manualIsbn) entry.fields.isbn = manualIsbn
         if (manualJournal) entry.fields.journal = manualJournal
         if (manualEditor) entry.fields.editor = manualEditor
         if (manualTranslator) entry.fields.translator = manualTranslator
@@ -230,6 +232,10 @@ export function AddSourceDialog({ onClose, onCreated }: { onClose: () => void; o
                 <label>DOI (optional)</label>
                 <input value={manualDoi} onInput={(e) => setManualDoi((e.target as HTMLInputElement).value)} />
               </div>
+            </div>
+            <div className="field">
+              <label>ISBN (optional)</label>
+              <input value={manualIsbn} onInput={(e) => setManualIsbn((e.target as HTMLInputElement).value)} />
             </div>
             <div className="field">
               <label>Journal / venue (optional)</label>
