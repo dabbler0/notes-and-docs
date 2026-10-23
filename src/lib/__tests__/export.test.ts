@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest'
-import { addPrintChrome, applyMathlikeHeadings, essayToLatex, essayToMarkdown, floatPrintFootnotes, markdownToHtml, referencesHtml, referencesMarkdown } from '../export'
+import { addPrintChrome, applyMathlikeHeadings, ensureCitationSpacing, essayToLatex, essayToMarkdown, floatPrintFootnotes, markdownToHtml, referencesHtml, referencesMarkdown, renderBibliographyEntry } from '../export'
 import { citationHtml } from '../bibtex'
 import { markerHtml } from '../childMarkers'
-import type { Essay, EssayNode, Source } from '../../models/types'
+import type { BibtexEntry, Essay, EssayNode, Source } from '../../models/types'
 
 function makeSource(overrides: Partial<Source> & { id: string } = { id: 's1' }): Source {
   return {
@@ -458,14 +458,14 @@ describe('print-mode citation styling (essayToMarkdown\'s citationOptions)', () 
   it('re-renders author-year fresh from the current source, ignoring the chip\'s own stale baked-in text', () => {
     const { nodeMap, sources, sourceId } = sourceAndCitation()
     const md = essayToMarkdown(makeEssay('root'), nodeMap, { citationOptions: { sources, style: 'author-year', placement: 'inline', orderedSourceIds: [sourceId] } })
-    expect(md).toContain('As argued (Smith, 2020).')
+    expect(ensureCitationSpacing(markdownToHtml(md))).toContain('As argued (Smith, 2020).')
     expect(md).not.toContain('Stale')
   })
 
   it('renders author-title style', () => {
     const { nodeMap, sources, sourceId } = sourceAndCitation()
     const md = essayToMarkdown(makeEssay('root'), nodeMap, { citationOptions: { sources, style: 'author-title', placement: 'inline', orderedSourceIds: [sourceId] } })
-    expect(md).toContain('As argued (Smith, "An Early Paper").')
+    expect(ensureCitationSpacing(markdownToHtml(md))).toContain('As argued (Smith, "An Early Paper").')
   })
 
   it('renders numbered style using the bracket position from orderedSourceIds, not insertion order', () => {
@@ -475,7 +475,7 @@ describe('print-mode citation styling (essayToMarkdown\'s citationOptions)', () 
     // other markdown-significant character a citation's own rendering
     // might produce — and correctly unescaped back to literal "[2]" by
     // the time markdownToHtml renders it, so that's what's checked here.
-    expect(markdownToHtml(md)).toContain('As argued [2].')
+    expect(ensureCitationSpacing(markdownToHtml(md))).toContain('As argued [2].')
   })
 
   it('still includes the note for every style, folded inside the closing delimiter', () => {
@@ -487,7 +487,7 @@ describe('print-mode citation styling (essayToMarkdown\'s citationOptions)', () 
   it('folds the note inside the brackets for numbered style too', () => {
     const { nodeMap, sources, sourceId } = sourceAndCitation('p. 5')
     const md = essayToMarkdown(makeEssay('root'), nodeMap, { citationOptions: { sources, style: 'numbered', placement: 'inline', orderedSourceIds: [sourceId] } })
-    expect(markdownToHtml(md)).toContain('[1, p. 5]')
+    expect(ensureCitationSpacing(markdownToHtml(md))).toContain('[1, p. 5]')
   })
 
   it('footnote placement replaces the citation with a numbered footnote reference whose body is the full citation', () => {
@@ -514,13 +514,97 @@ describe('print-mode citation styling (essayToMarkdown\'s citationOptions)', () 
   it('falls back to the chip\'s own frozen text when its source no longer exists', () => {
     const root = makeNode({ id: 'root', draftContent: '<p>As argued <cite class="citation" data-source-id="gone" data-cite-v="2">(Smith, 2020)</cite>.</p>' })
     const md = essayToMarkdown(makeEssay('root'), new Map([['root', root]]), { citationOptions: { sources: new Map(), style: 'numbered', placement: 'inline', orderedSourceIds: [] } })
-    expect(md).toContain('As argued (Smith, 2020).')
+    expect(ensureCitationSpacing(markdownToHtml(md))).toContain('As argued (Smith, 2020).')
   })
 
   it('leaves the plain .md export (no citationOptions) completely unaffected', () => {
     const { nodeMap } = sourceAndCitation()
     const md = essayToMarkdown(makeEssay('root'), nodeMap)
     expect(md).toContain('As argued (Stale, 1999).')
+  })
+})
+
+describe('ensureCitationSpacing', () => {
+  function renderInline(draftContent: string, style: 'author-year' | 'numbered' = 'author-year'): string {
+    const source = makeSource({ id: 's1', bibtex: { type: 'article', key: 'smith2020', fields: { author: 'Smith, Jane', year: '2020' } } })
+    const root = makeNode({ id: 'root', draftContent })
+    const md = essayToMarkdown(makeEssay('root'), new Map([['root', root]]), { citationOptions: { sources: new Map([['s1', source]]), style, placement: 'inline', orderedSourceIds: ['s1'] } })
+    return ensureCitationSpacing(markdownToHtml(md))
+  }
+
+  it('inserts a leading and trailing space when a citation is glued directly to words on both sides', () => {
+    const html = renderInline('<p>wordsbefore<cite class="citation" data-source-id="s1" data-cite-v="2">(Smith, 2020)</cite>wordsafter</p>')
+    expect(html).toContain('wordsbefore (Smith, 2020) wordsafter')
+  })
+
+  it('does not duplicate whitespace that is already there', () => {
+    const html = renderInline('<p>words before <cite class="citation" data-source-id="s1" data-cite-v="2">(Smith, 2020)</cite> words after</p>')
+    expect(html).toContain('words before (Smith, 2020) words after')
+    expect(html).not.toContain('  ')
+  })
+
+  it('does not insert a space next to punctuation', () => {
+    const html = renderInline('<p>as argued<cite class="citation" data-source-id="s1" data-cite-v="2">(Smith, 2020)</cite>, rather than flattening</p>')
+    expect(html).toContain('as argued (Smith, 2020), rather than flattening')
+  })
+
+  it('does not insert a space at the very start or end of a paragraph', () => {
+    const html = renderInline('<p><cite class="citation" data-source-id="s1" data-cite-v="2">(Smith, 2020)</cite> starts the sentence.</p>')
+    expect(html).toContain('<p>(Smith, 2020) starts the sentence.</p>')
+  })
+
+  it('separates two inline citations typed back to back with no space between them', () => {
+    const source2 = makeSource({ id: 's2', bibtex: { type: 'article', key: 'doe2019', fields: { author: 'Doe, John', year: '2019' } } })
+    const root = makeNode({
+      id: 'root',
+      draftContent:
+        '<p>As argued<cite class="citation" data-source-id="s1" data-cite-v="2">(Smith, 2020)</cite><cite class="citation" data-source-id="s2" data-cite-v="2">(Doe, 2019)</cite>.</p>',
+    })
+    const sources = new Map([['s1', makeSource({ id: 's1', bibtex: { type: 'article', key: 'smith2020', fields: { author: 'Smith, Jane', year: '2020' } } })], ['s2', source2]])
+    const md = essayToMarkdown(makeEssay('root'), new Map([['root', root]]), {
+      citationOptions: { sources, style: 'author-year', placement: 'inline', orderedSourceIds: ['s1', 's2'] },
+    })
+    const html = ensureCitationSpacing(markdownToHtml(md))
+    expect(html).toContain('As argued (Smith, 2020) (Doe, 2019).')
+  })
+
+  it('separates two footnote-placed citations typed back to back', () => {
+    const source2 = makeSource({ id: 's2', bibtex: { type: 'article', key: 'doe2019', fields: { author: 'Doe, John', year: '2019' } } })
+    const root = makeNode({
+      id: 'root',
+      draftContent:
+        '<p>As argued<cite class="citation" data-source-id="s1" data-cite-v="2">(Smith, 2020)</cite><cite class="citation" data-source-id="s2" data-cite-v="2">(Doe, 2019)</cite>.</p>',
+    })
+    const sources = new Map([['s1', makeSource({ id: 's1', bibtex: { type: 'article', key: 'smith2020', fields: { author: 'Smith, Jane', year: '2020' } } })], ['s2', source2]])
+    const md = essayToMarkdown(makeEssay('root'), new Map([['root', root]]), {
+      citationOptions: { sources, style: 'author-year', placement: 'footnote', orderedSourceIds: ['s1', 's2'] },
+    })
+    const html = ensureCitationSpacing(markdownToHtml(md))
+    const refs = html.match(/<sup class="print-footnote-ref">.*?<\/sup>/g) ?? []
+    expect(refs).toHaveLength(2)
+    // Exactly one space of real text sits between the two sup elements.
+    expect(html).toMatch(/<\/sup> <sup/)
+  })
+
+  it('separates a real footnote from a word it is glued to, the same as a citation', () => {
+    const root = makeNode({
+      id: 'root',
+      draftContent: '<p>A claim<sup class="footnote-ref" data-footnote-id="f1"></sup>continues.</p>',
+      footnotes: [{ id: 'f1', content: '<p>A note.</p>' }],
+    })
+    const html = ensureCitationSpacing(markdownToHtml(essayToMarkdown(makeEssay('root'), new Map([['root', root]]))))
+    expect(html).toContain('</sup> continues.')
+  })
+
+  it('removes the <cite class="print-citation"> scaffold from the final output', () => {
+    const html = renderInline('<p>argued <cite class="citation" data-source-id="s1" data-cite-v="2">(Smith, 2020)</cite>.</p>')
+    expect(html).not.toContain('print-citation')
+    expect(html).toContain('argued (Smith, 2020).')
+  })
+
+  it('leaves text with no citations or footnotes completely untouched', () => {
+    const html = markdownToHtml(essayToMarkdown(makeEssay('root'), new Map([['root', makeNode({ id: 'root', draftContent: '<p>Plain text.</p>' })]])))
+    expect(ensureCitationSpacing(html)).toBe(html)
   })
 })
 
@@ -742,5 +826,99 @@ describe('referencesMarkdown / referencesHtml', () => {
     const root = makeNode({ id: 'root', draftContent: '<p>No citations here.</p>' })
     expect(referencesMarkdown(new Map([['root', root]]), new Map())).toBe('')
     expect(referencesHtml(new Map([['root', root]]), new Map())).toBe('')
+  })
+})
+
+describe('renderBibliographyEntry: apa/mla/chicago', () => {
+  function articleEntry(overrides: Partial<Record<string, string>> = {}): BibtexEntry {
+    return {
+      type: 'article',
+      key: 'smith2020',
+      fields: { author: 'Smith, Jane', year: '2020', title: 'An Early Paper', journal: 'Journal of Examples', volume: '12', number: '3', pages: '45-67', ...overrides },
+    }
+  }
+
+  function bookEntry(overrides: Partial<Record<string, string>> = {}): BibtexEntry {
+    return { type: 'book', key: 'smith2020book', fields: { author: 'Smith, Jane', year: '2020', title: 'A Whole Book', publisher: 'Example Press', ...overrides } }
+  }
+
+  it('renders an APA-style article entry: inverted initials, parenthesized year, italic journal, no title markup', () => {
+    const md = renderBibliographyEntry(articleEntry(), 'apa')
+    expect(md).toBe('Smith, J. (2020). An Early Paper. *Journal of Examples*, 12(3), 45-67.')
+  })
+
+  it('renders an APA-style book entry: italicized title, no quotes', () => {
+    const md = renderBibliographyEntry(bookEntry(), 'apa')
+    expect(md).toBe('Smith, J. (2020). *A Whole Book*. Example Press.')
+  })
+
+  it('joins two APA authors with an ampersand', () => {
+    const md = renderBibliographyEntry(articleEntry({ author: 'Smith, Jane and Doe, John' }), 'apa')
+    expect(md).toContain('Smith, J., & Doe, J. (2020)')
+  })
+
+  it('renders an MLA-style article entry: first author inverted, quoted title, italic journal with vol./no.', () => {
+    const md = renderBibliographyEntry(articleEntry(), 'mla')
+    expect(md).toBe('Smith, Jane. "An Early Paper." *Journal of Examples*, vol. 12, no. 3, 2020, pp. 45-67.')
+  })
+
+  it('renders an MLA-style book entry: italicized title, publisher and year', () => {
+    const md = renderBibliographyEntry(bookEntry(), 'mla')
+    expect(md).toBe('Smith, Jane. *A Whole Book*. Example Press, 2020.')
+  })
+
+  it('uses "et al." for 3+ MLA/Chicago authors', () => {
+    const md = renderBibliographyEntry(articleEntry({ author: 'Smith, Jane and Doe, John and Lee, Kim' }), 'mla')
+    expect(md).toContain('Smith, Jane, et al.')
+  })
+
+  it('keeps the second MLA author in natural (not inverted) order', () => {
+    const md = renderBibliographyEntry(articleEntry({ author: 'Smith, Jane and Doe, John' }), 'mla')
+    expect(md).toContain('Smith, Jane, and John Doe.')
+  })
+
+  it('renders a Chicago-style article entry: quoted title, italic journal, volume/no./year/pages', () => {
+    const md = renderBibliographyEntry(articleEntry(), 'chicago')
+    expect(md).toBe('Smith, Jane. "An Early Paper." *Journal of Examples* 12, no. 3 (2020): 45-67.')
+  })
+
+  it('renders a Chicago-style book entry the same shape as MLA (no stored place of publication)', () => {
+    const md = renderBibliographyEntry(bookEntry(), 'chicago')
+    expect(md).toBe('Smith, Jane. *A Whole Book*. Example Press, 2020.')
+  })
+
+  it('degrades gracefully with only a title, for every style', () => {
+    const entry: BibtexEntry = { type: 'misc', key: 'untitled', fields: { title: 'Untitled Paper' } }
+    expect(renderBibliographyEntry(entry, 'apa')).toBe('*Untitled Paper*.')
+    expect(renderBibliographyEntry(entry, 'mla')).toBe('*Untitled Paper*.')
+    expect(renderBibliographyEntry(entry, 'chicago')).toBe('*Untitled Paper*.')
+  })
+
+  it('falls back to an uninverted single name when the stored author has no comma to invert on', () => {
+    const md = renderBibliographyEntry(articleEntry({ author: 'Acme Research Group' }), 'mla')
+    expect(md).toContain('Acme Research Group.')
+  })
+
+  it('escapes a markdown-special character in the title so it never becomes stray emphasis once resolved to HTML', () => {
+    const smith = makeSource({ id: 's-smith', bibtex: articleEntry({ title: 'A *Starred* Title' }) })
+    const root = makeNode({ id: 'root', draftContent: `<p>As argued by ${citationHtml(smith)}, the sky is blue.</p>` })
+    const html = referencesHtml(new Map([['root', root]]), new Map([['s-smith', smith]]), 'apa')
+    expect(html).toContain('A *Starred* Title')
+    expect(html).not.toContain('<em>Starred</em>')
+  })
+
+  it('italicizes the journal name as real <em> once run through the HTML references list', () => {
+    const smith = makeSource({ id: 's-smith', bibtex: articleEntry() })
+    const root = makeNode({ id: 'root', draftContent: `<p>As argued by ${citationHtml(smith)}, the sky is blue.</p>` })
+    const html = referencesHtml(new Map([['root', root]]), new Map([['s-smith', smith]]), 'apa')
+    expect(html).toContain('<em>Journal of Examples</em>')
+  })
+
+  it('keeps the *italic* markers as plain Markdown (not HTML) in the .md export', () => {
+    const smith = makeSource({ id: 's-smith', bibtex: articleEntry() })
+    const root = makeNode({ id: 'root', draftContent: `<p>As argued by ${citationHtml(smith)}, the sky is blue.</p>` })
+    const md = referencesMarkdown(new Map([['root', root]]), new Map([['s-smith', smith]]), 'mla')
+    expect(md).toContain('*Journal of Examples*')
+    expect(md).not.toContain('<em>')
   })
 })

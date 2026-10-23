@@ -55,12 +55,30 @@ interface MarkdownFootnoteCtx {
   citationOptions?: PrintCitationOptions
 }
 
+/**
+ * Wraps a `mdEscapeText`-escaped inline string in a `<cite
+ * class="print-citation">` passthrough tag — raw HTML embedded directly
+ * in the Markdown stream, the same trick `inlineHtmlToMarkdown`'s own `u`
+ * case already uses for underline (Markdown has no native syntax for
+ * either). `inlineMarkdownToHtml` recognizes this exact tag and extracts
+ * it into a placeholder before anything else can escape its angle
+ * brackets or have a regex reach across it, same as that `<u>` case —
+ * see its own doc comment. The wrapper exists purely so
+ * `ensureCitationSpacing` (below) has a real, locatable DOM element to
+ * check surrounding whitespace against for *every* inline-placed
+ * citation — it's unwrapped back down to plain text once that pass is
+ * done, so it never actually shows up in the final rendering.
+ */
+function printCitationSpan(escapedText: string): string {
+  return `<cite class="print-citation">${escapedText}</cite>`
+}
+
 /** A `.citation` chip's print-export rendering — `PrintCitationOptions.style`/`.placement` applied fresh against `el`'s own `data-source-id`/`data-note`, rather than the chip's already-baked label text (which `inlineHtmlToMarkdown`'s own `default` case would otherwise just read verbatim, same as the plain .md export always does). Falls back to that same verbatim text when there's no source to re-render from — a deleted source, or a chip predating `data-source-id` entirely — since there's nothing to restyle it from. */
 function renderPrintCitation(el: HTMLElement, fnCtx: MarkdownFootnoteCtx): string {
   const opts = fnCtx.citationOptions!
   const sourceId = el.getAttribute('data-source-id')
   const source = sourceId ? opts.sources.get(sourceId) : undefined
-  if (!source) return mdEscapeText(el.textContent ?? '')
+  if (!source) return printCitationSpan(mdEscapeText(el.textContent ?? ''))
   const note = el.getAttribute('data-note') ?? undefined
   if (opts.placement === 'footnote') {
     // Same "fn<N>" label shape (and the same shared counter) as a real
@@ -69,16 +87,18 @@ function renderPrintCitation(el: HTMLElement, fnCtx: MarkdownFootnoteCtx): strin
     // as one continuous numbered sequence (the conventional "Notes"
     // citation style), and footnoteDisplayNumber() picks its visible
     // number back out the same way for either kind without needing to
-    // know which one it is.
+    // know which one it is. No printCitationSpan() wrapper needed here —
+    // `ensureCitationSpacing` already recognizes the `sup.print-footnote-ref`
+    // markup this produces (shared with every real footnote) directly.
     const label = `fn${fnCtx.counter.next++}`
     const body = mdEscapeText(formatCitation(source.bibtex)) + (note ? ` (${mdEscapeText(note)})` : '')
     fnCtx.defs.push(`[^${label}]: ${body}`)
     return `[^${label}]`
   }
   const refNumber = opts.orderedSourceIds.indexOf(sourceId!) + 1
-  if (opts.style === 'numbered') return mdEscapeText(note ? `[${refNumber}, ${note}]` : `[${refNumber}]`)
+  if (opts.style === 'numbered') return printCitationSpan(mdEscapeText(note ? `[${refNumber}, ${note}]` : `[${refNumber}]`))
   const rendered = opts.style === 'author-title' ? citationLabelAuthorTitle(source.bibtex, note) : citationLabel(source.bibtex, note)
-  return mdEscapeText(rendered)
+  return printCitationSpan(mdEscapeText(rendered))
 }
 
 function inlineHtmlToMarkdown(node: Node, fnCtx: MarkdownFootnoteCtx): string {
@@ -331,6 +351,15 @@ function inlineMarkdownToHtml(text: string): string {
     return `\u0001${underlineSpans.length - 1}\u0001`
   })
 
+  // Same passthrough trick, same reason, for `<cite class="print-citation">`
+  // — see `printCitationSpan`'s own doc comment on why an inline-placed
+  // citation needs a real, locatable element at all.
+  const citationSpans: string[] = []
+  const withoutCitations = withoutUnderline.replace(/<cite class="print-citation">([\s\S]*?)<\/cite>/g, (_, inner: string) => {
+    citationSpans.push(`<cite class="print-citation">${inlineMarkdownToHtml(inner)}</cite>`)
+    return `\u0003${citationSpans.length - 1}\u0003`
+  })
+
   // mdEscapeText() backslash-escapes literal *, _, $, [, ], \ so a stray
   // character in ordinary typed text can't be mistaken for real markdown
   // syntax — but the naive bold/italic/link patterns below don't know
@@ -349,7 +378,7 @@ function inlineMarkdownToHtml(text: string): string {
   // delimiter, the same one `mathSpans`/`underlineSpans` below already
   // use for the identical reason.
   const escaped: string[] = []
-  const withPlaceholders = withoutUnderline.replace(/\\([*_$[\]\\])/g, (_, ch: string) => {
+  const withPlaceholders = withoutCitations.replace(/\\([*_$[\]\\])/g, (_, ch: string) => {
     escaped.push(ch)
     return `\u0002${escaped.length - 1}\u0002`
   })
@@ -375,6 +404,7 @@ function inlineMarkdownToHtml(text: string): string {
     .replace(/\u0002(\d+)\u0002/g, (_, i: string) => escaped[Number(i)])
     .replace(/\u0000(\d+)\u0000/g, (_, i: string) => mathSpans[Number(i)])
     .replace(/\u0001(\d+)\u0001/g, (_, i: string) => underlineSpans[Number(i)])
+    .replace(/\u0003(\d+)\u0003/g, (_, i: string) => citationSpans[Number(i)])
 }
 
 /** essayToMarkdown()'s own footnote labels are always `fn<n>` — pull the number back out for display so a footnote reads as a plain "1" rather than the internal label text; anything else (a hand-written .md file using its own label scheme) just shows the raw label instead of guessing. */
@@ -649,6 +679,72 @@ export function applyMathlikeHeadings(bodyHtml: string): string {
  * plain .md export's reference-style footnotes are untouched, since that
  * format has no real pages to float a footnote within.
  */
+/**
+ * Print/PDF export only (see `ExportDialog`'s own `exportPdf`) — must run
+ * before `floatPrintFootnotes` below, which consumes every
+ * `sup.print-footnote-ref` this looks for. Guarantees at least one
+ * whitespace character immediately before and after every rendered
+ * citation: both the inline parenthetical/bracket kind (marked up as
+ * `<cite class="print-citation">` purely as a locatable scaffold for this
+ * pass — see `printCitationSpan`'s own doc comment) and the footnote-placed
+ * kind, which shares the exact same `sup.print-footnote-ref` markup real
+ * footnotes use (so a real footnote sitting right against another one, or
+ * against a footnote-placed citation, gets the same treatment — there's no
+ * reason a bare footnote should be allowed to glue itself to its neighbor
+ * any more than a citation should).
+ *
+ * Only inserts a space when the character immediately on that side is a
+ * letter/digit, or when it's another citation/footnote marker sitting
+ * right up against this one with nothing between — never next to
+ * whitespace that's already there (nothing is duplicated), never next to
+ * punctuation ("separate (Smith, 2020)." keeps its period, not a space
+ * shoved in before it), and never at the very start or end of a
+ * paragraph (nothing to separate it from). Deliberately only looks at
+ * immediate siblings, not across a block/paragraph boundary — a citation
+ * at the edge of its own paragraph needs no padding against the
+ * paragraph next to it.
+ *
+ * Finishes by unwrapping every `<cite class="print-citation">` back down
+ * to its own plain text — it was only ever a scaffold for this pass, so
+ * the final HTML reads exactly as it always did, just with the spacing
+ * fixed up.
+ */
+export function ensureCitationSpacing(bodyHtml: string): string {
+  const doc = new DOMParser().parseFromString(bodyHtml, 'text/html')
+  const isMarker = (el: Element | null): boolean => !!el && (el.matches('cite.print-citation') || el.matches('sup.print-footnote-ref'))
+  const WORD_CHAR = /[\p{L}\p{N}]/u
+
+  function edgeChar(el: Element, direction: 'before' | 'after'): { char: string | null; marker: boolean } {
+    let sib: ChildNode | null = direction === 'before' ? el.previousSibling : el.nextSibling
+    while (sib) {
+      if (sib.nodeType === Node.TEXT_NODE) {
+        const text = sib.textContent ?? ''
+        if (text.length > 0) return { char: direction === 'before' ? text[text.length - 1] : text[0], marker: false }
+      } else if (sib.nodeType === Node.ELEMENT_NODE) {
+        const sibEl = sib as Element
+        if (isMarker(sibEl)) return { char: null, marker: true }
+        const text = sibEl.textContent ?? ''
+        if (text.length > 0) return { char: direction === 'before' ? text[text.length - 1] : text[0], marker: false }
+      }
+      sib = direction === 'before' ? sib.previousSibling : sib.nextSibling
+    }
+    return { char: null, marker: false }
+  }
+
+  const markers = Array.from(doc.body.querySelectorAll('cite.print-citation, sup.print-footnote-ref'))
+  for (const marker of markers) {
+    const before = edgeChar(marker, 'before')
+    if (before.marker || (before.char !== null && WORD_CHAR.test(before.char))) marker.before(doc.createTextNode(' '))
+    const after = edgeChar(marker, 'after')
+    if (after.marker || (after.char !== null && WORD_CHAR.test(after.char))) marker.after(doc.createTextNode(' '))
+  }
+
+  for (const cite of Array.from(doc.body.querySelectorAll('cite.print-citation'))) {
+    cite.replaceWith(doc.createTextNode(cite.textContent ?? ''))
+  }
+  return doc.body.innerHTML
+}
+
 export function floatPrintFootnotes(bodyHtml: string): string {
   const doc = new DOMParser().parseFromString(bodyHtml, 'text/html')
   const list = doc.body.querySelector('ol.print-footnotes')
@@ -930,22 +1026,188 @@ export function sourcesToBibtex(sources: Source[]): string {
 // ---- References / bibliography -----------------------------------------
 
 /**
- * Which bibliography style a References entry is rendered in — only
- * `'plain'` (author/year/title/venue, one sentence-per-field — see
- * `formatCitation` in lib/bibtex.ts, already used the same way for a
- * source's own "formatted citation" display) is actually implemented, but
- * kept as its own type/parameter from the start, the same reasoning
- * `CitationStyle` in bibtex.ts already follows for the inline citation
- * label: a future style (APA proper, MLA, Chicago, numbered…) is purely a
- * matter of adding a case to `renderBibliographyEntry` below and a new
- * option to `ExportDialog`'s own selector, never a data migration or a
- * second code path through the rest of export.ts.
+ * Which bibliography style a References entry is rendered in — `'plain'`
+ * (author/year/title/venue, one sentence-per-field — see `formatCitation`
+ * in lib/bibtex.ts, already used the same way for a source's own
+ * "formatted citation" display), or one of the three real styles below.
+ * Adding a style is still just a new case in `renderBibliographyEntry`
+ * and a new option in `ExportDialog`'s own selector, never a data
+ * migration or a second code path through the rest of export.ts.
  */
-export type BibliographyStyle = 'plain'
+export type BibliographyStyle = 'plain' | 'apa' | 'mla' | 'chicago'
 
-/** One formatted References entry — the single function a future bibliography-style setting would extend, mirroring `renderCitationLabel` in bibtex.ts for the inline form. */
-export function renderBibliographyEntry(entry: BibtexEntry, _style: BibliographyStyle = 'plain'): string {
-  return formatCitation(entry)
+interface ParsedAuthor {
+  last: string
+  /** Empty when the stored name had no comma to invert on (an institutional author, or one typed "First Last" instead of the usual "Last, First") — every formatter below falls back to using `last` alone whenever this is empty, rather than guessing which part of an uninverted name is the surname. */
+  first: string
+}
+
+/** Splits a stored author field — `"Last, First and Last2, First2"`, the convention `AddSourceDialog`'s own field hint establishes — into individual authors, in citation order (first listed = first author). */
+function parseAuthorList(raw: string | undefined): ParsedAuthor[] {
+  const trimmed = (raw ?? '').trim()
+  if (!trimmed) return []
+  return trimmed
+    .split(/\s+and\s+/i)
+    .map((part) => part.trim())
+    .filter(Boolean)
+    .map((part) => {
+      const commaIdx = part.indexOf(',')
+      if (commaIdx === -1) return { last: part, first: '' }
+      return { last: part.slice(0, commaIdx).trim(), first: part.slice(commaIdx + 1).trim() }
+    })
+}
+
+/** "Jane Marie" -> "J. M." — one initial per space-separated given name, for APA's own reference-list author style. */
+function initials(first: string): string {
+  return first
+    .split(/\s+/)
+    .filter(Boolean)
+    .map((part) => `${part[0].toUpperCase()}.`)
+    .join(' ')
+}
+
+function authorFull(a: ParsedAuthor, invert: boolean): string {
+  if (!a.first) return a.last
+  return invert ? `${a.last}, ${a.first}` : `${a.first} ${a.last}`
+}
+
+/** APA 7-style reference-list author list: every author inverted to Last, Initials, comma-separated, with an ampersand before the last one. No "et al." truncation past 20 authors — not worth the complexity for a personal bibliography. */
+function formatAuthorsApa(authors: ParsedAuthor[]): string {
+  const names = authors.map((a) => (a.first ? `${a.last}, ${initials(a.first)}` : a.last))
+  if (names.length === 0) return ''
+  if (names.length === 1) return names[0]
+  return `${names.slice(0, -1).join(', ')}, & ${names[names.length - 1]}`
+}
+
+/** MLA/Chicago-style author list: the first author inverted (Last, First), every other author in natural order — simplified to "et al." at 3+ authors for both styles (MLA 9 and Chicago 17 actually differ slightly on the exact thresholds/cutoffs; this is close enough for a personal bibliography rather than a submission-ready one). */
+function formatAuthorsNameOrder(authors: ParsedAuthor[]): string {
+  if (authors.length === 0) return ''
+  if (authors.length === 1) return authorFull(authors[0], true)
+  if (authors.length === 2) return `${authorFull(authors[0], true)}, and ${authorFull(authors[1], false)}`
+  return `${authorFull(authors[0], true)}, et al.`
+}
+
+/**
+ * APA 7th-edition reference-list entry: `Author, I. (Year). Title. *Venue*,
+ * vol(no), pages.` for an article; `Author, I. (Year). *Title*. Publisher.`
+ * for a book — article titles are never italicized or quoted in APA, only
+ * the containing work is. Degrades the same way `formatCitation` already
+ * does as fields go missing, down to just the (italicized, as APA treats
+ * a standalone work) title when there's nothing else at all. Titles are
+ * kept exactly as entered — APA's own sentence-case title rule isn't
+ * applied, since reliably sentence-casing an arbitrary user-entered title
+ * isn't something this can get right automatically.
+ */
+function formatApaEntry(entry: BibtexEntry): string {
+  const f = entry.fields
+  const authors = formatAuthorsApa(parseAuthorList(f.author))
+  const year = f.year ? `(${mdEscapeText(f.year)})` : ''
+  const title = mdEscapeText(f.title || entry.key)
+  const venue = f.journal || f.booktitle
+  const sentences: string[] = []
+  if (authors || year) sentences.push([authors, year].filter(Boolean).join(' '))
+  if (venue) {
+    sentences.push(title)
+    const venueBits = [`*${mdEscapeText(venue)}*`, f.volume ? (f.number ? `${mdEscapeText(f.volume)}(${mdEscapeText(f.number)})` : mdEscapeText(f.volume)) : '', f.pages ? mdEscapeText(f.pages) : ''].filter(Boolean)
+    sentences.push(venueBits.join(', '))
+  } else if (f.publisher) {
+    sentences.push(`*${title}*`)
+    sentences.push(mdEscapeText(f.publisher))
+  } else {
+    sentences.push(`*${title}*`)
+  }
+  return sentences.join('. ') + '.'
+}
+
+/**
+ * MLA 9th-edition Works-Cited entry: `Last, First. "Title." *Venue*, vol.
+ * V, no. N, Year, pp. P-P.` for an article (the article's own title in
+ * quotes, the containing work italicized); `Last, First. *Title*.
+ * Publisher, Year.` for a book (an independent work's own title is what
+ * gets italicized instead, with nothing to quote). Degrades the same way
+ * `formatApaEntry` does.
+ */
+function formatMlaEntry(entry: BibtexEntry): string {
+  const f = entry.fields
+  const authors = formatAuthorsNameOrder(parseAuthorList(f.author))
+  const title = mdEscapeText(f.title || entry.key)
+  const venue = f.journal || f.booktitle
+  // Each sentence below carries its own trailing period already (joined
+  // with a plain space, not '. ' + a final period) — MLA's own
+  // period-inside-the-closing-quote convention ("Title.") means the
+  // period can't just be tacked on after the whole sentence is already
+  // assembled, the way formatApaEntry's own unquoted titles can.
+  const sentences: string[] = []
+  if (authors) sentences.push(`${authors}.`)
+  if (venue) {
+    sentences.push(`"${title}."`)
+    const venueBits = [`*${mdEscapeText(venue)}*`, f.volume ? `vol. ${mdEscapeText(f.volume)}` : '', f.number ? `no. ${mdEscapeText(f.number)}` : '', f.year ? mdEscapeText(f.year) : '', f.pages ? `pp. ${mdEscapeText(f.pages)}` : '']
+      .filter(Boolean)
+    sentences.push(`${venueBits.join(', ')}.`)
+  } else if (f.publisher) {
+    sentences.push(`*${title}*.`)
+    sentences.push(`${[mdEscapeText(f.publisher), f.year ? mdEscapeText(f.year) : ''].filter(Boolean).join(', ')}.`)
+  } else {
+    sentences.push(f.year ? `*${title}*, ${mdEscapeText(f.year)}.` : `*${title}*.`)
+  }
+  return sentences.join(' ')
+}
+
+/**
+ * Chicago 17th-edition (notes-bibliography) entry: `Last, First. "Title."
+ * *Venue* vol, no. N (Year): pages.` for an article; `Last, First.
+ * *Title*. Publisher, Year.` for a book. No place-of-publication for a
+ * book — Chicago's full convention wants one, but this app doesn't store
+ * one, so it's left out rather than guessed at, the same
+ * degrade-gracefully-as-fields-go-missing approach `formatCitation`
+ * already takes.
+ */
+function formatChicagoEntry(entry: BibtexEntry): string {
+  const f = entry.fields
+  const authors = formatAuthorsNameOrder(parseAuthorList(f.author))
+  const title = mdEscapeText(f.title || entry.key)
+  const venue = f.journal || f.booktitle
+  // See formatMlaEntry's own comment — same period-inside-the-quote
+  // reasoning applies here too.
+  const sentences: string[] = []
+  if (authors) sentences.push(`${authors}.`)
+  if (venue) {
+    sentences.push(`"${title}."`)
+    const volNo = [f.volume ? mdEscapeText(f.volume) : '', f.number ? `no. ${mdEscapeText(f.number)}` : ''].filter(Boolean).join(', ')
+    const yearPart = f.year ? ` (${mdEscapeText(f.year)})` : ''
+    const pagesPart = f.pages ? `: ${mdEscapeText(f.pages)}` : ''
+    sentences.push(`*${mdEscapeText(venue)}*${volNo ? ' ' + volNo : ''}${yearPart}${pagesPart}.`)
+  } else if (f.publisher) {
+    sentences.push(`*${title}*.`)
+    sentences.push(`${[mdEscapeText(f.publisher), f.year ? mdEscapeText(f.year) : ''].filter(Boolean).join(', ')}.`)
+  } else {
+    sentences.push(f.year ? `*${title}*, ${mdEscapeText(f.year)}.` : `*${title}*.`)
+  }
+  return sentences.join(' ')
+}
+
+/**
+ * One formatted References entry — the single function a bibliography-
+ * style setting extends, mirroring `renderCitationLabel` in bibtex.ts for
+ * the inline form. Always returns ready-to-use Markdown text with its own
+ * escaping already done (individual field values pass through
+ * `mdEscapeText` before assembly, same as `formatCitation` itself,
+ * `renderPrintCitation`, et al.) — callers use the result directly
+ * (`referencesMarkdown`) or run it through `inlineMarkdownToHtml`
+ * (`referencesHtml`) to resolve its `*italic*` markers into real `<em>`
+ * tags; neither should escape it a second time.
+ */
+export function renderBibliographyEntry(entry: BibtexEntry, style: BibliographyStyle = 'plain'): string {
+  switch (style) {
+    case 'apa':
+      return formatApaEntry(entry)
+    case 'mla':
+      return formatMlaEntry(entry)
+    case 'chicago':
+      return formatChicagoEntry(entry)
+    default:
+      return mdEscapeText(formatCitation(entry))
+  }
 }
 
 /** Every source this essay actually cites, resolved against `sources` (silently dropping a cited id with no matching source — deleted since, or never synced) and sorted by first author/title for a stable, conventional reading order — not by insertion order, which would read as arbitrary. Exported so `ExportDialog` can derive the same `orderedSourceIds` a `'numbered'` `PrintCitationStyle` needs — both it and the References list have to agree on one order, so there's exactly one function that decides it. */
@@ -957,11 +1219,11 @@ export function citedSources(nodeMap: Map<string, EssayNode>, sources: Map<strin
     .sort((a, b) => (a.bibtex.fields.author || a.bibtex.fields.title || a.bibtex.key).localeCompare(b.bibtex.fields.author || b.bibtex.fields.title || b.bibtex.key))
 }
 
-/** A "## References" section — one list item per cited source — appended to `essayToMarkdown`'s own output for the plain .md export. Empty string (nothing appended at all) when the essay cites no sources. */
+/** A "## References" section — one list item per cited source — appended to `essayToMarkdown`'s own output for the plain .md export. Empty string (nothing appended at all) when the essay cites no sources. `renderBibliographyEntry`'s own result is already safe, escaped Markdown — not re-escaped here, which would double-escape a style's own `*italic*` markers into literal asterisks. */
 export function referencesMarkdown(nodeMap: Map<string, EssayNode>, sources: Map<string, Source>, style: BibliographyStyle = 'plain'): string {
   const cited = citedSources(nodeMap, sources)
   if (cited.length === 0) return ''
-  const items = cited.map((s) => `- ${mdEscapeText(renderBibliographyEntry(s.bibtex, style))}`)
+  const items = cited.map((s) => `- ${renderBibliographyEntry(s.bibtex, style)}`)
   return `\n\n## References\n\n${items.join('\n')}\n`
 }
 
@@ -981,11 +1243,17 @@ export function referencesMarkdown(nodeMap: Map<string, EssayNode>, sources: Map
  * citation the list would otherwise have included turns out to have no
  * matching source). Plain author-year/author-title citations have no
  * number to match, so the list stays an unordered one for those.
+ *
+ * Each entry goes through `inlineMarkdownToHtml` rather than a plain
+ * `escapeHtml` — `renderBibliographyEntry`'s own `*italic*` markers (APA/
+ * MLA/Chicago all italicize a venue or standalone title) need resolving
+ * into real `<em>` tags; `inlineMarkdownToHtml` does that *and* escapes
+ * everything else exactly the way `escapeHtml` alone used to.
  */
 export function referencesHtml(nodeMap: Map<string, EssayNode>, sources: Map<string, Source>, style: BibliographyStyle = 'plain', numbered: boolean = false): string {
   const cited = citedSources(nodeMap, sources)
   if (cited.length === 0) return ''
-  const items = cited.map((s) => `<li>${escapeHtml(renderBibliographyEntry(s.bibtex, style))}</li>`)
+  const items = cited.map((s) => `<li>${inlineMarkdownToHtml(renderBibliographyEntry(s.bibtex, style))}</li>`)
   const tag = numbered ? 'ol' : 'ul'
   return `<h2 class="print-references-heading">References</h2><${tag} class="print-references-list">${items.join('')}</${tag}>`
 }

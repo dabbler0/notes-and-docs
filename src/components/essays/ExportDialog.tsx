@@ -5,6 +5,7 @@ import { listSources } from '../../models/sourcesRepo'
 import {
   addPrintChrome,
   applyMathlikeHeadings,
+  ensureCitationSpacing,
   citedSources,
   collectUsedSourceIds,
   essayToLatex,
@@ -176,7 +177,7 @@ export function ExportDialog({ essay, nodeMap, onClose }: { essay: Essay; nodeMa
       const orderedSourceIds = citedSources(nodeMap, sources).map((s) => s.id)
       const md = essayToMarkdown(essay, nodeMap, { citationOptions: { sources, style: citationStyle, placement: citationPlacement, orderedSourceIds } })
       const numberedReferences = citationPlacement === 'inline' && citationStyle === 'numbered'
-      let rawBodyHtml = addPrintChrome(markdownToHtml(md)) + referencesHtml(nodeMap, sources, bibliographyStyle, numberedReferences)
+      let rawBodyHtml = ensureCitationSpacing(addPrintChrome(markdownToHtml(md))) + referencesHtml(nodeMap, sources, bibliographyStyle, numberedReferences)
       if (mathlikeMode) rawBodyHtml = applyMathlikeHeadings(rawBodyHtml)
       const bodyHtml = substack ? rawBodyHtml : floatPrintFootnotes(rawBodyHtml)
 
@@ -366,6 +367,9 @@ export function ExportDialog({ essay, nodeMap, onClose }: { essay: Essay; nodeMa
         Bibliography style
         <select value={bibliographyStyle} onChange={(e) => setBibliographyStyle((e.target as HTMLSelectElement).value as BibliographyStyle)}>
           <option value="plain">Plain (author, year, title, venue)</option>
+          <option value="apa">APA</option>
+          <option value="mla">MLA</option>
+          <option value="chicago">Chicago</option>
         </select>
       </label>
       <div className="export-options">
