@@ -842,6 +842,14 @@ describe('renderBibliographyEntry: apa/mla/chicago', () => {
     return { type: 'book', key: 'smith2020book', fields: { author: 'Smith, Jane', year: '2020', title: 'A Whole Book', publisher: 'Example Press', ...overrides } }
   }
 
+  function inbookEntry(overrides: Partial<Record<string, string>> = {}): BibtexEntry {
+    return {
+      type: 'inbook',
+      key: 'smith2020chapter',
+      fields: { author: 'Smith, Jane', year: '2020', title: 'A Chapter', booktitle: 'An Edited Volume', pages: '10-20', publisher: 'Example Press', ...overrides },
+    }
+  }
+
   it('renders an APA-style article entry: inverted initials, parenthesized year, italic journal, no title markup', () => {
     const md = renderBibliographyEntry(articleEntry(), 'apa')
     expect(md).toBe('Smith, J. (2020). An Early Paper. *Journal of Examples*, 12(3), 45-67.')
@@ -850,6 +858,11 @@ describe('renderBibliographyEntry: apa/mla/chicago', () => {
   it('renders an APA-style book entry: italicized title, no quotes', () => {
     const md = renderBibliographyEntry(bookEntry(), 'apa')
     expect(md).toBe('Smith, J. (2020). *A Whole Book*. Example Press.')
+  })
+
+  it('includes the publisher for an APA-style book-chapter (inbook/incollection) entry, same as a standalone book', () => {
+    const md = renderBibliographyEntry(inbookEntry(), 'apa')
+    expect(md).toBe('Smith, J. (2020). A Chapter. In *An Edited Volume* (pp. 10-20). Example Press.')
   })
 
   it('joins two APA authors with an ampersand', () => {
@@ -865,6 +878,11 @@ describe('renderBibliographyEntry: apa/mla/chicago', () => {
   it('renders an MLA-style book entry: italicized title, publisher and year', () => {
     const md = renderBibliographyEntry(bookEntry(), 'mla')
     expect(md).toBe('Smith, Jane. *A Whole Book*. Example Press, 2020.')
+  })
+
+  it('includes the publisher for an MLA-style book-chapter (inbook/incollection) entry, same as a standalone book', () => {
+    const md = renderBibliographyEntry(inbookEntry(), 'mla')
+    expect(md).toBe('Smith, Jane. "A Chapter." *An Edited Volume*, Example Press, 2020, pp. 10-20.')
   })
 
   it('uses "et al." for 3+ MLA/Chicago authors', () => {
@@ -885,6 +903,16 @@ describe('renderBibliographyEntry: apa/mla/chicago', () => {
   it('renders a Chicago-style book entry the same shape as MLA (no stored place of publication)', () => {
     const md = renderBibliographyEntry(bookEntry(), 'chicago')
     expect(md).toBe('Smith, Jane. *A Whole Book*. Example Press, 2020.')
+  })
+
+  it('includes the publisher for a Chicago-style book-chapter (inbook/incollection) entry, same as a standalone book', () => {
+    const md = renderBibliographyEntry(inbookEntry(), 'chicago')
+    expect(md).toBe('Smith, Jane. "A Chapter." In *An Edited Volume*, 10-20. Example Press, 2020.')
+  })
+
+  it('omits the trailing publisher/year sentence entirely for a book-chapter entry with neither stored', () => {
+    const md = renderBibliographyEntry(inbookEntry({ publisher: '', year: '' }), 'chicago')
+    expect(md).toBe('Smith, Jane. "A Chapter." In *An Edited Volume*, 10-20.')
   })
 
   it('degrades gracefully with only a title, for every style', () => {
