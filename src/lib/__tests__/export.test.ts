@@ -970,13 +970,13 @@ describe('renderBibliographyEntry: apa/mla/chicago', () => {
   it('appends ISBN, DOI (as a link), URL (as a link), and note for every style when present', () => {
     const fields = { isbn: '978-0-00-000000-0', doi: '10.1000/xyz123', url: 'https://example.com/book', note: 'A reprint edition' }
     expect(renderBibliographyEntry(bookEntry(fields), 'apa')).toBe(
-      'Smith, J. (2020). *A Whole Book*. Example Press. ISBN: 978-0-00-000000-0. [https://doi.org/10.1000/xyz123](https://doi.org/10.1000/xyz123). [https://example.com/book](https://example.com/book). A reprint edition.',
+      'Smith, J. (2020). *A Whole Book*. Example Press. ISBN: 978-0-00-000000-0. [doi.org/10.1000/xyz123](https://doi.org/10.1000/xyz123). [https://example.com/book](https://example.com/book). A reprint edition.',
     )
     expect(renderBibliographyEntry(bookEntry(fields), 'mla')).toBe(
-      'Smith, Jane. *A Whole Book*. Example Press, 2020. ISBN: 978-0-00-000000-0. [https://doi.org/10.1000/xyz123](https://doi.org/10.1000/xyz123). [https://example.com/book](https://example.com/book). A reprint edition.',
+      'Smith, Jane. *A Whole Book*. Example Press, 2020. ISBN: 978-0-00-000000-0. [doi.org/10.1000/xyz123](https://doi.org/10.1000/xyz123). [https://example.com/book](https://example.com/book). A reprint edition.',
     )
     expect(renderBibliographyEntry(bookEntry(fields), 'chicago')).toBe(
-      'Smith, Jane. *A Whole Book*. Example Press, 2020. ISBN: 978-0-00-000000-0. [https://doi.org/10.1000/xyz123](https://doi.org/10.1000/xyz123). [https://example.com/book](https://example.com/book). A reprint edition.',
+      'Smith, Jane. *A Whole Book*. Example Press, 2020. ISBN: 978-0-00-000000-0. [doi.org/10.1000/xyz123](https://doi.org/10.1000/xyz123). [https://example.com/book](https://example.com/book). A reprint edition.',
     )
   })
 
@@ -984,8 +984,26 @@ describe('renderBibliographyEntry: apa/mla/chicago', () => {
     const smith = makeSource({ id: 's-smith', bibtex: bookEntry({ doi: '10.1000/xyz123', note: 'A reprint edition' }) })
     const root = makeNode({ id: 'root', draftContent: `<p>As argued by ${citationHtml(smith)}, the sky is blue.</p>` })
     const html = referencesHtml(new Map([['root', root]]), new Map([['s-smith', smith]]), 'apa')
-    expect(html).toContain('<a href="https://doi.org/10.1000/xyz123" target="_blank" rel="noopener">https://doi.org/10.1000/xyz123</a>')
+    expect(html).toContain('<a href="https://doi.org/10.1000/xyz123" target="_blank" rel="noopener">doi.org/10.1000/xyz123</a>')
     expect(html).toContain('A reprint edition.')
+  })
+
+  it('omits the URL when a DOI is already present and includeUrlWhenDoi is false, for both markdown and HTML references', () => {
+    const fields = { doi: '10.1000/xyz123', url: 'https://example.com/book' }
+    const md = renderBibliographyEntry(bookEntry(fields), 'apa', { includeUrlWhenDoi: false })
+    expect(md).toContain('[doi.org/10.1000/xyz123](https://doi.org/10.1000/xyz123)')
+    expect(md).not.toContain('example.com/book')
+
+    const smith = makeSource({ id: 's-smith', bibtex: bookEntry(fields) })
+    const root = makeNode({ id: 'root', draftContent: `<p>As argued by ${citationHtml(smith)}, the sky is blue.</p>` })
+    const html = referencesHtml(new Map([['root', root]]), new Map([['s-smith', smith]]), 'apa', false, { includeUrlWhenDoi: false })
+    expect(html).toContain('doi.org/10.1000/xyz123')
+    expect(html).not.toContain('example.com/book')
+  })
+
+  it('still includes the URL when includeUrlWhenDoi is false but there is no DOI', () => {
+    const md = renderBibliographyEntry(bookEntry({ url: 'https://example.com/book' }), 'apa', { includeUrlWhenDoi: false })
+    expect(md).toContain('[https://example.com/book](https://example.com/book)')
   })
 
   it('omits every trailing field that is absent, for every style', () => {

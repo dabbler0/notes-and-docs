@@ -94,6 +94,7 @@ const PRINT_MODE_DEFAULT_CITATIONS: Record<PrintMode, { placement: PrintCitation
 export function ExportDialog({ essay, nodeMap, onClose }: { essay: Essay; nodeMap: Map<string, EssayNode>; onClose: () => void }) {
   const [citeCommand, setCiteCommand] = useState<'\\cite' | '\\footcite'>('\\cite')
   const [bibliographyStyle, setBibliographyStyle] = useState<BibliographyStyle>('chicago')
+  const [includeUrlWhenDoi, setIncludeUrlWhenDoi] = useState(true)
   const [printMode, setPrintMode] = useState<PrintMode>('handout')
   const [citationStyle, setCitationStyle] = useState<PrintCitationStyle>('author-year')
   const [citationPlacement, setCitationPlacement] = useState<PrintCitationPlacement>('inline')
@@ -111,7 +112,7 @@ export function ExportDialog({ essay, nodeMap, onClose }: { essay: Essay; nodeMa
     setBusy('md')
     try {
       const sources = new Map((await listSources()).map((s) => [s.id, s]))
-      const md = essayToMarkdown(essay, nodeMap) + referencesMarkdown(nodeMap, sources, bibliographyStyle)
+      const md = essayToMarkdown(essay, nodeMap) + referencesMarkdown(nodeMap, sources, bibliographyStyle, { includeUrlWhenDoi })
       downloadBlob(new Blob([md], { type: 'text/markdown' }), `${filenameFor(essay.title)}.md`)
     } finally {
       setBusy(null)
@@ -186,9 +187,9 @@ export function ExportDialog({ essay, nodeMap, onClose }: { essay: Essay; nodeMa
 
       const sources = new Map((await listSources()).map((s) => [s.id, s]))
       const orderedSourceIds = citedSources(nodeMap, sources).map((s) => s.id)
-      const md = essayToMarkdown(essay, nodeMap, { citationOptions: { sources, style: citationStyle, placement: citationPlacement, orderedSourceIds } })
+      const md = essayToMarkdown(essay, nodeMap, { citationOptions: { sources, style: citationStyle, placement: citationPlacement, orderedSourceIds, includeUrlWhenDoi } })
       const numberedReferences = citationPlacement === 'inline' && citationStyle === 'numbered'
-      let rawBodyHtml = ensureCitationSpacing(addPrintChrome(markdownToHtml(md))) + referencesHtml(nodeMap, sources, bibliographyStyle, numberedReferences)
+      let rawBodyHtml = ensureCitationSpacing(addPrintChrome(markdownToHtml(md))) + referencesHtml(nodeMap, sources, bibliographyStyle, numberedReferences, { includeUrlWhenDoi })
       if (mathlikeMode) rawBodyHtml = applyMathlikeHeadings(rawBodyHtml)
       const bodyHtml = substack ? rawBodyHtml : floatPrintFootnotes(rawBodyHtml)
 
@@ -237,13 +238,17 @@ export function ExportDialog({ essay, nodeMap, onClose }: { essay: Essay; nodeMa
         .print-abstract { font-size: 0.92em; margin: 0 8% 28px; }
         /* Deliberately outside addPrintChrome's own numbering/rule pass
            (see referencesHtml's own doc comment) — a plain heading and a
-           hanging-indent list, the conventional bibliography layout. */
+           hanging-indent list, the conventional bibliography layout.
+           Deliberately compact — tighter than the document's own
+           body-text line-height/paragraph spacing (even Manuscript's
+           double-spacing) regardless of print mode, the same way a real
+           bibliography is typeset more densely than the prose above it. */
         .print-references-heading { margin-top: 2.4em; }
-        .print-references-list { margin: 0.6em 0 0; }
+        .print-references-list { margin: 0.6em 0 0; line-height: 1.25; }
         ul.print-references-list { list-style: none; padding: 0; }
-        ul.print-references-list li { margin: 0 0 0.8em 1.6em; text-indent: -1.6em; }
+        ul.print-references-list li { margin: 0 0 0.35em 1.6em; text-indent: -1.6em; }
         ol.print-references-list { padding-left: 1.8em; }
-        ol.print-references-list li { margin: 0 0 0.8em; }
+        ol.print-references-list li { margin: 0 0 0.35em; }
         ${mathlikeMode ? "h2 { text-align: center; font-variant: small-caps; letter-spacing: 0.04em; }" : ''}
         ${substack ? 'hr { display: none; }' : ''}
       `
@@ -382,6 +387,10 @@ export function ExportDialog({ essay, nodeMap, onClose }: { essay: Essay; nodeMa
           <option value="mla">MLA</option>
           <option value="chicago">Chicago</option>
         </select>
+      </label>
+      <label className="muted" style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 14 }}>
+        <input type="checkbox" checked={includeUrlWhenDoi} onChange={(e) => setIncludeUrlWhenDoi((e.target as HTMLInputElement).checked)} />
+        Include the URL even when a DOI is also present (uncheck to show the URL only when there's no DOI)
       </label>
       <div className="export-options">
         <div className="export-option">

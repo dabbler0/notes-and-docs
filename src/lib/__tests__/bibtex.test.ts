@@ -203,12 +203,12 @@ describe('formatCitation', () => {
 
   it('appends ISBN, DOI (as a link), URL (as a link), and note, in that order, when present', () => {
     const md = formatCitation(entry({ title: 'A Whole Book', publisher: 'Example Press', isbn: '978-0-00-000000-0', doi: '10.1000/xyz123', url: 'https://example.com/book', note: 'A reprint edition' }, 'book'))
-    expect(md).toBe('A Whole Book. Example Press. ISBN: 978-0-00-000000-0. [https://doi.org/10.1000/xyz123](https://doi.org/10.1000/xyz123). [https://example.com/book](https://example.com/book). A reprint edition.')
+    expect(md).toBe('A Whole Book. Example Press. ISBN: 978-0-00-000000-0. [doi.org/10.1000/xyz123](https://doi.org/10.1000/xyz123). [https://example.com/book](https://example.com/book). A reprint edition.')
   })
 
-  it('leaves an already-fully-qualified DOI URL untouched rather than double-prefixing it', () => {
+  it('leaves an already-fully-qualified DOI URL untouched rather than double-prefixing it, while displaying it without the scheme', () => {
     const md = formatCitation(entry({ title: 'A Paper', doi: 'https://doi.org/10.1000/xyz123' }))
-    expect(md).toContain('[https://doi.org/10.1000/xyz123](https://doi.org/10.1000/xyz123)')
+    expect(md).toContain('[doi.org/10.1000/xyz123](https://doi.org/10.1000/xyz123)')
     expect(md).not.toContain('doi.org/https://')
   })
 
@@ -225,6 +225,16 @@ describe('trailingCitationFields', () => {
   it('applies the given escape function to each field value, but not to the [text](url) link syntax itself', () => {
     const out = trailingCitationFields({ url: 'https://example.com/a*b' }, (s) => s.replace(/\*/g, '\\*'))
     expect(out).toEqual(['[https://example.com/a\\*b](https://example.com/a\\*b)'])
+  })
+
+  it('suppresses the URL when includeUrlWhenDoi is false and a DOI is present', () => {
+    const out = trailingCitationFields({ doi: '10.1000/xyz', url: 'https://example.com/book' }, (s) => s, { includeUrlWhenDoi: false })
+    expect(out).toEqual(['[doi.org/10.1000/xyz](https://doi.org/10.1000/xyz)'])
+  })
+
+  it('still includes the URL when includeUrlWhenDoi is false but there is no DOI', () => {
+    const out = trailingCitationFields({ url: 'https://example.com/book' }, (s) => s, { includeUrlWhenDoi: false })
+    expect(out).toEqual(['[https://example.com/book](https://example.com/book)'])
   })
 })
 

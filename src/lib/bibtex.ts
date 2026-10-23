@@ -176,6 +176,54 @@ export function displayTitle(entry: BibtexEntry): string {
 }
 
 /**
+ * Whether to include a source's own `url` field alongside its `doi` —
+ * when `false`, the URL is only shown if there's no DOI at all, since a
+ * DOI already resolves to a URL of its own (`https://doi.org/<doi>`) and
+ * showing both reads as redundant. `ExportDialog`'s own checkbox drives
+ * this for an actual export; every other caller (a source's own display
+ * in `SourceWorkspace`, etc.) leaves it at the default — always show
+ * both when both are present — since there's no "already showing a DOI
+ * elsewhere in this same document" context to reason about there.
+ */
+export interface TrailingFieldsOptions {
+  includeUrlWhenDoi?: boolean
+}
+
+/**
+ * ISBN, a DOI (rendered as a clickable link whose own visible text drops
+ * the "https://" scheme — "doi.org/10.1000/…", not
+ * "https://doi.org/10.1000/…" — via plain Markdown link syntax, resolved
+ * to a real `<a>` by `inlineMarkdownToHtml` wherever a citation ends up
+ * in the print view, and still perfectly readable as literal
+ * `[text](url)` in the plain .md export), a URL (same link treatment,
+ * verbatim, only shown per `opts.includeUrlWhenDoi` — see its own doc
+ * comment — when a DOI is also present), and a free-text BibTeX `note`
+ * field — in that order, one clause per field actually present, appended
+ * to the very end of a citation/bibliography entry by every renderer in
+ * this app (`formatCitation` right below, and the APA/MLA/Chicago
+ * formatters in lib/export.ts). `escape` lets a caller Markdown-escape
+ * each field's own text first (the export.ts formatters do, via
+ * `mdEscapeText`; this function's own default — identity — matches how
+ * `formatCitation` has never escaped any of its other fields either) —
+ * never applied to the `[text](url)` link syntax itself, only to the raw
+ * field value substituted inside it, so a stray Markdown-special
+ * character sitting in a URL can't accidentally break or extend the link.
+ */
+export function trailingCitationFields(f: Record<string, string>, escape: (s: string) => string = (s) => s, opts: TrailingFieldsOptions = {}): string[] {
+  const { includeUrlWhenDoi = true } = opts
+  const out: string[] = []
+  if (f.isbn) out.push(`ISBN: ${escape(f.isbn)}`)
+  if (f.doi) {
+    const doiUrl = /^https?:\/\//.test(f.doi) ? f.doi : `https://doi.org/${f.doi}`
+    const doiDisplay = doiUrl.replace(/^https?:\/\//, '')
+    out.push(`[${escape(doiDisplay)}](${escape(doiUrl)})`)
+  }
+  if (f.url && (includeUrlWhenDoi || !f.doi)) out.push(`[${escape(f.url)}](${escape(f.url)})`)
+  if (f.note) out.push(escape(f.note))
+  return out
+}
+
+/**
  * A single-paragraph, human-readable rendering of a BibTeX entry — "Jane
  * Tester (2024). A Test PDF Document. Journal of Examples, 12(3), 45-67."
  * — for showing in place of the raw `@article{…}` source everywhere that
@@ -187,51 +235,22 @@ export function displayTitle(entry: BibtexEntry): string {
  * only a title still renders as just the title, not a sentence of empty
  * punctuation).
  */
-/**
- * ISBN, a DOI (rendered as a clickable `https://doi.org/…` link via plain
- * Markdown link syntax — resolved to a real `<a>` by `inlineMarkdownToHtml`
- * wherever a citation ends up in the print view, and still perfectly
- * readable as literal `[text](url)` in the plain .md export), a URL (same
- * treatment, verbatim), and a free-text BibTeX `note` field — in that
- * order, one clause per field actually present, appended to the very end
- * of a citation/bibliography entry by every renderer in this app
- * (`formatCitation` right below, and the APA/MLA/Chicago formatters in
- * lib/export.ts). `escape` lets a caller Markdown-escape each field's own
- * text first (the export.ts formatters do, via `mdEscapeText`; this
- * function's own default — identity — matches how `formatCitation` has
- * never escaped any of its other fields either) — never applied to the
- * `[text](url)` link syntax itself, only to the raw field value
- * substituted inside it, so a stray Markdown-special character sitting in
- * a URL can't accidentally break or extend the link.
- */
-export function trailingCitationFields(f: Record<string, string>, escape: (s: string) => string = (s) => s): string[] {
-  const out: string[] = []
-  if (f.isbn) out.push(`ISBN: ${escape(f.isbn)}`)
-  if (f.doi) {
-    const doiUrl = /^https?:\/\//.test(f.doi) ? f.doi : `https://doi.org/${f.doi}`
-    out.push(`[${escape(doiUrl)}](${escape(doiUrl)})`)
-  }
-  if (f.url) out.push(`[${escape(f.url)}](${escape(f.url)})`)
-  if (f.note) out.push(escape(f.note))
-  return out
-}
-
-export function formatCitation(entry: BibtexEntry): string {
+export function formatCitation(entry: BibtexEntry, escape: (s: string) => string = (s) => s, opts: TrailingFieldsOptions = {}): string {
   const f = entry.fields
   const sentences: string[] = []
-  const authorYear = [f.author, f.year ? `(${f.year})` : ''].filter(Boolean).join(' ')
+  const authorYear = [f.author ? escape(f.author) : '', f.year ? `(${escape(f.year)})` : ''].filter(Boolean).join(' ')
   if (authorYear) sentences.push(authorYear)
-  sentences.push(f.title || entry.key)
+  sentences.push(escape(f.title || entry.key))
   // Shown as its own short sentence, right after the title — whichever of
   // the two is actually present (an edited volume's own editor, a
   // translated work's own translator, both, or neither).
-  const editorTranslator = [f.editor ? `Ed. ${f.editor}` : '', f.translator ? `Trans. ${f.translator}` : ''].filter(Boolean).join('. ')
+  const editorTranslator = [f.editor ? `Ed. ${escape(f.editor)}` : '', f.translator ? `Trans. ${escape(f.translator)}` : ''].filter(Boolean).join('. ')
   if (editorTranslator) sentences.push(editorTranslator)
   const venue = f.journal || f.booktitle
-  const venueBits = [venue, f.volume ? (f.number ? `${f.volume}(${f.number})` : f.volume) : '', f.pages ? `pp. ${f.pages}` : ''].filter(Boolean)
+  const venueBits = [venue ? escape(venue) : '', f.volume ? (f.number ? `${escape(f.volume)}(${escape(f.number)})` : escape(f.volume)) : '', f.pages ? `pp. ${escape(f.pages)}` : ''].filter(Boolean)
   if (venueBits.length > 0) sentences.push(venueBits.join(', '))
-  else if (f.publisher) sentences.push(f.publisher)
-  sentences.push(...trailingCitationFields(f))
+  else if (f.publisher) sentences.push(escape(f.publisher))
+  sentences.push(...trailingCitationFields(f, escape, opts))
   return sentences.join('. ') + '.'
 }
 

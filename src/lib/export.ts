@@ -9,7 +9,7 @@
  */
 import { getChildIds, parseSegments } from './childMarkers'
 import { escapeHtml } from './html'
-import { citationLabel, citationLabelAuthorTitle, formatBibtex, formatCitation, trailingCitationFields } from './bibtex'
+import { citationLabel, citationLabelAuthorTitle, formatBibtex, formatCitation, trailingCitationFields, type TrailingFieldsOptions } from './bibtex'
 import { renderMathHtml } from './math'
 import { isAbstractTitle } from './treeNumbering'
 import { nodeFootnotes } from '../models/essaysRepo'
@@ -44,6 +44,8 @@ export interface PrintCitationOptions {
   placement: PrintCitationPlacement
   /** This essay's own cited sources, in the exact order the References list renders them — a numbered citation's bracket index is 1 + this array's index of its source, so the two always agree. */
   orderedSourceIds: string[]
+  /** See `TrailingFieldsOptions` in lib/bibtex.ts — applied here to a footnote-placed citation's own full body, the same as `ExportDialog` applies it to the References list itself, so the two stay consistent within one export. */
+  includeUrlWhenDoi?: boolean
 }
 
 /** Threaded through a node's own conversion so a `sup.footnote-ref` marker can look up its footnote's content (`node.footnotes`, resolved by the caller) and mint a globally-unique `[^label]` — unique across the *whole* document, not just this node, since Markdown footnote labels are matched document-wide by any real Markdown processor regardless of which section "owns" them; reusing per-node-local numbers as labels would silently conflate two different essay's-worth of footnotes that both happened to be "footnote 1." `defs` collects each one's own `[^label]: content` line, in the order encountered, to append once at the very end. */
@@ -91,7 +93,7 @@ function renderPrintCitation(el: HTMLElement, fnCtx: MarkdownFootnoteCtx): strin
     // `ensureCitationSpacing` already recognizes the `sup.print-footnote-ref`
     // markup this produces (shared with every real footnote) directly.
     const label = `fn${fnCtx.counter.next++}`
-    const body = mdEscapeText(formatCitation(source.bibtex)) + (note ? ` (${mdEscapeText(note)})` : '')
+    const body = formatCitation(source.bibtex, mdEscapeText, { includeUrlWhenDoi: opts.includeUrlWhenDoi }) + (note ? ` (${mdEscapeText(note)})` : '')
     fnCtx.defs.push(`[^${label}]: ${body}`)
     return `[^${label}]`
   }
@@ -1110,7 +1112,7 @@ function formatAuthorsNameOrder(authors: ParsedAuthor[]): string {
  * reliably sentence-casing an arbitrary user-entered title isn't
  * something this can get right automatically.
  */
-function formatApaEntry(entry: BibtexEntry): string {
+function formatApaEntry(entry: BibtexEntry, opts: TrailingFieldsOptions = {}): string {
   const f = entry.fields
   const authors = formatAuthorsApa(parseAuthorList(f.author))
   const year = f.year ? `(${mdEscapeText(f.year)})` : ''
@@ -1135,7 +1137,7 @@ function formatApaEntry(entry: BibtexEntry): string {
     sentences.push(`*${title}*${translatorSuffix}`)
     if (f.editor) sentences.push(`Edited by ${mdEscapeText(f.editor)}`)
   }
-  sentences.push(...trailingCitationFields(f, mdEscapeText))
+  sentences.push(...trailingCitationFields(f, mdEscapeText, opts))
   return sentences.join('. ') + '.'
 }
 
@@ -1156,7 +1158,7 @@ function formatApaEntry(entry: BibtexEntry): string {
  * simply omitted when absent. Degrades the same way `formatApaEntry`
  * does otherwise.
  */
-function formatMlaEntry(entry: BibtexEntry): string {
+function formatMlaEntry(entry: BibtexEntry, opts: TrailingFieldsOptions = {}): string {
   const f = entry.fields
   const authors = formatAuthorsNameOrder(parseAuthorList(f.author))
   const title = mdEscapeText(f.title || entry.key)
@@ -1186,7 +1188,7 @@ function formatMlaEntry(entry: BibtexEntry): string {
     sentences.push(f.year ? `*${title}*, ${mdEscapeText(f.year)}.` : `*${title}*.`)
     if (editedBy) sentences.push(`${editedBy.charAt(0).toUpperCase()}${editedBy.slice(1)}.`)
   }
-  sentences.push(...trailingCitationFields(f, mdEscapeText).map((s) => `${s}.`))
+  sentences.push(...trailingCitationFields(f, mdEscapeText, opts).map((s) => `${s}.`))
   return sentences.join(' ')
 }
 
@@ -1209,7 +1211,7 @@ function formatMlaEntry(entry: BibtexEntry): string {
  * same degrade-gracefully-as-fields-go-missing approach `formatCitation`
  * already takes.
  */
-function formatChicagoEntry(entry: BibtexEntry): string {
+function formatChicagoEntry(entry: BibtexEntry, opts: TrailingFieldsOptions = {}): string {
   const f = entry.fields
   const authors = formatAuthorsNameOrder(parseAuthorList(f.author))
   const title = mdEscapeText(f.title || entry.key)
@@ -1242,7 +1244,7 @@ function formatChicagoEntry(entry: BibtexEntry): string {
     sentences.push(f.year ? `*${title}*, ${mdEscapeText(f.year)}.` : `*${title}*.`)
     if (editedByOwnSentence) sentences.push(editedByOwnSentence)
   }
-  sentences.push(...trailingCitationFields(f, mdEscapeText).map((s) => `${s}.`))
+  sentences.push(...trailingCitationFields(f, mdEscapeText, opts).map((s) => `${s}.`))
   return sentences.join(' ')
 }
 
@@ -1257,16 +1259,16 @@ function formatChicagoEntry(entry: BibtexEntry): string {
  * (`referencesHtml`) to resolve its `*italic*` markers into real `<em>`
  * tags; neither should escape it a second time.
  */
-export function renderBibliographyEntry(entry: BibtexEntry, style: BibliographyStyle = 'plain'): string {
+export function renderBibliographyEntry(entry: BibtexEntry, style: BibliographyStyle = 'plain', opts: TrailingFieldsOptions = {}): string {
   switch (style) {
     case 'apa':
-      return formatApaEntry(entry)
+      return formatApaEntry(entry, opts)
     case 'mla':
-      return formatMlaEntry(entry)
+      return formatMlaEntry(entry, opts)
     case 'chicago':
-      return formatChicagoEntry(entry)
+      return formatChicagoEntry(entry, opts)
     default:
-      return mdEscapeText(formatCitation(entry))
+      return formatCitation(entry, mdEscapeText, opts)
   }
 }
 
@@ -1280,10 +1282,10 @@ export function citedSources(nodeMap: Map<string, EssayNode>, sources: Map<strin
 }
 
 /** A "## References" section — one list item per cited source — appended to `essayToMarkdown`'s own output for the plain .md export. Empty string (nothing appended at all) when the essay cites no sources. `renderBibliographyEntry`'s own result is already safe, escaped Markdown — not re-escaped here, which would double-escape a style's own `*italic*` markers into literal asterisks. */
-export function referencesMarkdown(nodeMap: Map<string, EssayNode>, sources: Map<string, Source>, style: BibliographyStyle = 'plain'): string {
+export function referencesMarkdown(nodeMap: Map<string, EssayNode>, sources: Map<string, Source>, style: BibliographyStyle = 'plain', opts: TrailingFieldsOptions = {}): string {
   const cited = citedSources(nodeMap, sources)
   if (cited.length === 0) return ''
-  const items = cited.map((s) => `- ${renderBibliographyEntry(s.bibtex, style)}`)
+  const items = cited.map((s) => `- ${renderBibliographyEntry(s.bibtex, style, opts)}`)
   return `\n\n## References\n\n${items.join('\n')}\n`
 }
 
@@ -1310,10 +1312,10 @@ export function referencesMarkdown(nodeMap: Map<string, EssayNode>, sources: Map
  * into real `<em>` tags; `inlineMarkdownToHtml` does that *and* escapes
  * everything else exactly the way `escapeHtml` alone used to.
  */
-export function referencesHtml(nodeMap: Map<string, EssayNode>, sources: Map<string, Source>, style: BibliographyStyle = 'plain', numbered: boolean = false): string {
+export function referencesHtml(nodeMap: Map<string, EssayNode>, sources: Map<string, Source>, style: BibliographyStyle = 'plain', numbered: boolean = false, opts: TrailingFieldsOptions = {}): string {
   const cited = citedSources(nodeMap, sources)
   if (cited.length === 0) return ''
-  const items = cited.map((s) => `<li>${inlineMarkdownToHtml(renderBibliographyEntry(s.bibtex, style))}</li>`)
+  const items = cited.map((s) => `<li>${inlineMarkdownToHtml(renderBibliographyEntry(s.bibtex, style, opts))}</li>`)
   const tag = numbered ? 'ol' : 'ul'
   return `<h2 class="print-references-heading">References</h2><${tag} class="print-references-list">${items.join('')}</${tag}>`
 }
