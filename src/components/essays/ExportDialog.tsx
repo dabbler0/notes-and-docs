@@ -187,7 +187,7 @@ export function ExportDialog({ essay, nodeMap, onClose }: { essay: Essay; nodeMa
 
       const sources = new Map((await listSources()).map((s) => [s.id, s]))
       const orderedSourceIds = citedSources(nodeMap, sources).map((s) => s.id)
-      const md = essayToMarkdown(essay, nodeMap, { citationOptions: { sources, style: citationStyle, placement: citationPlacement, orderedSourceIds, includeUrlWhenDoi } })
+      const md = essayToMarkdown(essay, nodeMap, { citationOptions: { sources, style: citationStyle, placement: citationPlacement, orderedSourceIds, bibliographyStyle } })
       const numberedReferences = citationPlacement === 'inline' && citationStyle === 'numbered'
       let rawBodyHtml = ensureCitationSpacing(addPrintChrome(markdownToHtml(md))) + referencesHtml(nodeMap, sources, bibliographyStyle, numberedReferences, { includeUrlWhenDoi })
       if (mathlikeMode) rawBodyHtml = applyMathlikeHeadings(rawBodyHtml)

@@ -44,8 +44,8 @@ export interface PrintCitationOptions {
   placement: PrintCitationPlacement
   /** This essay's own cited sources, in the exact order the References list renders them — a numbered citation's bracket index is 1 + this array's index of its source, so the two always agree. */
   orderedSourceIds: string[]
-  /** See `TrailingFieldsOptions` in lib/bibtex.ts — applied here to a footnote-placed citation's own full body, the same as `ExportDialog` applies it to the References list itself, so the two stay consistent within one export. */
-  includeUrlWhenDoi?: boolean
+  /** Which style a footnote-placed citation's own shortened author/title form follows — see `formatFootnoteCitation` — so a footnote reads consistently with the References entry it points at. Unused for `'inline'` placement, which has its own separate short forms (`citationLabel`/`citationLabelAuthorTitle`). Defaults to `'plain'`, same as `renderBibliographyEntry`'s own default. */
+  bibliographyStyle?: BibliographyStyle
 }
 
 /** Threaded through a node's own conversion so a `sup.footnote-ref` marker can look up its footnote's content (`node.footnotes`, resolved by the caller) and mint a globally-unique `[^label]` — unique across the *whole* document, not just this node, since Markdown footnote labels are matched document-wide by any real Markdown processor regardless of which section "owns" them; reusing per-node-local numbers as labels would silently conflate two different essay's-worth of footnotes that both happened to be "footnote 1." `defs` collects each one's own `[^label]: content` line, in the order encountered, to append once at the very end. */
@@ -93,7 +93,7 @@ function renderPrintCitation(el: HTMLElement, fnCtx: MarkdownFootnoteCtx): strin
     // `ensureCitationSpacing` already recognizes the `sup.print-footnote-ref`
     // markup this produces (shared with every real footnote) directly.
     const label = `fn${fnCtx.counter.next++}`
-    const body = formatCitation(source.bibtex, mdEscapeText, { includeUrlWhenDoi: opts.includeUrlWhenDoi }) + (note ? ` (${mdEscapeText(note)})` : '')
+    const body = formatFootnoteCitation(source.bibtex, opts.bibliographyStyle ?? 'plain', note)
     fnCtx.defs.push(`[^${label}]: ${body}`)
     return `[^${label}]`
   }
@@ -1246,6 +1246,36 @@ function formatChicagoEntry(entry: BibtexEntry, opts: TrailingFieldsOptions = {}
   }
   sentences.push(...trailingCitationFields(f, mdEscapeText, opts).map((s) => `${s}.`))
   return sentences.join(' ')
+}
+
+/**
+ * A footnote-placed citation's own body — just author and title (plus the
+ * citation's own page-number/note, if any), rather than a full
+ * `formatCitation()`/`renderBibliographyEntry()` rendering of every field
+ * (venue, publisher, ISBN/DOI/URL, …) — that fuller information already
+ * lives in the References list the same source is also sorted into, so a
+ * footnote only needs to identify *what* is being cited. The title takes
+ * the chosen bibliography style's own markup convention for an article/
+ * chapter title (`journal`/`booktitle` set) vs. a standalone work's title
+ * — quoted in MLA/Chicago, italicized for a book in every style
+ * (including APA, which otherwise never quotes an article title at all —
+ * only its venue is italicized there), bare for `'plain'`. Degrades the
+ * same way every other formatter here does: a missing author just leaves
+ * the title on its own.
+ */
+function formatFootnoteCitation(entry: BibtexEntry, style: BibliographyStyle, note?: string): string {
+  const f = entry.fields
+  const escapedTitle = mdEscapeText(f.title || entry.key)
+  const authorPart = f.author ? mdEscapeText(f.author) : ''
+  const isPartOfLargerWork = !!(f.journal || f.booktitle)
+  let body: string
+  if (style !== 'plain' && style !== 'apa' && isPartOfLargerWork) {
+    body = [authorPart, `"${escapedTitle}."`].filter(Boolean).join(', ')
+  } else {
+    const titleText = style !== 'plain' && !isPartOfLargerWork ? `*${escapedTitle}*` : escapedTitle
+    body = `${[authorPart, titleText].filter(Boolean).join(', ')}.`
+  }
+  return note ? `${body} (${mdEscapeText(note)})` : body
 }
 
 /**
