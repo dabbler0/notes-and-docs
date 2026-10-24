@@ -1249,31 +1249,48 @@ function formatChicagoEntry(entry: BibtexEntry, opts: TrailingFieldsOptions = {}
 }
 
 /**
- * A footnote-placed citation's own body — just author and title (plus the
- * citation's own page-number/note, if any), rather than a full
- * `formatCitation()`/`renderBibliographyEntry()` rendering of every field
- * (venue, publisher, ISBN/DOI/URL, …) — that fuller information already
- * lives in the References list the same source is also sorted into, so a
- * footnote only needs to identify *what* is being cited. The title takes
- * the chosen bibliography style's own markup convention for an article/
- * chapter title (`journal`/`booktitle` set) vs. a standalone work's title
- * — quoted in MLA/Chicago, italicized for a book in every style
- * (including APA, which otherwise never quotes an article title at all —
- * only its venue is italicized there), bare for `'plain'`. Degrades the
+ * A footnote-placed citation's own body — just the first author's own
+ * surname ("et al." once there's more than one), the title, and the
+ * citation's own page-number/note if any — rather than a full
+ * `formatCitation()`/`renderBibliographyEntry()` rendering of every field.
+ * No journal name, no publisher, no ISBN/DOI/URL/bibtex-note — that fuller
+ * information already lives in the References list the same source is
+ * also sorted into, so a footnote only needs to identify *what* is being
+ * cited. The one exception is a chapter-in-a-book entry (`booktitle`
+ * set — the @inbook/@incollection case): its containing book's own title
+ * is included too ("in *Book Title*"), since a chapter citation is
+ * otherwise meaningless without it — a plain journal article's own venue
+ * is never shown this way, only a book's.
+ *
+ * The title (and, for a chapter, the book title) takes the chosen
+ * bibliography style's own markup convention for an article/chapter title
+ * (`journal`/`booktitle` set) vs. a standalone work's title — quoted in
+ * MLA/Chicago, italicized for a book in every non-plain style (including
+ * APA, which otherwise never quotes an article title at all — only its
+ * venue is italicized there), bare throughout for `'plain'`. Degrades the
  * same way every other formatter here does: a missing author just leaves
- * the title on its own.
+ * the title (and book title) on their own.
  */
 function formatFootnoteCitation(entry: BibtexEntry, style: BibliographyStyle, note?: string): string {
   const f = entry.fields
   const escapedTitle = mdEscapeText(f.title || entry.key)
-  const authorPart = f.author ? mdEscapeText(f.author) : ''
+  const authors = parseAuthorList(f.author)
+  const authorPart = authors.length === 0 ? '' : authors.length === 1 ? mdEscapeText(authors[0].last) : `${mdEscapeText(authors[0].last)} et al.`
   const isPartOfLargerWork = !!(f.journal || f.booktitle)
-  let body: string
-  if (style !== 'plain' && style !== 'apa' && isPartOfLargerWork) {
-    body = [authorPart, `"${escapedTitle}."`].filter(Boolean).join(', ')
+  const hasVenue = !!f.booktitle
+  const quoteTitle = style !== 'plain' && style !== 'apa' && isPartOfLargerWork
+  const italicizeTitle = style !== 'plain' && !isPartOfLargerWork
+  let titlePiece: string
+  if (quoteTitle) {
+    titlePiece = hasVenue ? `"${escapedTitle},"` : `"${escapedTitle}."`
   } else {
-    const titleText = style !== 'plain' && !isPartOfLargerWork ? `*${escapedTitle}*` : escapedTitle
-    body = `${[authorPart, titleText].filter(Boolean).join(', ')}.`
+    titlePiece = italicizeTitle ? `*${escapedTitle}*` : escapedTitle
+    if (!hasVenue) titlePiece += '.'
+  }
+  let body = [authorPart, titlePiece].filter(Boolean).join(', ')
+  if (hasVenue) {
+    const venueText = style === 'plain' ? mdEscapeText(f.booktitle!) : `*${mdEscapeText(f.booktitle!)}*`
+    body += quoteTitle ? ` in ${venueText}.` : `, in ${venueText}.`
   }
   return note ? `${body} (${mdEscapeText(note)})` : body
 }

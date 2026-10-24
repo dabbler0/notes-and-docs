@@ -490,11 +490,11 @@ describe('print-mode citation styling (essayToMarkdown\'s citationOptions)', () 
     expect(ensureCitationSpacing(markdownToHtml(md))).toContain('[1, p. 5]')
   })
 
-  it('footnote placement replaces the citation with a numbered footnote reference whose body is just author and title', () => {
+  it('footnote placement replaces the citation with a numbered footnote reference whose body is just the first author\'s surname and the title', () => {
     const { nodeMap, sources, sourceId } = sourceAndCitation()
     const md = essayToMarkdown(makeEssay('root'), nodeMap, { citationOptions: { sources, style: 'author-year', placement: 'footnote', orderedSourceIds: [sourceId] } })
     expect(md).toContain('As argued [^fn1].')
-    expect(md).toContain('[^fn1]: Smith, Jane, An Early Paper.')
+    expect(md).toContain('[^fn1]: Smith, An Early Paper.')
   })
 
   it('footnote placement shares one numbering sequence with the essay\'s own real footnotes', () => {
@@ -508,7 +508,7 @@ describe('print-mode citation styling (essayToMarkdown\'s citationOptions)', () 
     expect(md).toContain('A claim[^fn1]')
     expect(md).toContain('as argued [^fn2]')
     expect(md).toContain('[^fn1]: A real footnote.')
-    expect(md).toContain('[^fn2]: Smith, Jane, An Early Paper.')
+    expect(md).toContain('[^fn2]: Smith, An Early Paper.')
   })
 
   it('quotes an article/chapter title in a footnote for MLA and Chicago, but leaves it bare for APA (matching each style\'s own bibliography-entry convention)', () => {
@@ -520,11 +520,11 @@ describe('print-mode citation styling (essayToMarkdown\'s citationOptions)', () 
     const nodeMap = new Map([['root', root]])
     const sources = new Map([['s1', source]])
     const mla = essayToMarkdown(makeEssay('root'), nodeMap, { citationOptions: { sources, style: 'author-year', placement: 'footnote', orderedSourceIds: ['s1'], bibliographyStyle: 'mla' } })
-    expect(mla).toContain('[^fn1]: Smith, Jane, "An Early Paper."')
+    expect(mla).toContain('[^fn1]: Smith, "An Early Paper."')
     const chicago = essayToMarkdown(makeEssay('root'), nodeMap, { citationOptions: { sources, style: 'author-year', placement: 'footnote', orderedSourceIds: ['s1'], bibliographyStyle: 'chicago' } })
-    expect(chicago).toContain('[^fn1]: Smith, Jane, "An Early Paper."')
+    expect(chicago).toContain('[^fn1]: Smith, "An Early Paper."')
     const apa = essayToMarkdown(makeEssay('root'), nodeMap, { citationOptions: { sources, style: 'author-year', placement: 'footnote', orderedSourceIds: ['s1'], bibliographyStyle: 'apa' } })
-    expect(apa).toContain('[^fn1]: Smith, Jane, An Early Paper.')
+    expect(apa).toContain('[^fn1]: Smith, An Early Paper.')
   })
 
   it('italicizes a standalone book\'s title in a footnote for every non-plain style', () => {
@@ -534,10 +534,10 @@ describe('print-mode citation styling (essayToMarkdown\'s citationOptions)', () 
     const sources = new Map([['s1', source]])
     for (const style of ['apa', 'mla', 'chicago'] as const) {
       const md = essayToMarkdown(makeEssay('root'), nodeMap, { citationOptions: { sources, style: 'author-year', placement: 'footnote', orderedSourceIds: ['s1'], bibliographyStyle: style } })
-      expect(md).toContain('[^fn1]: Smith, Jane, *A Whole Book*.')
+      expect(md).toContain('[^fn1]: Smith, *A Whole Book*.')
     }
     const plain = essayToMarkdown(makeEssay('root'), nodeMap, { citationOptions: { sources, style: 'author-year', placement: 'footnote', orderedSourceIds: ['s1'], bibliographyStyle: 'plain' } })
-    expect(plain).toContain('[^fn1]: Smith, Jane, A Whole Book.')
+    expect(plain).toContain('[^fn1]: Smith, A Whole Book.')
   })
 
   it('omits venue, publisher, and trailing ISBN/DOI/URL/note fields from a footnote body', () => {
@@ -547,7 +547,7 @@ describe('print-mode citation styling (essayToMarkdown\'s citationOptions)', () 
     })
     const root = makeNode({ id: 'root', draftContent: '<p>As argued <cite class="citation" data-source-id="s1" data-cite-v="2">(Stale, 1999)</cite>.</p>' })
     const md = essayToMarkdown(makeEssay('root'), new Map([['root', root]]), { citationOptions: { sources: new Map([['s1', source]]), style: 'author-year', placement: 'footnote', orderedSourceIds: ['s1'], bibliographyStyle: 'chicago' } })
-    expect(md).toContain('[^fn1]: Smith, Jane, "An Early Paper."')
+    expect(md).toContain('[^fn1]: Smith, "An Early Paper."')
     expect(md).not.toContain('Journal of Examples')
     expect(md).not.toContain('doi.org')
     expect(md).not.toContain('example.com')
@@ -560,7 +560,44 @@ describe('print-mode citation styling (essayToMarkdown\'s citationOptions)', () 
     })
     const root = makeNode({ id: 'root', draftContent: '<p>As argued <cite class="citation" data-source-id="s1" data-cite-v="2" data-note="p. 5">(Stale, 1999)</cite>.</p>' })
     const md = essayToMarkdown(makeEssay('root'), new Map([['root', root]]), { citationOptions: { sources: new Map([['s1', source]]), style: 'author-year', placement: 'footnote', orderedSourceIds: ['s1'], bibliographyStyle: 'chicago' } })
-    expect(md).toContain('[^fn1]: Smith, Jane, "An Early Paper." (p. 5)')
+    expect(md).toContain('[^fn1]: Smith, "An Early Paper." (p. 5)')
+  })
+
+  it('uses "et al." once there\'s more than one author, keeping only the first author\'s surname', () => {
+    const source = makeSource({
+      id: 's1',
+      bibtex: { type: 'article', key: 'smith2020', fields: { author: 'Smith, Jane and Doe, John and Lee, Pat', year: '2020', title: 'An Early Paper', journal: 'Journal of Examples' } },
+    })
+    const root = makeNode({ id: 'root', draftContent: '<p>As argued <cite class="citation" data-source-id="s1" data-cite-v="2">(Stale, 1999)</cite>.</p>' })
+    const md = essayToMarkdown(makeEssay('root'), new Map([['root', root]]), { citationOptions: { sources: new Map([['s1', source]]), style: 'author-year', placement: 'footnote', orderedSourceIds: ['s1'], bibliographyStyle: 'chicago' } })
+    expect(md).toContain('[^fn1]: Smith et al., "An Early Paper."')
+  })
+
+  it('includes the containing book\'s own title for a chapter-in-a-book entry (booktitle set), but no other entry\'s venue', () => {
+    const chapter = makeSource({
+      id: 's1',
+      bibtex: { type: 'incollection', key: 'smith2020', fields: { author: 'Smith, Jane', year: '2020', title: 'A Chapter', booktitle: 'The Big Book' } },
+    })
+    const article = makeSource({
+      id: 's2',
+      bibtex: { type: 'article', key: 'doe2021', fields: { author: 'Doe, John', year: '2021', title: 'An Article', journal: 'Journal of Examples' } },
+    })
+    const root = makeNode({
+      id: 'root',
+      draftContent:
+        '<p>As argued <cite class="citation" data-source-id="s1" data-cite-v="2">(Stale, 1999)</cite> and <cite class="citation" data-source-id="s2" data-cite-v="2">(Stale, 1999)</cite>.</p>',
+    })
+    const sources = new Map([['s1', chapter], ['s2', article]])
+    const chicago = essayToMarkdown(makeEssay('root'), new Map([['root', root]]), { citationOptions: { sources, style: 'author-year', placement: 'footnote', orderedSourceIds: ['s1', 's2'], bibliographyStyle: 'chicago' } })
+    expect(chicago).toContain('[^fn1]: Smith, "A Chapter," in *The Big Book*.')
+    expect(chicago).toContain('[^fn2]: Doe, "An Article."')
+    expect(chicago).not.toContain('Journal of Examples')
+
+    const apa = essayToMarkdown(makeEssay('root'), new Map([['root', root]]), { citationOptions: { sources, style: 'author-year', placement: 'footnote', orderedSourceIds: ['s1', 's2'], bibliographyStyle: 'apa' } })
+    expect(apa).toContain('[^fn1]: Smith, A Chapter, in *The Big Book*.')
+
+    const plain = essayToMarkdown(makeEssay('root'), new Map([['root', root]]), { citationOptions: { sources, style: 'author-year', placement: 'footnote', orderedSourceIds: ['s1', 's2'], bibliographyStyle: 'plain' } })
+    expect(plain).toContain('[^fn1]: Smith, A Chapter, in The Big Book.')
   })
 
   it('falls back to the chip\'s own frozen text when its source no longer exists', () => {
