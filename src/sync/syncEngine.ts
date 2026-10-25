@@ -171,7 +171,7 @@ function withTimeout<T>(promise: Promise<T>, what: string): Promise<T> {
  * instead of encrypting it.
  */
 const SENSITIVE_FIELDS: Record<SyncedCollection, string[]> = {
-  essays: ['title'],
+  essays: ['title', 'authorNote'],
   nodes: ['title', 'draftContent', 'versions', 'footnotes'],
   sources: ['bibtex', 'comment', 'pdfFileName', 'pageHtmlCompressed', 'pageHtml', 'pageTexts'],
   sourceContent: ['pageHtmlCompressed'],

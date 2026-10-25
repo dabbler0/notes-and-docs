@@ -21,6 +21,7 @@ import { GraveyardPanel } from './GraveyardPanel'
 import { CitationPickerDialog } from './CitationPickerDialog'
 import { QuoteInsertDialog } from './QuoteInsertDialog'
 import { ExportDialog } from './ExportDialog'
+import { AuthorNoteDialog } from './AuthorNoteDialog'
 import { WordCountDialog } from './WordCountDialog'
 import { SplitPickerDialog } from './SplitPickerDialog'
 import { Modal } from '../Modal'
@@ -74,6 +75,7 @@ export function EssayWorkspace({ essayId, onBack, embedded = false }: { essayId:
   const [showLink, setShowLink] = useState(false)
   const [showWordCount, setShowWordCount] = useState(false)
   const [showExport, setShowExport] = useState(false)
+  const [showAuthorNote, setShowAuthorNote] = useState(false)
   const [pendingComment, setPendingComment] = useState<{
     nodeId: string
     /** Generated up front, before the composer ever opens, and already carried by the live `<mark class="comment-anchor">` — see `insertCommentAnchor`. */
@@ -123,6 +125,13 @@ export function EssayWorkspace({ essayId, onBack, embedded = false }: { essayId:
     if (!essay) return
     essay.title = essayTitle || 'Untitled essay'
     await saveEssay(essay)
+  }
+
+  async function saveAuthorNote(note: string) {
+    if (!essay) return
+    essay.authorNote = note || undefined
+    await saveEssay(essay)
+    setEssay({ ...essay })
   }
 
   function onActivate(nodeId: string, el: HTMLDivElement) {
@@ -728,6 +737,9 @@ export function EssayWorkspace({ essayId, onBack, embedded = false }: { essayId:
         <button className="btn btn-ghost btn-sm" onClick={() => setShowExport(true)}>
           <Icon name="export" /> <span className="btn-label">Export</span>
         </button>
+        <button className="btn btn-ghost btn-sm" title="Thanks/acknowledgements/disclosures for your author attribution in print exports" onClick={() => setShowAuthorNote(true)}>
+          <Icon name="footnote" /> <span className="btn-label">Author note</span>
+        </button>
         {/* Split view: never offered on an embedded (secondary) instance —
             no nested splits — and not on mobile, which has no room for two
             essays side by side at all. */}
@@ -1037,6 +1049,7 @@ export function EssayWorkspace({ essayId, onBack, embedded = false }: { essayId:
       {showQuoteDialog && <QuoteInsertDialog onClose={() => setShowQuoteDialog(false)} onInsertBlock={insertQuote} onInsertInline={insertInlineQuote} />}
       {showLink && <CitationPickerDialog title="Link to a source" requireUrl onClose={() => setShowLink(false)} onSelect={insertSourceLink} />}
       {showExport && <ExportDialog essay={essay} nodeMap={nodeMap} onClose={() => setShowExport(false)} />}
+      {showAuthorNote && <AuthorNoteDialog initialValue={essay.authorNote ?? ''} onSave={saveAuthorNote} onClose={() => setShowAuthorNote(false)} />}
       {showWordCount && (
         <WordCountDialog
           rootNode={rootNode}

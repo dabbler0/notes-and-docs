@@ -594,6 +594,66 @@ export function addPrintChrome(bodyHtml: string): string {
 }
 
 /**
+ * Inserts an author-name line directly beneath the title — right after
+ * the `<h1>`, before the title's own rule (`addPrintChrome`'s
+ * `.print-title-rule`, already its very next sibling by the time this
+ * runs) — for every print mode but Substack; `ExportDialog`'s own
+ * `exportPdf`, the only caller, skips calling this at all for that mode.
+ * A no-op if the body has no `<h1>` at all (shouldn't happen for a real
+ * essay export, but degrades harmlessly rather than throwing).
+ *
+ * When `authorNote` is also given (`Essay.authorNote` — an essay's own
+ * optional thanks/acknowledgements/disclosures text, see its own doc
+ * comment; run through `inlineMarkdownToHtml` directly, same as any real
+ * footnote's own body — literal Markdown text, not pre-escaped, so a
+ * `*bold*`/`_italic_`/`[text](url)` the author typed by hand renders as
+ * such), the author line gets a footnote marker pointing to it, wired
+ * into the exact same `sup.print-footnote-ref` + `<ol
+ * class="print-footnotes">` shape `markdownToHtml` already produces for
+ * every other footnote (creating that list from scratch, right at the
+ * end of the body, if the essay happens to have no footnotes of its own
+ * yet) — so it floats to the bottom of page one via
+ * `floatPrintFootnotes`/Paged.js exactly like a real footnote, becoming
+ * the document's own first one (every other footnote's own number shifts
+ * down by one to make room, the same way adding any new footnote earlier
+ * in a real document would). Must run after `addPrintChrome` (needs its
+ * `<h1>`/title-rule already in place) and before `floatPrintFootnotes`
+ * (needs the `<ol class="print-footnotes">` it adds a `<li>` to, or
+ * creates, to still be a real element in the markup it hands back).
+ */
+export function addAuthorAttribution(bodyHtml: string, authorName: string, authorNote?: string): string {
+  const doc = new DOMParser().parseFromString(bodyHtml, 'text/html')
+  const h1 = doc.body.querySelector('h1')
+  if (!h1) return bodyHtml
+  const p = doc.createElement('p')
+  p.className = 'print-author'
+  p.appendChild(doc.createTextNode(authorName))
+  const note = authorNote?.trim()
+  if (note) {
+    const sup = doc.createElement('sup')
+    sup.className = 'print-footnote-ref'
+    const a = doc.createElement('a')
+    a.setAttribute('href', '#fn-authornote')
+    a.textContent = '*'
+    sup.appendChild(a)
+    p.appendChild(sup)
+    let list = doc.body.querySelector('ol.print-footnotes')
+    if (!list) {
+      doc.body.appendChild(doc.createElement('hr'))
+      list = doc.createElement('ol')
+      list.className = 'print-footnotes'
+      doc.body.appendChild(list)
+    }
+    const li = doc.createElement('li')
+    li.id = 'fn-authornote'
+    li.innerHTML = inlineMarkdownToHtml(note)
+    list.insertBefore(li, list.firstChild)
+  }
+  h1.after(p)
+  return doc.body.innerHTML
+}
+
+/**
  * Replaces `heading` and everything after it up to the next heading (its
  * own section's content) with a `.print-abstract`-wrapped block whose
  * lead is a bold "Abstract." run-in — folded into the start of the

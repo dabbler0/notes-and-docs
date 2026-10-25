@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { addPrintChrome, applyMathlikeHeadings, ensureCitationSpacing, essayToLatex, essayToMarkdown, floatPrintFootnotes, markdownToHtml, referencesHtml, referencesMarkdown, renderBibliographyEntry } from '../export'
+import { addAuthorAttribution, addPrintChrome, applyMathlikeHeadings, ensureCitationSpacing, essayToLatex, essayToMarkdown, floatPrintFootnotes, markdownToHtml, referencesHtml, referencesMarkdown, renderBibliographyEntry } from '../export'
 import { citationHtml } from '../bibtex'
 import { markerHtml } from '../childMarkers'
 import type { BibtexEntry, Essay, EssayNode, Source } from '../../models/types'
@@ -822,6 +822,65 @@ describe('addPrintChrome', () => {
     expect(html).toContain('<h2>1 Introduction</h2>')
     expect(html).toContain('<h2>2 Abstract</h2>')
     expect(html).not.toContain('print-abstract')
+  })
+})
+
+describe('addAuthorAttribution', () => {
+  function renderedTitleAndRule(): string {
+    const root = makeNode({ id: 'root', title: 'Essay Title', draftContent: '<p>body</p>' })
+    return addPrintChrome(markdownToHtml(essayToMarkdown(makeEssay('root'), new Map([['root', root]]))))
+  }
+
+  it('inserts an author line right after the title, before the title rule', () => {
+    const html = addAuthorAttribution(renderedTitleAndRule(), 'Jane Author')
+    expect(html).toMatch(/<h1>Test Essay<\/h1><p class="print-author">Jane Author<\/p><hr class="print-title-rule">/)
+  })
+
+  it('adds no footnote marker when no author note is given', () => {
+    const html = addAuthorAttribution(renderedTitleAndRule(), 'Jane Author')
+    expect(html).not.toContain('print-footnote-ref')
+    expect(html).not.toContain('print-footnotes')
+  })
+
+  it('adds a footnote marker and a matching footnote-list entry when an author note is given', () => {
+    const html = addAuthorAttribution(renderedTitleAndRule(), 'Jane Author', 'Thanks to Bob for comments.')
+    expect(html).toContain('<p class="print-author">Jane Author<sup class="print-footnote-ref"><a href="#fn-authornote">*</a></sup></p>')
+    expect(html).toContain('<ol class="print-footnotes"><li id="fn-authornote">Thanks to Bob for comments.</li></ol>')
+  })
+
+  it('creates the footnote list from scratch when the essay has no other footnotes', () => {
+    const html = addAuthorAttribution(renderedTitleAndRule(), 'Jane Author', 'A note.')
+    expect(html).toContain('<hr><ol class="print-footnotes">')
+  })
+
+  it('prepends to an existing footnote list, becoming the document\'s first footnote, rather than replacing it', () => {
+    const root = makeNode({
+      id: 'root',
+      title: 'Essay Title',
+      draftContent: '<p>body<sup class="footnote-ref" data-footnote-id="f1"></sup></p>',
+      footnotes: [{ id: 'f1', content: '<p>A real footnote.</p>' }],
+    })
+    const withChrome = addPrintChrome(markdownToHtml(essayToMarkdown(makeEssay('root'), new Map([['root', root]]))))
+    const html = addAuthorAttribution(withChrome, 'Jane Author', 'An author note.')
+    const list = html.match(/<ol class="print-footnotes">(.*)<\/ol>/)![1]
+    expect(list.startsWith('<li id="fn-authornote">An author note.</li>')).toBe(true)
+    expect(list).toContain('A real footnote.')
+  })
+
+  it('escapes the author name and note, and allows basic inline Markdown in the note', () => {
+    const html = addAuthorAttribution(renderedTitleAndRule(), 'Jane <Author>', 'See *this* for more.')
+    expect(html).toContain('<p class="print-author">Jane &lt;Author&gt;<sup')
+    expect(html).toContain('<li id="fn-authornote">See <em>this</em> for more.</li>')
+  })
+
+  it('is a no-op when the note is blank or whitespace-only', () => {
+    const html = addAuthorAttribution(renderedTitleAndRule(), 'Jane Author', '   ')
+    expect(html).not.toContain('print-footnote-ref')
+  })
+
+  it('is a no-op on a body with no <h1> at all', () => {
+    const html = addAuthorAttribution('<p>no heading here</p>', 'Jane Author')
+    expect(html).toBe('<p>no heading here</p>')
   })
 })
 

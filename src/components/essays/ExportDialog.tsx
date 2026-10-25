@@ -3,6 +3,7 @@ import JSZip from 'jszip'
 import { Modal } from '../Modal'
 import { listSources } from '../../models/sourcesRepo'
 import {
+  addAuthorAttribution,
   addPrintChrome,
   applyMathlikeHeadings,
   ensureCitationSpacing,
@@ -185,11 +186,14 @@ export function ExportDialog({ essay, nodeMap, onClose }: { essay: Essay; nodeMa
       const lineHeight = doubleSpaced ? 2 : handoutCompact ? 1.35 : 1.6
       const paragraphMargin = handoutCompact ? '0.75em' : '1em'
 
+      const authorName = getAuthorName()
       const sources = new Map((await listSources()).map((s) => [s.id, s]))
       const orderedSourceIds = citedSources(nodeMap, sources).map((s) => s.id)
       const md = essayToMarkdown(essay, nodeMap, { citationOptions: { sources, style: citationStyle, placement: citationPlacement, orderedSourceIds, bibliographyStyle } })
       const numberedReferences = citationPlacement === 'inline' && citationStyle === 'numbered'
-      let rawBodyHtml = ensureCitationSpacing(addPrintChrome(markdownToHtml(md))) + referencesHtml(nodeMap, sources, bibliographyStyle, numberedReferences, { includeUrlWhenDoi })
+      let rawBodyHtml = ensureCitationSpacing(addPrintChrome(markdownToHtml(md)))
+      if (!substack && authorName) rawBodyHtml = addAuthorAttribution(rawBodyHtml, authorName, essay.authorNote)
+      rawBodyHtml += referencesHtml(nodeMap, sources, bibliographyStyle, numberedReferences, { includeUrlWhenDoi })
       if (mathlikeMode) rawBodyHtml = applyMathlikeHeadings(rawBodyHtml)
       const bodyHtml = substack ? rawBodyHtml : floatPrintFootnotes(rawBodyHtml)
 
@@ -198,7 +202,6 @@ export function ExportDialog({ essay, nodeMap, onClose }: { essay: Essay; nodeMa
         alert('Your browser blocked the print preview pop-up — allow pop-ups for this page and try again.')
         return
       }
-      const authorName = getAuthorName()
       const titleText = cssStringEscape(essay.title)
       const authorText = cssStringEscape(authorName ?? '')
       const bodyFontFamily = substack ? `-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif` : `'EB Garamond', Georgia, 'Times New Roman', serif`
@@ -228,6 +231,12 @@ export function ExportDialog({ essay, nodeMap, onClose }: { essay: Essay; nodeMa
            next paragraph's own top one. */
         p { margin: 0 0 ${paragraphMargin}; }
         h3, h4, h5, h6 { margin-top: 1.4em; margin-bottom: 0.3em; }
+        /* The author line addAuthorAttribution() (lib/export.ts) inserts
+           right beneath the title, above its own rule — its own margin
+           here (not the shared p rule above) keeps it snug against the
+           title and the rule on either side rather than taking on a
+           whole paragraph's own spacing. */
+        .print-author { margin: 2px 0 20px; font-style: italic; color: #444; }
         .print-title-rule { border: none; border-top: 4px solid #1a1a1a; margin: 0 0 32px; }
         .print-section-rule { border: none; border-top: 1px solid #bbb; margin: 0 0 28px; }
         blockquote { border-left: 3px solid #999; margin: 1em 0; padding-left: 1em; color: #444; }

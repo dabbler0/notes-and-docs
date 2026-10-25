@@ -345,6 +345,18 @@ export interface Essay {
    * same as every essay before projects existed.
    */
   projectId?: string
+  /**
+   * An optional thanks/acknowledgements/disclosures note for this essay's
+   * own author attribution — plain text (simple `*`/`_` emphasis and
+   * `[text](url)` links are allowed, same inline Markdown every footnote
+   * body already supports). Edited from `EssayWorkspace`'s own "Author
+   * note" button (`AuthorNoteDialog`), shown only in the print/PDF export
+   * (`lib/export.ts`'s `addAuthorAttribution`) — attached as a footnote
+   * to the author-name line it adds beneath the title, in every print
+   * mode but Substack. Absent or blank means no note at all: the author
+   * name (if any) renders with no footnote marker.
+   */
+  authorNote?: string
   /** Tombstone — see the note on Source.deleted. */
   deleted?: boolean
 }
