@@ -83,16 +83,19 @@ function renderPrintCitation(el: HTMLElement, fnCtx: MarkdownFootnoteCtx): strin
   if (!source) return printCitationSpan(mdEscapeText(el.textContent ?? ''))
   const note = el.getAttribute('data-note') ?? undefined
   if (opts.placement === 'footnote') {
-    // Same "fn<N>" label shape (and the same shared counter) as a real
-    // footnote — see MarkdownFootnoteCtx's own doc comment — so a
-    // footnote-placed citation and the essay's own real footnotes read
-    // as one continuous numbered sequence (the conventional "Notes"
-    // citation style), and footnoteDisplayNumber() picks its visible
-    // number back out the same way for either kind without needing to
-    // know which one it is. No printCitationSpan() wrapper needed here —
-    // `ensureCitationSpacing` already recognizes the `sup.print-footnote-ref`
-    // markup this produces (shared with every real footnote) directly.
-    const label = `fn${fnCtx.counter.next++}`
+    // Same shared counter as a real footnote — see MarkdownFootnoteCtx's
+    // own doc comment — so a footnote-placed citation and the essay's own
+    // real footnotes read as one continuous numbered sequence (the
+    // conventional "Notes" citation style). The "fnc" (vs. a real
+    // footnote's plain "fn") prefix is the one difference: it's what lets
+    // `markdownToHtml` tag only this kind of marker with the extra
+    // `print-citation-footnote-ref` class `moveFootnoteCitationsPastPeriod`
+    // looks for — footnoteDisplayNumber() still pulls the same visible
+    // number back out of either prefix. No printCitationSpan() wrapper
+    // needed here — `ensureCitationSpacing` already recognizes the
+    // `sup.print-footnote-ref` markup this produces (shared with every
+    // real footnote) directly.
+    const label = `fnc${fnCtx.counter.next++}`
     const body = formatFootnoteCitation(source.bibtex, opts.bibliographyStyle ?? 'plain', note)
     fnCtx.defs.push(`[^${label}]: ${body}`)
     return `[^${label}]`
@@ -402,16 +405,19 @@ function inlineMarkdownToHtml(text: string): string {
     .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
     .replace(/\*(.+?)\*/g, '<em>$1</em>')
     .replace(/\[(.+?)\]\((.+?)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>')
-    .replace(/\[\^([^\]]+)\]/g, (_, label: string) => `<sup class="print-footnote-ref"><a href="#fn-${label}">${footnoteDisplayNumber(label)}</a></sup>`)
+    .replace(/\[\^([^\]]+)\]/g, (_, label: string) => {
+      const citationClass = /^fnc\d+$/.test(label) ? ' print-citation-footnote-ref' : ''
+      return `<sup class="print-footnote-ref${citationClass}"><a href="#fn-${label}">${footnoteDisplayNumber(label)}</a></sup>`
+    })
     .replace(/\u0002(\d+)\u0002/g, (_, i: string) => escaped[Number(i)])
     .replace(/\u0000(\d+)\u0000/g, (_, i: string) => mathSpans[Number(i)])
     .replace(/\u0001(\d+)\u0001/g, (_, i: string) => underlineSpans[Number(i)])
     .replace(/\u0003(\d+)\u0003/g, (_, i: string) => citationSpans[Number(i)])
 }
 
-/** essayToMarkdown()'s own footnote labels are always `fn<n>` — pull the number back out for display so a footnote reads as a plain "1" rather than the internal label text; anything else (a hand-written .md file using its own label scheme) just shows the raw label instead of guessing. */
+/** essayToMarkdown()'s own footnote labels are always `fn<n>` for a real footnote or `fnc<n>` for a footnote-placed citation (see `renderPrintCitation`) — pull the number back out for display either way, so a footnote reads as a plain "1" rather than the internal label text; anything else (a hand-written .md file using its own label scheme) just shows the raw label instead of guessing. */
 function footnoteDisplayNumber(label: string): string {
-  const m = /^fn(\d+)$/.exec(label)
+  const m = /^fnc?(\d+)$/.exec(label)
   return m ? m[1] : label
 }
 
@@ -741,6 +747,59 @@ export function applyMathlikeHeadings(bodyHtml: string): string {
  * plain .md export's reference-style footnotes are untouched, since that
  * format has no real pages to float a footnote within.
  */
+/**
+ * Print/PDF export's own footnote-placement citations only (`ExportDialog`'s
+ * `exportPdf`, the only caller, skips this entirely unless
+ * `citationPlacement === 'footnote'`) — the conventional typesetting rule
+ * that a footnote's own call number sits *after* a sentence's closing
+ * punctuation, not before it: "a claim.¹" rather than "a claim¹." Moves a
+ * citation's own footnote marker (`sup.print-citation-footnote-ref` — the
+ * one subset of `sup.print-footnote-ref` `renderPrintCitation` tags this
+ * way, via its `fnc<n>` label prefix; a real footnote the author placed by
+ * hand is left exactly where it is, since there's no reliable way to tell
+ * whether its position relative to a period was deliberate) — or a whole
+ * run of consecutive ones (`.cite1.cite2.` "two citations for one claim")
+ * — past an immediately-following sentence-ending period, when that
+ * period (allowing for any whitespace sitting between the citation and
+ * the period — in particular the `&nbsp;` `EssayWorkspace`'s own
+ * `insertCitation` always leaves right after a freshly-inserted citation,
+ * as a cursor landing spot — is followed by whitespace or sits at the
+ * very end of its own text node (end of paragraph)) is a real sentence
+ * boundary. That whitespace is discarded rather than kept before the
+ * period (there should never be a gap between a word and its own
+ * sentence's period, however it got there) — any real whitespace *after*
+ * the period, separating it from the next sentence, is kept exactly as
+ * it was. A period mid-sentence (followed by a letter, as in "e.g." or a
+ * decimal) is left alone, since it isn't a sentence boundary at all.
+ * Must run before `ensureCitationSpacing` below
+ * — once this has moved the period to sit directly against the word
+ * before it, that pass's own spacing rules (word character before a
+ * marker → insert a space) correctly stop applying between the word and
+ * the period, rather than leaving a stray space behind from when the
+ * citation itself used to sit there.
+ */
+export function moveFootnoteCitationsPastPeriod(bodyHtml: string): string {
+  const doc = new DOMParser().parseFromString(bodyHtml, 'text/html')
+  const isCitationMarker = (n: ChildNode | null): n is Element => !!n && n.nodeType === Node.ELEMENT_NODE && (n as Element).matches('sup.print-citation-footnote-ref')
+  const markers = Array.from(doc.body.querySelectorAll('sup.print-citation-footnote-ref'))
+  for (const marker of markers) {
+    if (isCitationMarker(marker.previousSibling)) continue // mid-run — handled when its run's own first marker is reached
+    const run: Element[] = [marker]
+    let cursor: ChildNode | null = marker.nextSibling
+    while (isCitationMarker(cursor)) {
+      run.push(cursor)
+      cursor = cursor.nextSibling
+    }
+    if (!cursor || cursor.nodeType !== Node.TEXT_NODE) continue
+    const text = cursor.textContent ?? ''
+    const m = /^\s*\.(\s|$)/.exec(text)
+    if (!m) continue
+    run[0].before(doc.createTextNode('.'))
+    cursor.textContent = text.slice(m[0].length - m[1].length)
+  }
+  return doc.body.innerHTML
+}
+
 /**
  * Print/PDF export only (see `ExportDialog`'s own `exportPdf`) — must run
  * before `floatPrintFootnotes` below, which consumes every
