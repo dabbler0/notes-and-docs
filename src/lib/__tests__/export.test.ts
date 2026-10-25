@@ -958,6 +958,16 @@ describe('addAuthorAttribution', () => {
     expect(html).toContain('<li id="fn-authornote">See <em>this</em> for more.</li>')
   })
 
+  it('turns line breaks the author typed into the note into real <br> tags, rather than collapsing them', () => {
+    const html = addAuthorAttribution(renderedTitleAndRule(), 'Jane Author', 'Thanks to Bob.\nAll errors are my own.')
+    expect(html).toContain('<li id="fn-authornote">Thanks to Bob.<br>All errors are my own.</li>')
+  })
+
+  it('applies inline Markdown (and escaping) within each line of a multi-line note independently', () => {
+    const html = addAuthorAttribution(renderedTitleAndRule(), 'Jane Author', '*Thanks* to Bob.\nSee <Smith 2020>.')
+    expect(html).toContain('<li id="fn-authornote"><em>Thanks</em> to Bob.<br>See &lt;Smith 2020&gt;.</li>')
+  })
+
   it('is a no-op when the note is blank or whitespace-only', () => {
     const html = addAuthorAttribution(renderedTitleAndRule(), 'Jane Author', '   ')
     expect(html).not.toContain('print-footnote-ref')

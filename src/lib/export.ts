@@ -610,10 +610,15 @@ export function addPrintChrome(bodyHtml: string): string {
  *
  * When `authorNote` is also given (`Essay.authorNote` — an essay's own
  * optional thanks/acknowledgements/disclosures text, see its own doc
- * comment; run through `inlineMarkdownToHtml` directly, same as any real
- * footnote's own body — literal Markdown text, not pre-escaped, so a
- * `*bold*`/`_italic_`/`[text](url)` the author typed by hand renders as
- * such), the author line gets a footnote marker pointing to it, wired
+ * comment; each line run through `inlineMarkdownToHtml` and rejoined with
+ * `<br>` — literal Markdown text, not pre-escaped, so a `*bold*`/
+ * `_italic_`/`[text](url)` the author typed by hand renders as such, the
+ * same as any real footnote's own body, but — unlike a real footnote's
+ * own rich-HTML body, which already carries real `<br>`/block structure
+ * from its own contentEditable origin — a line break the author typed
+ * into `AuthorNoteDialog`'s plain `<textarea>` is just a literal `\n` in
+ * the stored string, which HTML would otherwise collapse into nothing),
+ * the author line gets a footnote marker pointing to it, wired
  * into the exact same `sup.print-footnote-ref` + `<ol
  * class="print-footnotes">` shape `markdownToHtml` already produces for
  * every other footnote (creating that list from scratch, right at the
@@ -652,7 +657,10 @@ export function addAuthorAttribution(bodyHtml: string, authorName: string, autho
     }
     const li = doc.createElement('li')
     li.id = 'fn-authornote'
-    li.innerHTML = inlineMarkdownToHtml(note)
+    li.innerHTML = note
+      .split('\n')
+      .map((line) => inlineMarkdownToHtml(line))
+      .join('<br>')
     list.insertBefore(li, list.firstChild)
   }
   h1.after(p)
