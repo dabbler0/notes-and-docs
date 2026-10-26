@@ -3337,7 +3337,10 @@ select {
 .pm-editor-root .ProseMirror section > .section-chevron {
   position: absolute;
   left: 4px;
-  top: 1px;
+  /* Vertically centered in the title's own line box (18px font, this
+     editor's 1.7 line-height → a ~30.6px line, measured live against the
+     chevron's own ~19px rendered height) rather than pinned to its top. */
+  top: 6px;
 }
 
 .pm-editor-root .ProseMirror section > .section-demote {
