@@ -4,7 +4,8 @@ import type { EditorView } from 'prosemirror-view'
 import { toggleMark, lift } from 'prosemirror-commands'
 import { wrapInList, liftListItem } from 'prosemirror-schema-list'
 import type { EditorState, Transaction } from 'prosemirror-state'
-import { getEssay, saveEssay } from '../../models/essaysRepo'
+import { cloneEssay, getEssay, saveEssay } from '../../models/essaysRepo'
+import { groupEssays } from '../../models/projectsRepo'
 import { listSources } from '../../models/sourcesRepo'
 import { addToGraveyard } from '../../models/graveyardRepo'
 import { addEssayComment, findEssayCommentById } from '../../models/essayCommentsRepo'
@@ -12,6 +13,8 @@ import { deleteEssayComment, promoteEssayComment, toggleEssayCommentDisplayMode 
 import { essaySchema } from '../../lib/pmSchema'
 import { displayTitle } from '../../lib/bibtex'
 import { confirmDialog } from '../../lib/confirm'
+import { promptDialog } from '../../lib/prompt'
+import { commitPmEssay } from '../../models/essayHistoryRepo'
 import type { Essay, Source } from '../../models/types'
 import { Icon } from '../Icon'
 import { PMEssayEditor } from './PMEssayEditor'
@@ -24,6 +27,7 @@ import { CommentsPanel, CommentCard } from './CommentsPanel'
 import { GraveyardPanel } from './GraveyardPanel'
 import { ExportDialog } from './ExportDialog'
 import { WordCountDialog } from './WordCountDialog'
+import { EssayHistoryPanel } from './EssayHistoryPanel'
 import {
   insertCitation,
   insertQuoteBlock,
@@ -90,6 +94,9 @@ export function EssayWorkspace({ essayId, onBack, embedded = false }: { essayId:
   const [showLink, setShowLink] = useState(false)
   const [showExport, setShowExport] = useState(false)
   const [showWordCount, setShowWordCount] = useState(false)
+  const [showHistory, setShowHistory] = useState(false)
+  /** Bumped only by a revert (`EssayHistoryPanel`'s own `onReverted`) — passed as `PMEssayEditor`'s own `key` so a revert's rewrite of `essay.doc` (done directly in storage, never through a transaction on the *live* `EditorView`) actually forces a fresh mount reading the new content, instead of leaving the live editor silently showing its own stale, pre-revert in-memory document. Ordinary typing already updates the live doc through the editor's own transactions, so nothing there needs this — only an external rewrite does. */
+  const [docGeneration, setDocGeneration] = useState(0)
   /** Both captured by the Word Count button's own `onMouseDown` (before its `onClick` would otherwise collapse the live selection, or move focus away from wherever the cursor actually was) — see `WordCountDialog.tsx`'s own doc comment. */
   const [selectedTextForWordCount, setSelectedTextForWordCount] = useState('')
   const [activeSectionForWordCount, setActiveSectionForWordCount] = useState<PMNode | null>(null)
@@ -377,23 +384,41 @@ export function EssayWorkspace({ essayId, onBack, embedded = false }: { essayId:
     await addToGraveyard(essay.id, section?.id ?? essay.rootNodeId, section?.title ?? essayTitle, html)
   }
 
+  /**
+   * Freezes the essay's current full state (`essay.doc`/`essay.comments` —
+   * see `buildPmSnapshot` in `essayHistoryRepo.ts`) as a new entry in its
+   * commit history, prompting for an optional label first. A no-op commit
+   * (nothing's changed since the last one) is reported rather than
+   * silently added as a pointless empty diff — see `commitPmEssay`'s own
+   * doc comment. Opens the History panel afterward so a successful commit
+   * is immediately visible.
+   */
+  async function handleCommit() {
+    if (!essay) return
+    const label = await promptDialog('Label for this commit? (optional)', { placeholder: 'e.g. "First full draft"' })
+    if (label === null) return
+    const commit = await commitPmEssay(essay, label.trim() || undefined)
+    if (!commit) {
+      alert('Nothing to commit — no changes since the last commit.')
+      return
+    }
+    setShowHistory(true)
+  }
+
   /** "Split view" → `SplitPickerDialog`'s "pick an existing project-mate" option: just opens it side by side, no data touched at all. */
   function handleSelectExistingForSplit(other: Essay) {
     setSplitEssayId(other.id)
     setShowSplitPicker(false)
   }
 
-  /**
-   * "Split view" → `SplitPickerDialog`'s "Clone this essay" option. The
-   * old `cloneEssay` still only knows how to deep-copy the pre-migration
-   * `EssayNode` tree (its own `doc`-based rewrite is a later stage of
-   * this same migration) — every essay reachable from here already has
-   * `essay.doc` set, so cloning is disabled for now rather than silently
-   * producing a broken copy.
-   */
+  /** "Split view" → `SplitPickerDialog`'s "Clone this essay" option — `cloneEssay` now branches on `essay.doc` presence itself (see its own doc comment in `essaysRepo.ts`), so this needs no PM-specific handling of its own beyond what the old model's version already did. */
   async function handleCloneForSplit() {
     if (!essay) return
-    window.alert("Cloning isn't available yet in the new editor — coming in a later update.")
+    const clone = await cloneEssay(essay.id)
+    if (!clone) return
+    await groupEssays(essay, clone)
+    setSplitEssayId(clone.id)
+    setShowSplitPicker(false)
   }
 
   function scrollToNode(sectionId: string) {
@@ -571,10 +596,32 @@ export function EssayWorkspace({ essayId, onBack, embedded = false }: { essayId:
             >
               <Icon name="word-count" />
             </button>
+            <button className="btn btn-sm icon-btn-toolbar" title="Commit: save the current state as a point you can come back to later" onClick={handleCommit}>
+              <Icon name="commit" />
+            </button>
+            <div style={{ position: 'relative' }}>
+              <button className={`btn btn-sm icon-btn-toolbar toolbar-toggle${showHistory ? ' active' : ''}`} title="Commit history" onClick={() => setShowHistory((v) => !v)}>
+                <Icon name="history" />
+              </button>
+              {showHistory && essay && (
+                <EssayHistoryPanel
+                  essay={essay}
+                  doc={doc}
+                  sources={sources}
+                  onReverted={() => {
+                    setShowHistory(false)
+                    setDocGeneration((g) => g + 1)
+                    reload()
+                  }}
+                  onClose={() => setShowHistory(false)}
+                />
+              )}
+            </div>
           </div>
 
           <div className={`editor-scroll doc-scroll${commentMode ? ' comment-mode' : ''}`} ref={docScrollRef} onMouseUp={handleMouseUpForComments}>
             <PMEssayEditor
+              key={docGeneration}
               essay={essay}
               sources={sources}
               commentsHolder={commentsHolder}

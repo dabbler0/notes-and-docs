@@ -618,14 +618,14 @@ export function migrateEssayHistory(essayTitle: string, oldCommits: EssayCommitE
     }))
     const migrated = migrateEssay(pseudoEssay, pseudoNodes, sources)
     warnings.push(...migrated.warnings)
-    const docText = newFormatSnapshotText({ title: migrated.title, doc: migrated.doc, comments: migrated.comments })
+    const docText = pmSnapshotText({ title: migrated.title, doc: migrated.doc, comments: migrated.comments })
     newCommits.push({ ...commit, patch: diffSnapshots(prevDocText, docText) })
     prevDocText = docText
   }
   return { commits: newCommits, warnings }
 }
 
-/** The new-format counterpart to `lib/essayHistory.ts`'s own `snapshotText` — same stable, deterministic serialization, just for `EssaySnapshot` (the PM-doc-based shape) rather than `LegacyEssaySnapshot` (the tree-based one that module stays on — see `models/types.ts`'s own doc comments on why the two are separate types). */
-function newFormatSnapshotText(snapshot: EssaySnapshot): string {
+/** The new-format counterpart to `lib/essayHistory.ts`'s own `snapshotText` — same stable, deterministic serialization, just for `EssaySnapshot` (the PM-doc-based shape) rather than `LegacyEssaySnapshot` (the tree-based one that module stays on — see `models/types.ts`'s own doc comments on why the two are separate types). Exported for `essayHistoryRepo.ts`'s own doc-based `commitPmEssay`/`revertPmEssayTo`/`mergePmEssays` (Stage B5), which need the exact same serialization `migrateEssayHistory` above already uses so a migrated essay's pre-existing commit chain and any commit made after migration both describe the same snapshot shape. */
+export function pmSnapshotText(snapshot: EssaySnapshot): string {
   return JSON.stringify(snapshot, null, 2)
 }

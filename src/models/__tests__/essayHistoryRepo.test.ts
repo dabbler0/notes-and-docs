@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it } from 'vitest'
-import { createChildNode, createEssay, getEssay, getNode, loadNodeMap, saveNode } from '../essaysRepo'
-import { buildSnapshot, commitEssay, getCommitSnapshot, listEssayHistory, mergeEssays, revertEssayTo } from '../essayHistoryRepo'
+import { createChildNode, createEssay, getEssay, getNode, loadNodeMap, saveEssay, saveNode } from '../essaysRepo'
+import { buildSnapshot, commitEssay, commitPmEssay, getCommitPmSnapshot, getCommitSnapshot, listEssayHistory, mergeEssays, revertEssayTo, revertPmEssayTo } from '../essayHistoryRepo'
 import { groupEssays, getProject } from '../projectsRepo'
 import { reconstructSnapshotText } from '../../lib/essayHistory'
 import { markerHtml } from '../../lib/childMarkers'
@@ -18,16 +18,20 @@ beforeEach(async () => {
 
 /**
  * `createEssay` now creates a modern, `doc`-based essay with no `EssayNode`
- * tree at all (see its own doc comment in `essaysRepo.ts`). The functions
- * this file tests (`buildSnapshot`/`commitEssay`/`revertEssayTo`/
- * `mergeEssays`) still only know how to walk that old tree — their
- * `doc`-based counterparts are deferred to a later phase (see
- * `essayHistoryRepo.ts`'s own doc comment) — so every test here builds
- * that same old shape directly: an essay plus one real root `EssayNode`,
- * exactly what `createEssay` itself used to produce.
+ * tree at all (see its own doc comment in `essaysRepo.ts`). The legacy
+ * functions this file tests (`buildSnapshot`/`commitEssay`/`revertEssayTo`,
+ * and `mergeEssays`'s tree-based branch) only know how to walk that old
+ * tree, for an essay that genuinely hasn't been migrated yet (`doc`
+ * unset) — so every test here clears the `doc`/`comments` `createEssay`
+ * now sets before building that same old shape by hand: an essay plus one
+ * real root `EssayNode`, exactly what `createEssay` itself used to
+ * produce.
  */
 async function createEssayWithRootNode(title: string): Promise<{ essay: Essay; root: EssayNode }> {
   const essay = await createEssay(title)
+  essay.doc = undefined
+  essay.comments = undefined
+  await saveEssay(essay)
   const now = Date.now()
   const root: EssayNode = { id: essay.rootNodeId, essayId: essay.id, title: title || 'Untitled essay', versions: [], headVersionId: '', draftContent: '', createdAt: now, updatedAt: now }
   await saveNode(root)
@@ -153,6 +157,48 @@ describe('revertEssayTo', () => {
   })
 })
 
+describe('commitPmEssay / revertPmEssayTo', () => {
+  it('commits a migrated essay\'s doc, is a no-op when nothing changed, and reverts to an earlier commit by appending a new revert commit', async () => {
+    const essay = await createEssay('My Essay')
+    essay.title = 'Version A'
+    await saveEssay(essay)
+    const commitA = await commitPmEssay(essay, 'A')
+    expect(commitA?.kind).toBe('commit')
+
+    expect(await commitPmEssay(essay, 'A again')).toBeUndefined() // nothing changed since commitA
+
+    essay.title = 'Version B'
+    await saveEssay(essay)
+    await commitPmEssay(essay, 'B')
+
+    const beforeRevertCount = (await listEssayHistory(essay.id)).length
+    const reverted = await revertPmEssayTo(essay, commitA!.id)
+    expect(reverted?.title).toBe('Version A')
+
+    const afterRevertHistory = await listEssayHistory(essay.id)
+    expect(afterRevertHistory.length).toBe(beforeRevertCount + 1)
+    expect(afterRevertHistory[afterRevertHistory.length - 1].kind).toBe('revert')
+
+    const liveEssay = (await getEssay(essay.id))!
+    expect(liveEssay.title).toBe('Version A')
+  })
+
+  it('getCommitPmSnapshot reconstructs a specific commit without touching the live essay', async () => {
+    const essay = await createEssay('My Essay')
+    essay.title = 'Version A'
+    await saveEssay(essay)
+    const commitA = await commitPmEssay(essay, 'A')
+
+    essay.title = 'Version B'
+    await saveEssay(essay)
+    await commitPmEssay(essay, 'B')
+
+    const snapshotA = await getCommitPmSnapshot(essay.id, commitA!.id)
+    expect(snapshotA?.title).toBe('Version A')
+    expect((await getEssay(essay.id))!.title).toBe('Version B') // unaffected by viewing a past commit
+  })
+})
+
 describe('mergeEssays', () => {
   it('appends the base essay with the content of the appended one, preserving both histories', async () => {
     const { essay: base, root: baseRoot } = await createEssayWithRootNode('Base Essay')
@@ -239,6 +285,41 @@ describe('mergeEssays', () => {
     const essay = await createEssay('Solo')
     await mergeEssays(essay.id, essay.id)
     expect(await getEssay(essay.id)).toBeDefined()
+  })
+
+  it('for two migrated (doc-based) essays, splices history and moves the appended doc/comments onto the base', async () => {
+    const base = await createEssay('Base Essay')
+    base.title = 'Base v1'
+    await saveEssay(base)
+    await commitPmEssay(base, 'Base v1')
+    base.title = 'Base v2'
+    await saveEssay(base)
+    await commitPmEssay(base, 'Base v2')
+
+    const appended = await createEssay('Appended Essay')
+    appended.title = 'Appended v1'
+    await saveEssay(appended)
+    await commitPmEssay(appended, 'Appended v1')
+    appended.title = 'Appended v2'
+    await saveEssay(appended)
+    await commitPmEssay(appended, 'Appended v2')
+    const appendedDoc = appended.doc
+
+    await mergeEssays(base.id, appended.id)
+
+    const liveBase = (await getEssay(base.id))!
+    expect(liveBase.title).toBe('Appended v2')
+    expect(liveBase.doc).toEqual(appendedDoc)
+
+    const mergedHistory = await listEssayHistory(base.id)
+    expect(mergedHistory.some((c) => c.kind === 'merge')).toBe(true)
+    const lastSeq = mergedHistory[mergedHistory.length - 1].seq
+    const replayedText = reconstructSnapshotText(mergedHistory, lastSeq)
+    expect(JSON.parse(replayedText).title).toBe('Appended v2')
+
+    const appendedHistoryAfter = await listEssayHistory(appended.id)
+    expect(appendedHistoryAfter).toHaveLength(0)
+    expect((await getEssay(appended.id))!.deleted).toBe(true)
   })
 })
 

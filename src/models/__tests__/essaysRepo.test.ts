@@ -22,11 +22,16 @@ beforeEach(async () => {
  * below this point is specifically exercising the old per-node machinery
  * (`saveNode`'s bubble-up, `syncCitations`'s legacy-chip migration,
  * `cloneEssay`'s tree copy) — all still-real, still-synced behavior for an
- * essay that has one, so this builds that same old shape directly rather
- * than relying on `createEssay`'s own now-removed side effect.
+ * essay that genuinely hasn't been migrated yet (`doc` unset, exactly as a
+ * real pre-migration account's essay looks before `migrateEssay` runs), so
+ * this clears the `doc`/`comments` `createEssay` now sets before building
+ * the old tree shape by hand.
  */
 async function createEssayWithRootNode(title: string): Promise<{ essay: Essay; root: EssayNode }> {
   const essay = await createEssay(title)
+  essay.doc = undefined
+  essay.comments = undefined
+  await saveEssay(essay)
   const now = Date.now()
   const root: EssayNode = { id: essay.rootNodeId, essayId: essay.id, title: title || 'Untitled essay', versions: [], headVersionId: '', draftContent: '', createdAt: now, updatedAt: now }
   await saveNode(root)
@@ -335,5 +340,65 @@ describe('cloneEssay', () => {
 
   it('returns undefined for a nonexistent essay', async () => {
     expect(await cloneEssay('nonexistent-id')).toBeUndefined()
+  })
+
+  it('for a migrated (doc-based) essay, deep-copies the doc under fresh section ids and remaps comment anchors to fresh comment ids', async () => {
+    const essay = await createEssay('Original Essay')
+    const doc = essay.doc as { content: Array<Record<string, unknown>> }
+    const rootSection = doc.content[0] as Record<string, unknown>
+    const childSectionId = 'child-section-1'
+    rootSection.content = [
+      ...(rootSection.content as unknown[]),
+      {
+        type: 'section',
+        attrs: { id: childSectionId },
+        content: [
+          { type: 'section_title', content: [{ type: 'text', text: 'A Section' }] },
+          {
+            type: 'paragraph',
+            content: [{ type: 'text', text: 'Commented text.', marks: [{ type: 'comment_anchor', attrs: { commentId: 'comment-1' } }] }],
+          },
+        ],
+      },
+    ]
+    essay.comments = [{ id: 'comment-1', parentId: null, sectionId: childSectionId, anchorKind: 'text', anchorText: 'Commented text.', body: '<p>A note.</p>', resolved: false, createdAt: 1, updatedAt: 1 }]
+    await saveEssay(essay)
+
+    const clone = (await cloneEssay(essay.id))!
+    expect(clone.title).toBe('Copy of Original Essay')
+    expect(clone.id).not.toBe(essay.id)
+    expect(clone.rootNodeId).not.toBe(essay.rootNodeId)
+
+    const clonedDoc = clone.doc as { content: Array<Record<string, unknown>> }
+    const clonedRoot = clonedDoc.content[0] as Record<string, unknown>
+    expect((clonedRoot.attrs as Record<string, unknown>).id).toBe(clone.rootNodeId)
+    const clonedChild = (clonedRoot.content as Array<Record<string, unknown>>).find((n) => n.type === 'section')!
+    const clonedChildId = (clonedChild.attrs as Record<string, unknown>).id as string
+    expect(clonedChildId).not.toBe(childSectionId)
+
+    expect(clone.comments).toHaveLength(1)
+    const clonedComment = clone.comments![0]
+    expect(clonedComment.id).not.toBe('comment-1')
+    expect(clonedComment.sectionId).toBe(clonedChildId)
+
+    const clonedParagraph = (clonedChild.content as Array<Record<string, unknown>>).find((n) => n.type === 'paragraph')!
+    const clonedMark = ((clonedParagraph.content as Array<Record<string, unknown>>)[0].marks as Array<Record<string, unknown>>)[0]
+    expect((clonedMark.attrs as Record<string, unknown>).commentId).toBe(clonedComment.id)
+
+    // Original is untouched.
+    const originalComment = (await getEssay(essay.id))!.comments![0]
+    expect(originalComment.id).toBe('comment-1')
+    expect(originalComment.sectionId).toBe(childSectionId)
+  })
+
+  it('for a migrated essay, editing the clone never touches the original, and vice versa', async () => {
+    const essay = await createEssay('Original Essay')
+    const clone = (await cloneEssay(essay.id))!
+
+    clone.title = 'Edited only in the clone'
+    await saveEssay(clone)
+
+    const original = (await getEssay(essay.id))!
+    expect(original.title).toBe('Original Essay')
   })
 })
