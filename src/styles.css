@@ -3256,3 +3256,55 @@ select {
   background: var(--surface-2);
   color: var(--ink);
 }
+
+/* ---- PMEssayEditor (ProseMirror) ----------------------------------------
+   The new single-document editor (replaces .section-block/.node-content's
+   own per-shard contentEditable model — see PMEssayEditor.tsx's own doc
+   comment). Reuses .node-content's own typography (font-size/line-height/
+   max-width) for the editor's own text, and a nested-left-border convention
+   close to .section-block's own for recursive <section> nesting. */
+.pm-editor-root {
+  outline: none;
+}
+
+.pm-editor-root .ProseMirror {
+  outline: none;
+  font-size: 16px;
+  line-height: 1.7;
+  white-space: pre-wrap;
+  max-width: 760px;
+}
+
+.pm-editor-root .ProseMirror section {
+  border-left: 2px solid var(--border);
+  padding-left: 18px;
+  margin: 18px 0;
+}
+
+.pm-editor-root .ProseMirror section section {
+  border-left-color: var(--border);
+}
+
+.pm-editor-root .ProseMirror h2.section-title {
+  font-size: 18px;
+  font-weight: 700;
+  margin: 0 0 6px;
+  outline: none;
+}
+
+.pm-editor-root .ProseMirror section section h2.section-title {
+  font-size: 15px;
+}
+
+.pm-editor-root .ProseMirror section section section h2.section-title {
+  font-size: 13px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.pm-editor-root .ProseMirror blockquote {
+  border-left: 3px solid var(--ink-dim);
+  margin: 1em 0;
+  padding-left: 1em;
+  color: var(--ink-dim);
+}

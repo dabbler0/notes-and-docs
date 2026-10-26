@@ -1,97 +1,54 @@
 import { useEffect, useRef, useState } from 'preact/hooks'
-import { addFootnote, createChildNode, addComment, cloneEssay, getEssay, getNode, loadNodeMap, moveNode, saveEssay, saveNode } from '../../models/essaysRepo'
-import { commitEssay } from '../../models/essayHistoryRepo'
-import { groupEssays } from '../../models/projectsRepo'
-import { addToGraveyard } from '../../models/graveyardRepo'
-import { citationHtml, citationNoteSeparator, displayTitle } from '../../lib/bibtex'
-import { promptDialog } from '../../lib/prompt'
-import { extractAroundRange, insertHtmlAtRange, plainTextOfRange, stripInlineFormatting } from '../../lib/selection'
-import { escapeAttr, escapeHtml } from '../../lib/html'
-import { id } from '../../lib/id'
-import { buildParentMap, isPlaceholderTitle, placeholderTitle } from '../../lib/treeNumbering'
-import { getChildIds, reconstructContent, markerHtml, type MarkerPlacement } from '../../lib/childMarkers'
-import { emptyMathMarkers } from '../../lib/math'
-import type { Essay, EssayNode, Source } from '../../models/types'
+import type { Node as PMNode } from 'prosemirror-model'
+import type { EditorView } from 'prosemirror-view'
+import { toggleMark, lift } from 'prosemirror-commands'
+import { wrapInList, liftListItem } from 'prosemirror-schema-list'
+import type { EditorState, Transaction } from 'prosemirror-state'
+import { getEssay, saveEssay } from '../../models/essaysRepo'
+import { essaySchema } from '../../lib/pmSchema'
+import type { Essay } from '../../models/types'
 import { Icon } from '../Icon'
-import { SectionBlock } from './SectionBlock'
-import { EssayHistoryPanel } from './EssayHistoryPanel'
+import { PMEssayEditor } from './PMEssayEditor'
 import { NodeTree } from './NodeTree'
-import { CommentsPanel } from './CommentsPanel'
-import { GraveyardPanel } from './GraveyardPanel'
-import { CitationPickerDialog } from './CitationPickerDialog'
-import { QuoteInsertDialog } from './QuoteInsertDialog'
-import { ExportDialog } from './ExportDialog'
 import { AuthorNoteDialog } from './AuthorNoteDialog'
-import { WordCountDialog } from './WordCountDialog'
 import { SplitPickerDialog } from './SplitPickerDialog'
 import { Modal } from '../Modal'
 import { useIsMobile } from '../../lib/useIsMobile'
 
 /**
- * The whole essay as one continuous, scrollable document: every section's
- * own text is its own small editable block, stacked in reading order with a
- * heading in front of each (see SectionBlock). There is no separate "open a
- * node" navigation — splitting, commenting, citing etc. all act on whichever
- * section currently has the cursor, tracked here as `activeNodeId`.
+ * The whole essay as one continuous, real ProseMirror document — see
+ * `PMEssayEditor.tsx`'s own doc comment for the editing surface itself.
  *
- * Split-screen (two essays in the same project, edited side by side — see
- * `Project`'s own doc comment in `models/types.ts`) works by nesting this
- * same component inside itself: the primary instance holds `splitEssayId`
- * and renders a second `<EssayWorkspace embedded essayId={splitEssayId}>`
- * as a sibling pane, rather than duplicating the whole editing surface in
- * a separate component. `embedded` instances never show the outline or
- * comments/graveyard panel (no room for four side-by-side columns) and
- * never offer their own further split (no nested splits); the primary
- * instance hides *its own* outline/comments panels too the moment a split
- * is open, for the same reason.
+ * **Stage B1 of the ProseMirror migration's UI swap**: this is a
+ * deliberately trimmed-down version of the old, full-featured
+ * `EssayWorkspace`. Everything the old per-node `contentEditable` UI
+ * offered beyond basic text formatting and navigation — citations,
+ * quotes, source links, footnotes, comments (margin and inline), split/
+ * demote structural editing, "send to graveyard," export, word count,
+ * commit/history — comes back in later stages of the same migration (see
+ * the `claude/prosemirror-migration` branch's own plan), each restoring
+ * one slice via PM's own idiomatic mechanisms (transactions, commands,
+ * NodeViews) rather than the old DOM-surgery those features used to need.
+ * Nothing here is a permanent regression; it's staged work on this branch,
+ * not something shipped to production in this intermediate state.
+ *
+ * Split-screen works the same way it always has: nesting this same
+ * component inside itself (see `splitEssayId`) rather than a separate
+ * stripped-down renderer.
  */
 export function EssayWorkspace({ essayId, onBack, embedded = false }: { essayId: string; onBack: () => void; embedded?: boolean }) {
   const [essay, setEssay] = useState<Essay | null>(null)
-  const [nodeMap, setNodeMap] = useState<Map<string, EssayNode>>(new Map())
   const [essayTitle, setEssayTitle] = useState('')
+  const [doc, setDoc] = useState<PMNode | null>(null)
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set())
-  const [commentMode, setCommentMode] = useState(false)
-  const [showHistory, setShowHistory] = useState(false)
-  // Which other essay (if any) is open side by side with this one — see
-  // this component's own doc comment. Only ever set on the primary
-  // (non-embedded) instance; an embedded instance never has a split of its
-  // own.
   const [splitEssayId, setSplitEssayId] = useState<string | null>(null)
   const [showSplitPicker, setShowSplitPicker] = useState(false)
   const [showTree, setShowTree] = useState(true)
-  // The right-hand column shows either the comments panel or the graveyard
-  // panel, never both — 'null' collapses it entirely, matching showTree's
-  // own collapse behavior on the other side.
-  const [rightPanel, setRightPanel] = useState<'comments' | 'graveyard' | null>('comments')
   const isMobile = useIsMobile()
-  // On mobile the outline and the right-hand panel aren't collapsible side
-  // columns — there's no room for them to coexist with the document at all
-  // — they're separate full-screen views, opened and closed independently
-  // of the desktop-only showTree/rightPanel column state above.
   const [mobileTreeOpen, setMobileTreeOpen] = useState(false)
-  const [mobilePanel, setMobilePanel] = useState<'comments' | 'graveyard' | null>(null)
-  const [showCitation, setShowCitation] = useState(false)
-  const [showQuoteDialog, setShowQuoteDialog] = useState(false)
-  const [showLink, setShowLink] = useState(false)
-  const [showWordCount, setShowWordCount] = useState(false)
-  const [showExport, setShowExport] = useState(false)
   const [showAuthorNote, setShowAuthorNote] = useState(false)
-  const [pendingComment, setPendingComment] = useState<{
-    nodeId: string
-    /** Generated up front, before the composer ever opens, and already carried by the live `<mark class="comment-anchor">` — see `insertCommentAnchor`. */
-    commentId: string
-    anchorKind: 'text'
-    displayMode: 'margin' | 'inline'
-    text: string
-    anchorRect: { top: number; bottom: number; left: number; right: number }
-  } | null>(null)
-  const commentWidgetRef = useRef<HTMLDivElement>(null)
-  const [focusTitleId, setFocusTitleId] = useState<string | null>(null)
-  const [focusFootnoteId, setFocusFootnoteId] = useState<string | null>(null)
 
-  const activeNodeId = useRef<string | null>(null)
-  const activeEditorEl = useRef<HTMLDivElement | null>(null)
-  const savedRange = useRef<Range | null>(null)
+  const viewRef = useRef<EditorView | null>(null)
   const docScrollRef = useRef<HTMLDivElement>(null)
 
   async function reload() {
@@ -99,32 +56,51 @@ export function EssayWorkspace({ essayId, onBack, embedded = false }: { essayId:
     if (!e) return
     setEssay(e)
     setEssayTitle(e.title)
-    const map = await loadNodeMap(e)
-    setNodeMap(new Map(map))
   }
 
   useEffect(() => {
     reload()
   }, [essayId])
 
-  // Dismiss the comment widget on an outside click, same as the old modal's
-  // backdrop click — but there's no backdrop element to hang the handler on
-  // anymore, so listen on the document instead.
-  useEffect(() => {
-    if (!pendingComment) return
-    function onDown(e: MouseEvent) {
-      if (commentWidgetRef.current && !commentWidgetRef.current.contains(e.target as Node)) {
-        cancelPendingComment()
-      }
+  function run(command: (state: EditorState, dispatch?: (tr: Transaction) => void) => boolean) {
+    const view = viewRef.current
+    if (!view) return
+    command(view.state, view.dispatch)
+    view.focus()
+  }
+
+  /** PM has no single built-in "strip every mark" command the way `document.execCommand('removeFormat')` was — this removes every mark type the schema defines from the current selection. */
+  function clearFormatting(state: EditorState, dispatch?: (tr: Transaction) => void): boolean {
+    const { from, to, empty } = state.selection
+    if (empty) return false
+    if (dispatch) {
+      let tr = state.tr
+      for (const markType of Object.values(state.schema.marks)) tr = tr.removeMark(from, to, markType)
+      dispatch(tr)
     }
-    document.addEventListener('mousedown', onDown, true)
-    return () => document.removeEventListener('mousedown', onDown, true)
-  }, [pendingComment])
+    return true
+  }
 
   async function saveEssayTitle() {
     if (!essay) return
-    essay.title = essayTitle || 'Untitled essay'
+    const title = essayTitle || 'Untitled essay'
+    essay.title = title
     await saveEssay(essay)
+    // The document's own root section_title mirrors essay.title (see
+    // pmMigration.ts's own doc comment on why the root's displayed title
+    // always comes from essay.title, never the section's own) — pushing
+    // the rename into the live doc too keeps them from drifting apart
+    // again, the exact staleness bug the migration itself had to fix.
+    const view = viewRef.current
+    if (view) {
+      const root = view.state.doc.firstChild!
+      const titleNode = root.firstChild!
+      const contentStart = 2 // doc(0) -> section(1) -> section_title content starts at 2
+      const contentEnd = contentStart + titleNode.content.size
+      const trimmed = title.trim()
+      const tr = trimmed ? view.state.tr.replaceWith(contentStart, contentEnd, essaySchema.text(trimmed)) : view.state.tr.delete(contentStart, contentEnd)
+      view.dispatch(tr)
+    }
   }
 
   async function saveAuthorNote(note: string) {
@@ -134,113 +110,27 @@ export function EssayWorkspace({ essayId, onBack, embedded = false }: { essayId:
     setEssay({ ...essay })
   }
 
-  function onActivate(nodeId: string, el: HTMLDivElement) {
-    activeNodeId.current = nodeId
-    activeEditorEl.current = el
+  /** "Split view" → `SplitPickerDialog`'s "pick an existing project-mate" option: just opens it side by side, no data touched at all. */
+  function handleSelectExistingForSplit(other: Essay) {
+    setSplitEssayId(other.id)
+    setShowSplitPicker(false)
   }
 
   /**
-   * A node's own text can end exactly where a nested child's own trailing
-   * text also ends, one level in — a click meant for any one of those
-   * stacked, same-position "end of this node's text" spots needs to land
-   * on the right one, but the gap that normally separates one section
-   * from the next (`.section-header`'s own spacing) sits *between* them
-   * too, with nothing rendered there to actually receive a click. A click
-   * that lands in one of those gaps hits `.section-body`/`.editor-scroll`
-   * itself rather than any editable shard, which doesn't change focus at
-   * all — so typing afterward silently continues wherever focus already
-   * was (often an ancestor several levels up, edited earlier), which is
-   * exactly the "my text ended up on the wrong section" bug this guards
-   * against. Mirrors how most block editors (Google Docs included) handle
-   * a click below/between real content: fall back to whichever editable
-   * shard is vertically closest and place the cursor at its end, rather
-   * than leaving the click a no-op.
+   * "Split view" → `SplitPickerDialog`'s "Clone this essay" option. The
+   * old `cloneEssay` still only knows how to deep-copy the pre-migration
+   * `EssayNode` tree (its own `doc`-based rewrite is a later stage of
+   * this same migration) — every essay reachable from here already has
+   * `essay.doc` set, so cloning is disabled for now rather than silently
+   * producing a broken copy.
    */
-  function handleDocMissClick(e: MouseEvent) {
-    if (commentMode) return // nothing is editable in comment mode — this fallback would have nowhere useful to send focus
-    const target = e.target as HTMLElement
-    if (target.closest('.node-content, button, input, textarea, a, .comment-widget, .inline-comment-marker, .history-dropdown')) return
-    const container = docScrollRef.current
-    if (!container) return
-    const shards = Array.from(container.querySelectorAll<HTMLDivElement>('.node-content'))
-    if (shards.length === 0) return
-    const y = e.clientY
-    let closest: HTMLDivElement | null = null
-    let closestDist = Infinity
-    for (const el of shards) {
-      const r = el.getBoundingClientRect()
-      const dist = y < r.top ? r.top - y : y > r.bottom ? y - r.bottom : 0
-      if (dist < closestDist) {
-        closestDist = dist
-        closest = el
-      }
-    }
-    if (!closest) return
-    closest.focus()
-    onActivate(closest.closest('[data-node-id]')?.getAttribute('data-node-id') ?? '', closest)
-    const range = document.createRange()
-    range.selectNodeContents(closest)
-    range.collapse(false)
-    const sel = window.getSelection()
-    sel?.removeAllRanges()
-    sel?.addRange(range)
+  async function handleCloneForSplit() {
+    if (!essay) return
+    window.alert("Cloning isn't available yet in the new editor — coming in a later update.")
   }
 
-  /**
-   * Double-clicking a citation chip — the generated "(Author, Year)" label
-   * or its trailing page/note, block quote or bare "Cite" alike — offers a
-   * dedicated way to set or change that note, rather than relying on
-   * editing it in place: that *does* already work (its trailing text is
-   * ordinary editable content kept in sync by `SectionBlock`'s own
-   * `syncCitationNotes`, see that function's doc comment), but the click
-   * target to start doing so is a single zero-width space when there's no
-   * note yet — invisible, and genuinely hard to land a click on
-   * precisely. This is the fix for the common case that actually prompted
-   * it: a quote inserted by hand (no PDF to carry a page along with it)
-   * whose page was left blank the first time around.
-   */
-  async function handleCitationDblClick(e: MouseEvent) {
-    const chip = (e.target as HTMLElement).closest<HTMLElement>('.citation[data-cite-v]')
-    if (!chip) return
-    e.preventDefault()
-    const sectionEl = chip.closest<HTMLElement>('[data-node-id]')
-    const node = sectionEl ? nodeMap.get(sectionEl.getAttribute('data-node-id')!) : undefined
-    if (!node) return
-    const current = chip.getAttribute('data-note') ?? ''
-    const next = await promptDialog('Page number or other note for this citation?', { defaultValue: current, placeholder: 'e.g. p. 5', confirmLabel: 'Save' })
-    if (next === null) return
-    const note = next.trim()
-    const base = chip.querySelector(':scope > .citation-base')
-    const close = chip.querySelector(':scope > .citation-close')
-    // Clear everything between the base and close spans (the editable
-    // note), then re-insert the close span — see citationHtml()'s own doc
-    // comment for why the chip is split into base/note/close rather than
-    // base/note, now that the closing paren has to stay outside the note
-    // text so a fresh note still renders inside the parens.
-    while (base?.nextSibling) chip.removeChild(base.nextSibling)
-    if (note) {
-      chip.appendChild(document.createTextNode(citationNoteSeparator() + note))
-      chip.setAttribute('data-note', note)
-    } else {
-      // The same invisible caret-landing placeholder citationHtml() plants
-      // for a fresh, note-less citation — see its own doc comment.
-      chip.appendChild(document.createTextNode('​'))
-      chip.removeAttribute('data-note')
-    }
-    if (close) chip.appendChild(close)
-    const html = reconstructContent(node.id)
-    if (html != null) {
-      node.draftContent = html
-      await saveNode(node)
-    }
-    reload()
-  }
-
-  function captureRange() {
-    const sel = document.getSelection()
-    const el = activeEditorEl.current
-    if (!sel || sel.rangeCount === 0 || !el || !el.contains(sel.anchorNode)) return
-    savedRange.current = sel.getRangeAt(0).cloneRange()
+  function scrollToNode(sectionId: string) {
+    document.querySelector(`[data-section-id="${sectionId}"]`)?.scrollIntoView({ behavior: 'smooth', block: 'start' })
   }
 
   function toggleCollapse(id: string) {
@@ -252,472 +142,7 @@ export function EssayWorkspace({ essayId, onBack, embedded = false }: { essayId:
     })
   }
 
-  function activeNode(): EssayNode | null {
-    return activeNodeId.current ? (nodeMap.get(activeNodeId.current) ?? null) : null
-  }
-
-  /** Reconstructs the active node's content from its live DOM and saves it, falling back to its last-known content if it isn't mounted (shouldn't happen for the active node, but keeps this safe). */
-  async function persistActiveNode(node: EssayNode) {
-    const html = reconstructContent(node.id)
-    if (html != null) node.draftContent = html
-    await saveNode(node)
-  }
-
-  function exec(cmd: string) {
-    activeEditorEl.current?.focus()
-    document.execCommand(cmd)
-  }
-
-  /**
-   * Resets the current selection back to the editor's own default look —
-   * bold/italic/underline plus whatever font/size/color a paste happened to
-   * bring with it (from Word, Google Docs, or a styled web page; pasting
-   * here never strips a source's own formatting on the way in). Like
-   * `exec()` above, this is a direct edit to the live, uncontrolled
-   * contentEditable DOM rather than anything going through Preact state —
-   * `document.execCommand('removeFormat')` handles the ordinary cases
-   * (bold/italic/underline/lists), but its own handling of inline `style`
-   * attributes specifically is inconsistent across browsers, so
-   * `stripInlineFormatting` does a second, explicit pass over exactly the
-   * font/size/color kind of formatting a paste leaves behind — see that
-   * function's own doc comment. `exec()`'s sibling toolbar buttons never
-   * need to call `persistActiveNode` themselves because `execCommand` fires
-   * a real `input` event that the section's own `onInput` handler already
-   * saves from — `stripInlineFormatting`'s own DOM mutation doesn't, so this
-   * dispatches one manually to route through that exact same save path
-   * rather than introducing a second, divergent one.
-   */
-  function clearFormatting() {
-    const el = activeEditorEl.current
-    if (!el) return
-    el.focus()
-    const sel = document.getSelection()
-    if (!sel || sel.rangeCount === 0 || sel.isCollapsed || !el.contains(sel.getRangeAt(0).commonAncestorContainer)) return
-    document.execCommand('removeFormat')
-    const sel2 = document.getSelection()
-    if (!sel2 || sel2.rangeCount === 0 || !el.contains(sel2.getRangeAt(0).commonAncestorContainer)) return
-    stripInlineFormatting(sel2.getRangeAt(0))
-    el.dispatchEvent(new InputEvent('input', { bubbles: true }))
-  }
-
-  async function insertCitation(source: Source, note?: string) {
-    setShowCitation(false)
-    const range = savedRange.current
-    const el = activeEditorEl.current
-    const node = activeNode()
-    if (!range || !el || !node) return
-    el.focus()
-    insertHtmlAtRange(range, `${citationHtml(source, { note })}&nbsp;`)
-    await persistActiveNode(node)
-    reload()
-  }
-
-  async function insertQuote(source: Source, quote: string, page: number) {
-    setShowQuoteDialog(false)
-    const range = savedRange.current
-    const el = activeEditorEl.current
-    const node = activeNode()
-    if (!range || !el || !node) return
-    el.focus()
-    const html = `<blockquote class="quote" data-source-id="${source.id}" data-page="${page}">${escapeHtml(quote)}</blockquote><p>${citationHtml(source, { page })}&nbsp;</p>`
-    insertHtmlAtRange(range, html)
-    await persistActiveNode(node)
-    reload()
-  }
-
-  /**
-   * Same idea as insertQuote, but for a quote that belongs in the middle of
-   * a sentence rather than set off as its own block: the excerpt is wrapped
-   * as a `<span>` with literal curly quote marks around it (so it exports
-   * as plain punctuated text — Markdown/LaTeX export has no special-cased
-   * handling for it, same as a citation or a source link) instead of a
-   * `<blockquote>`, and inserted right at the cursor with no paragraph
-   * break, followed by the same citation chip.
-   */
-  async function insertInlineQuote(source: Source, quote: string, page: number) {
-    setShowQuoteDialog(false)
-    const range = savedRange.current
-    const el = activeEditorEl.current
-    const node = activeNode()
-    if (!range || !el || !node) return
-    el.focus()
-    const html = `<span class="quote-inline" data-source-id="${source.id}" data-page="${page}">“${escapeHtml(quote)}”</span>&nbsp;${citationHtml(source, { page })}&nbsp;`
-    insertHtmlAtRange(range, html)
-    await persistActiveNode(node)
-    reload()
-  }
-
-  /**
-   * The "Link to source" tool: wraps the current selection (or, with
-   * nothing selected, the source's own title) in a real hyperlink to that
-   * source's URL, then — per the same rule a citation follows a quote —
-   * always tacks on a citation right after it, so a reader can tell which
-   * source a bare link actually points to without having to visit it.
-   */
-  async function insertSourceLink(source: Source) {
-    setShowLink(false)
-    const range = savedRange.current
-    const el = activeEditorEl.current
-    const node = activeNode()
-    if (!range || !el || !node) return
-    const url = source.bibtex.fields.url
-    if (!url) {
-      alert('This source has no URL — add one from the Sources tab, or pick a different source.')
-      return
-    }
-    el.focus()
-    const linkText = range.collapsed ? displayTitle(source.bibtex) : range.toString()
-    const html = `<a class="source-link" data-source-id="${source.id}" href="${escapeAttr(url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(linkText)}</a>&nbsp;${citationHtml(source)}&nbsp;`
-    insertHtmlAtRange(range, html)
-    await persistActiveNode(node)
-    reload()
-  }
-
-  /**
-   * Inserts a new, empty footnote at the cursor and hands focus straight to
-   * its own body so it's ready to type into immediately — same shape as
-   * "Split into subsection" handing focus to the new child's title. The
-   * marker itself carries no visible *number* (SectionBlock numbers
-   * footnotes with a CSS counter, purely from marker order — see its own
-   * doc comment) so there's nothing here that could ever go stale if more
-   * footnotes get added before or after this one later — but it is
-   * immediately followed by one real, invisible character (`​`, a
-   * zero-width space, as a plain sibling *outside* the `<sup>`, never
-   * inside it): a genuinely empty inline element has no content for a
-   * browser to place a caret before-or-after relative to at a text
-   * boundary, so clicking (or typing) right where the marker visually sits
-   * — most commonly right after it, at the end of a paragraph — could land
-   * the caret *before* the marker instead, and typing there inserted new
-   * text ahead of the footnote rather than after it. Confirmed directly
-   * against a real browser, along with why the zero-width space has to sit
-   * *outside* the `<sup>` rather than as its own child text node (the more
-   * obvious-looking fix, tried first): with real content inside it, the
-   * browser treats a caret sitting right after the marker as still "inside"
-   * its inline formatting context, and pressing Enter there carries the
-   * `<sup>` — `data-footnote-id` and all — onto the freshly-created
-   * paragraph, duplicating one footnote's marker under two different
-   * pieces of text. A plain sibling text node gives the caret a real,
-   * unambiguous position immediately after the marker without ever being
-   * considered part of it, avoiding that entirely.
-   */
-  async function insertFootnote() {
-    const range = savedRange.current
-    const el = activeEditorEl.current
-    const node = activeNode()
-    if (!range || !el || !node) return
-    el.focus()
-    const footnote = addFootnote(node)
-    insertHtmlAtRange(range, `<sup class="footnote-ref" data-footnote-id="${footnote.id}"></sup>​`)
-    await persistActiveNode(node)
-    setFocusFootnoteId(footnote.id)
-    reload()
-  }
-
-  /**
-   * "Send to graveyard": cuts the current selection out of the document —
-   * same as a delete — but keeps it, verbatim HTML and all, in a fragment
-   * attached to this essay instead of discarding it, so it can be browsed
-   * and copied back in later from the graveyard panel. Unlike the
-   * insert-a-quote/citation tools above, this acts directly on whatever's
-   * currently selected rather than opening a dialog first — there's nothing
-   * to pick, so there's no reason to lose the live selection to a dialog
-   * stealing focus the way `captureRange` exists to work around elsewhere.
-   */
-  async function sendSelectionToGraveyard() {
-    const el = activeEditorEl.current
-    const node = activeNode()
-    if (!essay || !el || !node) return
-    const sel = window.getSelection()
-    if (!sel || sel.rangeCount === 0 || sel.isCollapsed || !el.contains(sel.anchorNode)) {
-      alert('Select some text in the document first.')
-      return
-    }
-    const range = sel.getRangeAt(0)
-    const div = document.createElement('div')
-    div.appendChild(range.cloneContents())
-    // The clone can carry a `.math-inline`/`.math-block` equation marker
-    // straight out of the live, already-rendered editor — strip its
-    // baked-in rendered children back out before this becomes the saved
-    // graveyard string, same reasoning as `extractRangeHtml`'s own call to
-    // `emptyMathMarkers` right below in lib/selection.ts.
-    const html = emptyMathMarkers(div).innerHTML
-    if (!html.trim()) return
-    range.deleteContents()
-    sel.removeAllRanges()
-    await persistActiveNode(node)
-    await addToGraveyard(essay.id, node.id, node.title || 'Untitled section', html)
-    setRightPanel('graveyard')
-    reload()
-  }
-
-  /**
-   * "Comment mode" just switches the document to a closer-to-print-view
-   * reading mode (editing off, selecting text to comment on still on) — see
-   * SectionBlock's own `contentEditable={!commentMode}`. It doesn't need to
-   * freeze anything into a new version anymore: comments live flat on the
-   * node now (see `Comment`'s own doc comment in models/types.ts), not
-   * pinned to whichever version happened to be head when they were added,
-   * so there's no version-boundary problem for entering comment mode to
-   * work around in the first place.
-   */
-  function toggleCommentMode() {
-    setCommentMode((v) => !v)
-  }
-
-  /**
-   * Freezes the essay's current full state (every node reachable from the
-   * root — see `buildSnapshot` in `essayHistoryRepo.ts`) as a new entry in
-   * its commit history, prompting for an optional label first. A no-op
-   * commit (nothing's changed since the last one) is reported rather than
-   * silently added as a pointless empty diff — see `commitEssay`'s own doc
-   * comment. Opens the History panel afterward so a successful commit is
-   * immediately visible, the same "see what you just did" feedback the old
-   * per-section version pill used to give by switching straight into
-   * comparison view.
-   */
-  async function handleCommit() {
-    if (!essay) return
-    const label = await promptDialog('Label for this commit? (optional)', { placeholder: 'e.g. "First full draft"' })
-    if (label === null) return
-    const commit = await commitEssay(essay, nodeMap, label.trim() || undefined)
-    if (!commit) {
-      alert('Nothing to commit — no changes since the last commit.')
-      return
-    }
-    setShowHistory(true)
-  }
-
-  /** "Split view" → `SplitPickerDialog`'s "pick an existing project-mate" option: just opens it side by side, no data touched at all. */
-  function handleSelectExistingForSplit(other: Essay) {
-    setSplitEssayId(other.id)
-    setShowSplitPicker(false)
-  }
-
-  /**
-   * "Split view" → `SplitPickerDialog`'s "Clone this essay" option: makes a
-   * full, independent copy (`cloneEssay` — new node ids throughout, so
-   * editing one side never touches the other), puts it in the same project
-   * as the original (creating one first if the original wasn't in one yet
-   * — see `groupEssays`), and opens it as the split's second pane.
-   */
-  async function handleCloneForSplit() {
-    if (!essay) return
-    const clone = await cloneEssay(essay.id)
-    if (!clone) return
-    await groupEssays(essay, clone)
-    setSplitEssayId(clone.id)
-    setShowSplitPicker(false)
-  }
-
-  /** Selecting text while in comment mode opens the same comment composer the toolbar's own "Comment" button does (see `beginComment`) — this is just the mouseup-triggered shortcut for it that only applies while comment mode is on. */
-  function handleMouseUpForComments() {
-    if (!commentMode) return
-    const sel = document.getSelection()
-    const el = activeEditorEl.current
-    const node = activeNode()
-    if (!sel || sel.isCollapsed || !el || !node) return
-    const range = sel.getRangeAt(0)
-    if (!el.contains(range.commonAncestorContainer)) return
-    const text = range.toString().trim()
-    if (!text) return
-    const rect = range.getBoundingClientRect()
-    const commentId = insertCommentAnchor(range.cloneRange(), 'margin')
-    setPendingComment({
-      nodeId: node.id,
-      commentId,
-      anchorKind: 'text',
-      displayMode: 'margin',
-      text,
-      anchorRect: { top: rect.top, bottom: rect.bottom, left: rect.left, right: rect.right },
-    })
-  }
-
-  /** A range collapsed at the very end of `el`'s own content — used by `beginComment` as its fallback insertion point when there's no real selection to anchor to. */
-  function collapseToEnd(el: HTMLElement): Range {
-    const r = document.createRange()
-    r.selectNodeContents(el)
-    r.collapse(false)
-    return r
-  }
-
-  /** A `DOMRect` is only useful for positioning the comment popover once it actually has some extent — a collapsed range/caret right at the very start of an empty, unrendered shard can report all zeroes, same failure mode `commentWidgetStyle`'s own caller has to guard against elsewhere. */
-  function usefulRect(r: DOMRect): boolean {
-    return r.width > 0 || r.height > 0 || r.top > 0 || r.left > 0
-  }
-
-  /**
-   * Wraps `range`'s own contents in a real `<mark class="comment-anchor"
-   * data-comment-id>` right away, at comment-*opening* time rather than
-   * waiting for `submitComment` the way this used to — so the anchor is
-   * genuine, persistent DOM for as long as the composer stays open, not
-   * just the browser's own transient selection highlight (which clears the
-   * instant focus moves to the composer's textarea, the exact "why did my
-   * highlight disappear" complaint this exists to fix). `.comment-anchor`
-   * already has its own `background` in styles.css — it was never a CSS
-   * gap, only a timing one: nothing existed yet for that rule to apply to
-   * while composing.
-   *
-   * Returns the commentId it generated (used by the id-less `id()` fallback
-   * below if the DOM mutation itself throws, so a comment can still be
-   * recorded — without a live anchor — even on that rare failure, same
-   * resilience `submitComment` used to provide via its own try/catch).
-   */
-  function insertCommentAnchor(range: Range, displayMode: 'margin' | 'inline'): string {
-    const commentId = id()
-    try {
-      const mark = document.createElement('mark')
-      mark.className = 'comment-anchor'
-      mark.dataset.commentId = commentId
-      const contents = range.extractContents()
-      mark.appendChild(contents)
-      range.insertNode(mark)
-      if (displayMode === 'inline') {
-        const marker = document.createElement('span')
-        marker.className = 'inline-comment-marker'
-        marker.setAttribute('data-comment-id', commentId)
-        marker.setAttribute('contenteditable', 'false')
-        mark.after(marker)
-      }
-    } catch {
-      /* the id is still returned — submitComment records the comment anyway, just without a live anchor to show for it */
-    }
-    return commentId
-  }
-
-  /**
-   * Undoes `insertCommentAnchor` without ever saving anything — the mark
-   * (and its inline marker sibling, if any) only ever lived in the live,
-   * uncommitted DOM, so unwrapping it here is enough; there's nothing
-   * persisted yet for a cancel to need to clean up in storage. Shared by
-   * the composer's own Cancel button, Escape inside it, and a click
-   * outside the widget — every way out of composing besides actually
-   * submitting.
-   */
-  function cancelPendingComment() {
-    if (pendingComment) {
-      const mark = document.querySelector<HTMLElement>(`mark.comment-anchor[data-comment-id="${cssEscape(pendingComment.commentId)}"]`)
-      if (mark) {
-        const marker = mark.nextElementSibling
-        if (marker?.classList.contains('inline-comment-marker') && marker.getAttribute('data-comment-id') === pendingComment.commentId) marker.remove()
-        mark.replaceWith(...Array.from(mark.childNodes))
-      }
-    }
-    setPendingComment(null)
-  }
-
-  /**
-   * The toolbar's "Comment" button — the primary way to add a comment now,
-   * usable whether or not comment mode is on (requirement: comment mode
-   * shouldn't be the *only* way to add one). Highlighted text opens the
-   * ordinary margin composer, same as selecting text in comment mode does
-   * — the mark wraps whatever's selected. Nothing highlighted creates an
-   * *inline* comment instead, anchored to the empty mark left right at the
-   * cursor (or at the end of the section's text, if there's no cursor
-   * position to speak of) — see `Comment.displayMode`'s own doc comment.
-   */
-  function beginComment() {
-    const range = savedRange.current
-    const el = activeEditorEl.current
-    const node = activeNode()
-    if (!node || !el) {
-      alert('Click into a section first.')
-      return
-    }
-    const usableRange = range && el.contains(range.commonAncestorContainer) ? range : collapseToEnd(el)
-    const text = usableRange.collapsed ? '' : usableRange.toString().trim()
-    const rect = usableRange.getBoundingClientRect()
-    const anchorRect = usefulRect(rect) ? rect : el.getBoundingClientRect()
-    const displayMode = usableRange.collapsed || !text ? 'inline' : 'margin'
-    const commentId = insertCommentAnchor(usableRange.cloneRange(), displayMode)
-    setPendingComment({
-      nodeId: node.id,
-      commentId,
-      anchorKind: 'text',
-      displayMode,
-      text,
-      anchorRect: { top: anchorRect.top, bottom: anchorRect.bottom, left: anchorRect.left, right: anchorRect.right },
-    })
-  }
-
-  async function submitComment(body: string) {
-    if (!pendingComment) return
-    const node = nodeMap.get(pendingComment.nodeId)
-    if (!node) return
-    await persistActiveNode(node)
-    await addComment(node, { anchorKind: pendingComment.anchorKind, anchorText: pendingComment.text, body, commentId: pendingComment.commentId, displayMode: pendingComment.displayMode })
-    setPendingComment(null)
-    reload()
-  }
-
-  /**
-   * The only way new subsections get created: the current selection is
-   * lifted out into a new child node, right where it was — like promoting
-   * a run of text into its own element. Whatever came before and after the
-   * selection is simply left alone, still this node's own text, now with
-   * the new subsection's marker sitting between the two halves of it (or
-   * before/after all of it, if the selection ran to one end).
-   */
-  function beginSplit() {
-    captureRange()
-    const range = savedRange.current
-    const el = activeEditorEl.current
-    const node = activeNode()
-    if (!essay || !range || range.collapsed || !el || !node) {
-      alert('Click into a section, then select the text you want to split into a subsection.')
-      return
-    }
-    // "before" and "after" both stay this node's own text — only the
-    // selection itself gets promoted — but they need pulling apart as
-    // separate strings so the new marker can land between them instead of
-    // them silently re-merging into one run with the marker tacked on at
-    // the end of it.
-    const { before, selected, after } = extractAroundRange(el, range)
-    el.innerHTML = before
-    ;(async () => {
-      // "Section 0: Untitled" is a throwaway placeholder — it just needs to
-      // match isPlaceholderTitle() so the renumbering pass below (which
-      // computes the real number from final position) rewrites it.
-      const midChild = await createChildNode(essay.id, 'Section 0: Untitled', selected)
-
-      const html = reconstructContent(node.id, { insertAfter: { el, html: markerHtml(midChild.id) + after } })
-      if (html != null) {
-        node.draftContent = html
-        await saveNode(node)
-      }
-
-      // Number every still-placeholder-titled child by its actual position
-      // (not just the new one) — splitting text that precedes an earlier
-      // subsection shifts that subsection along, and a stale "Section 1"
-      // sitting next to the new section it displaced would just be
-      // confusing. A child the user has already renamed is left alone.
-      const parentMap = buildParentMap(nodeMap, essay.rootNodeId)
-      const finalChildIds = getChildIds(node.draftContent)
-      for (let i = 0; i < finalChildIds.length; i++) {
-        const child = await getNode(finalChildIds[i])
-        if (!child || !isPlaceholderTitle(child.title)) continue
-        const wanted = placeholderTitle(nodeMap, parentMap, essay.rootNodeId, node.id, i)
-        if (child.title !== wanted) {
-          child.title = wanted
-          await saveNode(child)
-        }
-      }
-
-      setFocusTitleId(midChild.id)
-      reload()
-    })()
-  }
-
-  async function handleMove(nodeId: string, fromParentId: string, toParentId: string, placement: MarkerPlacement) {
-    await moveNode(nodeId, fromParentId, toParentId, placement)
-    reload()
-  }
-
-  function scrollToNode(nodeId: string) {
-    document.querySelector(`[data-node-id="${nodeId}"]`)?.scrollIntoView({ behavior: 'smooth', block: 'start' })
-  }
-
-  const rootNode = essay ? nodeMap.get(essay.rootNodeId) : undefined
-  if (!essay || !rootNode) return <div className="page-pad">Loading…</div>
+  if (!essay || !essay.doc) return <div className="page-pad">Loading…</div>
 
   return (
     <div className="essay-workspace-root">
@@ -731,18 +156,9 @@ export function EssayWorkspace({ essayId, onBack, embedded = false }: { essayId:
           onBlur={saveEssayTitle}
           style={{ border: 'none', outline: 'none', background: 'transparent', fontSize: 16, fontWeight: 700, flex: 1, minWidth: 0 }}
         />
-        <button className={`btn btn-ghost btn-sm toolbar-toggle${commentMode ? ' active' : ''}`} onClick={toggleCommentMode}>
-          <Icon name="comment" /> <span className="btn-label">{commentMode ? 'Commenting…' : 'Comment mode'}</span>
-        </button>
-        <button className="btn btn-ghost btn-sm" onClick={() => setShowExport(true)}>
-          <Icon name="export" /> <span className="btn-label">Export</span>
-        </button>
         <button className="btn btn-ghost btn-sm" title="Thanks/acknowledgements/disclosures for your author attribution in print exports" onClick={() => setShowAuthorNote(true)}>
           <Icon name="footnote" /> <span className="btn-label">Author note</span>
         </button>
-        {/* Split view: never offered on an embedded (secondary) instance —
-            no nested splits — and not on mobile, which has no room for two
-            essays side by side at all. */}
         {!embedded && !isMobile && (
           <button
             className={`btn btn-ghost btn-sm toolbar-toggle${splitEssayId ? ' active' : ''}`}
@@ -755,18 +171,12 @@ export function EssayWorkspace({ essayId, onBack, embedded = false }: { essayId:
       </div>
 
       <div className="workspace">
-        {/* On mobile there's no room for the outline as a persistent side
-            column, so it isn't rendered as one at all — "☰ Outline" below
-            opens it as its own full-screen view instead. Also hidden
-            outright (regardless of showTree) on an embedded split pane, or
-            on the primary instance once a split is actually open — see
-            this component's own doc comment on why. */}
         {!isMobile &&
           !embedded &&
           !splitEssayId &&
           (showTree ? (
             <div className="tree-panel-shell">
-              <NodeTree nodeMap={nodeMap} rootId={essay.rootNodeId} essayTitle={essayTitle} collapsed={collapsed} onToggleCollapse={toggleCollapse} onScrollTo={scrollToNode} onMove={handleMove} />
+              {doc && <NodeTree doc={doc} essayTitle={essayTitle} collapsed={collapsed} onToggleCollapse={toggleCollapse} onScrollTo={scrollToNode} />}
               <button className="panel-edge-toggle left" onClick={() => setShowTree(false)} title="Collapse outline">
                 ‹
               </button>
@@ -780,352 +190,86 @@ export function EssayWorkspace({ essayId, onBack, embedded = false }: { essayId:
         <div className="editor-panel">
           <div className="editor-toolbar doc-toolbar">
             {isMobile && (
-              <>
-                <button className="btn btn-sm" onClick={() => setMobileTreeOpen(true)}>
-                  ☰ Outline
-                </button>
-                <button className="btn btn-sm" onClick={() => setMobilePanel('comments')}>
-                  <Icon name="comment" /> Comments
-                </button>
-                <button className="btn btn-sm" onClick={() => setMobilePanel('graveyard')}>
-                  <Icon name="graveyard" /> Graveyard
-                </button>
-              </>
+              <button className="btn btn-sm" onClick={() => setMobileTreeOpen(true)}>
+                ☰ Outline
+              </button>
             )}
-            {/* Unlike every button below, this one works whether or not
-                comment mode is on — comment mode is no longer the only way
-                to add a comment (see `beginComment`'s own doc comment). */}
-            <button
-              className="btn btn-sm icon-btn-toolbar"
-              title="Add a comment on the current selection, or on the whole section if nothing's selected"
-              onMouseDown={(e) => {
-                e.preventDefault()
-                captureRange()
-              }}
-              onClick={beginComment}
-            >
-              <Icon name="comment" />
+            <button className="btn btn-sm icon-btn-toolbar" title="Bold (Mod-B)" onMouseDown={(e) => e.preventDefault()} onClick={() => run(toggleMark(essaySchema.marks.strong))}>
+              <Icon name="bold" />
+            </button>
+            <button className="btn btn-sm icon-btn-toolbar" title="Italic (Mod-I)" onMouseDown={(e) => e.preventDefault()} onClick={() => run(toggleMark(essaySchema.marks.em))}>
+              <Icon name="italic" />
+            </button>
+            <button className="btn btn-sm icon-btn-toolbar" title="Underline (Mod-U)" onMouseDown={(e) => e.preventDefault()} onClick={() => run(toggleMark(essaySchema.marks.underline))}>
+              <Icon name="underline" />
+            </button>
+            <button className="btn btn-sm icon-btn-toolbar" title="Clear formatting" onMouseDown={(e) => e.preventDefault()} onClick={() => run(clearFormatting)}>
+              <Icon name="clear-format" />
             </button>
             <span className="toolbar-divider" />
-            {/* Comment mode is meant to read close to a print view — nearly
-                every text-editing affordance below only applies to a live
-                draft, so they're hidden rather than just disabled while
-                commenting (selecting text to comment on still works fully;
-                see SectionBlock's own contentEditable={!commentMode}). */}
-            {!commentMode && (
-              <>
-                <button className="btn btn-sm icon-btn-toolbar" title="Bold" onMouseDown={(e) => e.preventDefault()} onClick={() => exec('bold')}>
-                  <Icon name="bold" />
-                </button>
-                <button className="btn btn-sm icon-btn-toolbar" title="Italic" onMouseDown={(e) => e.preventDefault()} onClick={() => exec('italic')}>
-                  <Icon name="italic" />
-                </button>
-                <button className="btn btn-sm icon-btn-toolbar" title="Underline" onMouseDown={(e) => e.preventDefault()} onClick={() => exec('underline')}>
-                  <Icon name="underline" />
-                </button>
-                <button
-                  className="btn btn-sm icon-btn-toolbar"
-                  title="Clear formatting — reset the selection to the editor's default font, size, and style (handy after pasting from somewhere else)"
-                  onMouseDown={(e) => e.preventDefault()}
-                  onClick={clearFormatting}
-                >
-                  <Icon name="clear-format" />
-                </button>
-                <span className="toolbar-divider" />
-                <button className="btn btn-sm icon-btn-toolbar" title="Bulleted list" onMouseDown={(e) => e.preventDefault()} onClick={() => exec('insertUnorderedList')}>
-                  <Icon name="list-ul" />
-                </button>
-                <button className="btn btn-sm icon-btn-toolbar" title="Numbered list" onMouseDown={(e) => e.preventDefault()} onClick={() => exec('insertOrderedList')}>
-                  <Icon name="list-ol" />
-                </button>
-                <span className="toolbar-divider" />
-                <button
-                  className="btn btn-sm icon-btn-toolbar"
-                  title="Cite a source"
-                  onMouseDown={(e) => {
-                    e.preventDefault()
-                    captureRange()
-                  }}
-                  onClick={() => setShowCitation(true)}
-                >
-                  <Icon name="cite" />
-                </button>
-                <button
-                  className="btn btn-sm icon-btn-toolbar"
-                  title="Insert a quote from a source"
-                  onMouseDown={(e) => {
-                    e.preventDefault()
-                    captureRange()
-                  }}
-                  onClick={() => setShowQuoteDialog(true)}
-                >
-                  <Icon name="quote" />
-                </button>
-                <button
-                  className="btn btn-sm icon-btn-toolbar"
-                  title="Link to a source"
-                  onMouseDown={(e) => {
-                    e.preventDefault()
-                    captureRange()
-                  }}
-                  onClick={() => setShowLink(true)}
-                >
-                  <Icon name="link" />
-                </button>
-                <button className="btn btn-sm icon-btn-toolbar" title="Split into subsection" onClick={beginSplit}>
-                  <Icon name="subsection" />
-                </button>
-                <button
-                  className="btn btn-sm icon-btn-toolbar"
-                  title="Insert footnote"
-                  onMouseDown={(e) => {
-                    e.preventDefault()
-                    captureRange()
-                  }}
-                  onClick={insertFootnote}
-                >
-                  <Icon name="footnote" />
-                </button>
-                <span className="toolbar-divider" />
-                <button className="btn btn-sm icon-btn-toolbar" title="Send selection to the graveyard" onMouseDown={(e) => e.preventDefault()} onClick={sendSelectionToGraveyard}>
-                  <Icon name="graveyard" />
-                </button>
-              </>
-            )}
-            <div className="spacer" />
+            <button className="btn btn-sm icon-btn-toolbar" title="Bulleted list" onMouseDown={(e) => e.preventDefault()} onClick={() => run(wrapInList(essaySchema.nodes.bullet_list))}>
+              <Icon name="list-ul" />
+            </button>
+            <button className="btn btn-sm icon-btn-toolbar" title="Numbered list" onMouseDown={(e) => e.preventDefault()} onClick={() => run(wrapInList(essaySchema.nodes.ordered_list))}>
+              <Icon name="list-ol" />
+            </button>
             <button
-              className="btn btn-sm icon-btn-toolbar"
-              title="Word count"
-              onMouseDown={(e) => {
-                e.preventDefault()
-                captureRange()
+              className="btn btn-sm"
+              title="Outdent list item / block"
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={() => {
+                const view = viewRef.current
+                if (!view) return
+                const liftItem = liftListItem(essaySchema.nodes.list_item)
+                run(liftItem(view.state) ? liftItem : lift)
               }}
-              onClick={() => setShowWordCount(true)}
             >
-              <Icon name="word-count" />
+              Outdent
             </button>
-            <button className="btn btn-sm icon-btn-toolbar" title="Commit: save the current state as a point you can come back to later" onClick={handleCommit}>
-              <Icon name="commit" />
-            </button>
-            <div style={{ position: 'relative' }}>
-              <button className={`btn btn-sm icon-btn-toolbar toolbar-toggle${showHistory ? ' active' : ''}`} title="Commit history" onClick={() => setShowHistory((v) => !v)}>
-                <Icon name="history" />
-              </button>
-              {showHistory && (
-                <EssayHistoryPanel
-                  essay={essay}
-                  nodeMap={nodeMap}
-                  onReverted={() => {
-                    setShowHistory(false)
-                    reload()
-                  }}
-                  onClose={() => setShowHistory(false)}
-                />
-              )}
-            </div>
+            <div className="spacer" />
           </div>
 
-          <div
-            className={`editor-scroll doc-scroll${commentMode ? ' comment-mode' : ''}`}
-            ref={docScrollRef}
-            onMouseUp={handleMouseUpForComments}
-            onClick={handleDocMissClick}
-            onDblClick={handleCitationDblClick}
-          >
-            <SectionBlock
-              node={rootNode}
-              nodeMap={nodeMap}
-              depth={0}
-              isRoot
-              collapsed={collapsed}
-              onToggleCollapse={toggleCollapse}
-              onActivate={onActivate}
-              onCaptureRange={captureRange}
-              onTitleChanged={reload}
-              focusTitleId={focusTitleId}
-              onTitleFocused={() => setFocusTitleId(null)}
-              focusFootnoteId={focusFootnoteId}
-              onFootnoteFocused={() => setFocusFootnoteId(null)}
-              commentMode={commentMode}
+          <div className="editor-scroll doc-scroll" ref={docScrollRef}>
+            <PMEssayEditor
+              essay={essay}
+              onViewReady={(view) => {
+                viewRef.current = view
+              }}
+              onViewDestroyed={() => {
+                viewRef.current = null
+              }}
+              onDocChanged={setDoc}
             />
           </div>
         </div>
 
-        {/* The split's second pane — a whole nested, independent
-            EssayWorkspace instance, not a stripped-down renderer of its
-            own (see this component's own doc comment on why). */}
         {splitEssayId && (
           <div className="split-pane-shell">
             <EssayWorkspace essayId={splitEssayId} embedded onBack={() => setSplitEssayId(null)} />
           </div>
         )}
-
-        {!isMobile &&
-          !embedded &&
-          !splitEssayId &&
-          (rightPanel ? (
-            <div className="comments-panel-shell">
-              <div className="right-panel-tabs">
-                <button className={`right-panel-tab${rightPanel === 'comments' ? ' active' : ''}`} title="Comments" onClick={() => setRightPanel('comments')}>
-                  <Icon name="comment" />
-                </button>
-                <button className={`right-panel-tab${rightPanel === 'graveyard' ? ' active' : ''}`} title="Graveyard" onClick={() => setRightPanel('graveyard')}>
-                  <Icon name="graveyard" />
-                </button>
-                <div className="spacer" />
-                <button className="btn btn-ghost btn-sm" onClick={() => setRightPanel(null)} title="Collapse panel">
-                  ›
-                </button>
-              </div>
-              {rightPanel === 'comments' ? <CommentsPanel nodeMap={nodeMap} onChanged={reload} scrollRef={docScrollRef} /> : <GraveyardPanel essayId={essay.id} onChanged={reload} />}
-            </div>
-          ) : (
-            <button className="panel-edge-tab right" onClick={() => setRightPanel('comments')} title="Show panel">
-              ‹
-            </button>
-          ))}
       </div>
 
       {mobileTreeOpen && (
         <Modal onClose={() => setMobileTreeOpen(false)}>
           <h2 style={{ marginTop: 0 }}>Outline</h2>
-          <NodeTree
-            nodeMap={nodeMap}
-            rootId={essay.rootNodeId}
-            essayTitle={essayTitle}
-            collapsed={collapsed}
-            onToggleCollapse={toggleCollapse}
-            onScrollTo={(nodeId) => {
-              setMobileTreeOpen(false)
-              // The target section needs to actually be in the DOM before
-              // scrollIntoView can find it — closing the view first can
-              // leave that a frame behind, so give it one.
-              requestAnimationFrame(() => scrollToNode(nodeId))
-            }}
-            onMove={handleMove}
-          />
-        </Modal>
-      )}
-
-      {mobilePanel && (
-        <Modal onClose={() => setMobilePanel(null)}>
-          <div className="tab-row">
-            <button className={`btn btn-sm${mobilePanel === 'comments' ? ' btn-primary' : ' btn-ghost'}`} onClick={() => setMobilePanel('comments')}>
-              <Icon name="comment" /> Comments
-            </button>
-            <button className={`btn btn-sm${mobilePanel === 'graveyard' ? ' btn-primary' : ' btn-ghost'}`} onClick={() => setMobilePanel('graveyard')}>
-              <Icon name="graveyard" /> Graveyard
-            </button>
-          </div>
-          {mobilePanel === 'comments' ? (
-            <CommentsPanel
-              nodeMap={nodeMap}
-              onChanged={reload}
-              scrollRef={docScrollRef}
-              mode="list"
-              onJumpTo={(nodeId) => {
-                setMobilePanel(null)
-                requestAnimationFrame(() => scrollToNode(nodeId))
+          {doc && (
+            <NodeTree
+              doc={doc}
+              essayTitle={essayTitle}
+              collapsed={collapsed}
+              onToggleCollapse={toggleCollapse}
+              onScrollTo={(sectionId) => {
+                setMobileTreeOpen(false)
+                requestAnimationFrame(() => scrollToNode(sectionId))
               }}
             />
-          ) : (
-            <GraveyardPanel essayId={essay.id} onChanged={reload} mode="list" />
           )}
         </Modal>
       )}
 
-      {pendingComment && (
-        <div
-          ref={commentWidgetRef}
-          className="comment-widget"
-          style={commentWidgetStyle(pendingComment.anchorRect)}
-        >
-          <p className="comment-widget-quote">{pendingComment.text ? `“${pendingComment.text}”` : 'New inline comment, right here'}</p>
-          <CommentComposer onCancel={cancelPendingComment} onSubmit={submitComment} />
-        </div>
-      )}
-
-      {showCitation && <CitationPickerDialog onClose={() => setShowCitation(false)} onSelect={insertCitation} />}
-      {showQuoteDialog && <QuoteInsertDialog onClose={() => setShowQuoteDialog(false)} onInsertBlock={insertQuote} onInsertInline={insertInlineQuote} />}
-      {showLink && <CitationPickerDialog title="Link to a source" requireUrl onClose={() => setShowLink(false)} onSelect={insertSourceLink} />}
-      {showExport && <ExportDialog essay={essay} nodeMap={nodeMap} onClose={() => setShowExport(false)} />}
       {showAuthorNote && <AuthorNoteDialog initialValue={essay.authorNote ?? ''} onSave={saveAuthorNote} onClose={() => setShowAuthorNote(false)} />}
-      {showWordCount && (
-        <WordCountDialog
-          rootNode={rootNode}
-          activeNode={activeNode()}
-          nodeMap={nodeMap}
-          selectedText={savedRange.current ? plainTextOfRange(savedRange.current) : ''}
-          onClose={() => setShowWordCount(false)}
-        />
-      )}
       {showSplitPicker && <SplitPickerDialog essay={essay} onClose={() => setShowSplitPicker(false)} onSelectExisting={handleSelectExistingForSplit} onClone={handleCloneForSplit} />}
     </div>
   )
-}
-
-function CommentComposer({ onCancel, onSubmit }: { onCancel: () => void; onSubmit: (body: string) => void }) {
-  const [body, setBody] = useState('')
-  // The `autoFocus` attribute alone isn't reliable here — this textarea
-  // mounts in response to a click on a toolbar button that itself just
-  // took focus, and the dynamic-autofocus path browsers support for an
-  // element inserted after initial page load doesn't always win that race.
-  // An explicit focus() on mount, the same fix PromptDialog.tsx already
-  // uses for its own input, works regardless.
-  const textareaRef = useRef<HTMLTextAreaElement>(null)
-  useEffect(() => {
-    textareaRef.current?.focus()
-  }, [])
-  return (
-    <>
-      <div className="field">
-        <textarea
-          ref={textareaRef}
-          rows={3}
-          value={body}
-          onInput={(e) => setBody((e.target as HTMLTextAreaElement).value)}
-          onKeyDown={(e) => {
-            if (e.key === 'Escape') onCancel()
-          }}
-        />
-      </div>
-      <div className="comment-widget-actions">
-        <button className="btn btn-ghost" onClick={onCancel}>
-          Cancel
-        </button>
-        <button className="btn btn-primary" disabled={!body.trim()} onClick={() => onSubmit(body.trim())}>
-          Add comment
-        </button>
-      </div>
-    </>
-  )
-}
-
-/**
- * Positions the comment widget just below the selection it's anchored to,
- * clamped so it never runs off the right or bottom edge of the viewport —
- * the anchorRect comes from `range.getBoundingClientRect()`, i.e. viewport
- * (not document) coordinates, so `position: fixed` is what we want here.
- */
-function commentWidgetStyle(rect: { top: number; bottom: number; left: number; right: number }) {
-  const margin = 12
-  const width = Math.min(320, window.innerWidth - margin * 2)
-  const maxLeft = Math.max(margin, window.innerWidth - width - margin)
-  const left = Math.min(Math.max(rect.left, margin), maxLeft)
-  const spaceBelow = window.innerHeight - rect.bottom
-  const openUpward = spaceBelow < 220 && rect.top > 220
-  const style: Record<string, string> = {
-    left: `${left}px`,
-    width: `${width}px`,
-  }
-  if (openUpward) {
-    style.bottom = `${window.innerHeight - rect.top + 8}px`
-  } else {
-    style.top = `${rect.bottom + 8}px`
-  }
-  return style
-}
-
-function cssEscape(s: string): string {
-  return typeof CSS !== 'undefined' && CSS.escape ? CSS.escape(s) : s.replace(/["\\]/g, '\\$&')
 }
