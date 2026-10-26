@@ -34,6 +34,7 @@ import {
   findEnclosingSection,
   insertCommentAnchorMark,
   removeCommentAnchorMark,
+  insertFootnote,
 } from './pmCommands'
 import { Modal } from '../Modal'
 import { useIsMobile } from '../../lib/useIsMobile'
@@ -528,6 +529,17 @@ export function EssayWorkspace({ essayId, onBack, embedded = false }: { essayId:
                 </button>
                 <button className="btn btn-sm icon-btn-toolbar" title="Demote: fold the current section back into its parent" onMouseDown={(e) => e.preventDefault()} onClick={() => run(demoteSection)}>
                   <Icon name="demote" />
+                </button>
+                <button
+                  className="btn btn-sm icon-btn-toolbar"
+                  title="Insert footnote"
+                  onMouseDown={(e) => e.preventDefault()}
+                  onClick={() => {
+                    const view = viewRef.current
+                    if (view) insertFootnote(view)
+                  }}
+                >
+                  <Icon name="footnote" />
                 </button>
                 <span className="toolbar-divider" />
                 <button className="btn btn-sm icon-btn-toolbar" title="Send selection to the graveyard" onMouseDown={(e) => e.preventDefault()} onClick={sendSelectionToGraveyard}>

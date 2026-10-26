@@ -8,8 +8,9 @@ import { splitListItem } from 'prosemirror-schema-list'
 import { Node as PMNode } from 'prosemirror-model'
 import { essaySchema } from '../../lib/pmSchema'
 import { saveEssay } from '../../models/essaysRepo'
-import { createCitationView, SectionView } from './pmNodeViews'
+import { createCitationView, SectionView, FootnoteView, createMathView } from './pmNodeViews'
 import { createCommentPlugin } from './pmCommentPlugin'
+import { createMathInputRules } from './pmInputRules'
 import type { Essay, Source } from '../../models/types'
 
 /**
@@ -146,6 +147,7 @@ export function PMEssayEditor({
           Enter: splitListItem(essaySchema.nodes.list_item),
         }),
         keymap(baseKeymap),
+        createMathInputRules(),
         createCommentPlugin(commentsHolder, (commentId) => onAnchorClickRef.current?.(commentId)),
       ],
     })
@@ -156,6 +158,9 @@ export function PMEssayEditor({
       nodeViews: {
         citation: (node, v, getPos) => new (createCitationView(sources))(node, v, getPos as () => number | undefined),
         section: (node, v, getPos) => new SectionView(node, v, getPos as () => number | undefined),
+        footnote: (node) => new FootnoteView(node),
+        math_inline: (node, v, getPos) => new (createMathView(false))(node, v, getPos as () => number | undefined),
+        math_block: (node, v, getPos) => new (createMathView(true))(node, v, getPos as () => number | undefined),
       },
       dispatchTransaction(tr) {
         const newState = view.state.apply(tr)

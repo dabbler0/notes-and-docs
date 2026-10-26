@@ -3385,3 +3385,56 @@ select {
 .inline-comment-popover {
   z-index: 40;
 }
+
+/* `footnote` (pmSchema.ts) — `pmNodeViews.ts`'s own `FootnoteView`.
+   Numbered the same way the old per-node model's own `sup.footnote-ref`
+   was: a pure CSS counter, reset once per `.section-body` (that rule
+   already applies here too — see its own doc comment, above — so nesting
+   doesn't bleed one section's numbering into another's). */
+.pm-editor-root .ProseMirror sup.pm-footnote-marker {
+  counter-increment: footnote;
+  cursor: pointer;
+  color: var(--accent);
+  font-weight: 700;
+}
+
+.pm-editor-root .ProseMirror sup.pm-footnote-marker::after {
+  content: counter(footnote);
+}
+
+.pm-editor-root .ProseMirror .pm-footnote-wrapper {
+  font-size: 13px;
+  color: var(--ink-dim);
+  background: var(--surface-2);
+  border-radius: 4px;
+  padding: 0 5px;
+  margin-left: 2px;
+}
+
+.pm-editor-root .ProseMirror .pm-footnote-body {
+  outline: none;
+}
+
+/* `math_inline`/`math_block` (pmSchema.ts) render as real custom elements
+   now (`<math-inline>`/`<math-block>`, `pmNodeViews.ts`'s own `MathView`)
+   rather than the old model's `<span class="math-inline/math-block">` —
+   same base display rules, ported over unchanged (including the
+   `inline-block`-not-`block` trick for the full-line variant; see its own
+   doc comment, originally on `.node-content span.math-block`, for the
+   Chromium caret bug this works around — nothing about that bug was
+   specific to the old DOM model). */
+.pm-editor-root .ProseMirror math-inline {
+  display: inline-block;
+  vertical-align: middle;
+}
+
+.pm-editor-root .ProseMirror math-block {
+  display: inline-block;
+  width: 100%;
+  margin: 8px 0;
+  text-align: center;
+}
+
+.pm-editor-root .ProseMirror math-block .katex-display {
+  margin: 0;
+}

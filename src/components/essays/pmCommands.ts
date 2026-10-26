@@ -44,6 +44,36 @@ export function insertCitation(view: EditorView, source: Source, note?: string):
 }
 
 /**
+ * Inserts a `footnote` at the current selection (replacing it, same as
+ * every other insertion command here) and places the cursor right inside
+ * its own body, ready to type immediately: the toolbar's "Insert
+ * footnote" button, the PM-native counterpart of the old model's own
+ * `insertFootnote` (which created a separate `Footnote` record *and*
+ * spliced a `<sup class="footnote-ref">` marker into the text — see
+ * `pmSchema.ts`'s own doc comment on why a footnote's body is real
+ * document content now, with nothing else to create alongside it).
+ *
+ * Seeded with one zero-width space rather than left genuinely empty —
+ * confirmed live that a truly empty `footnote` (an inline, non-textblock
+ * node — see `FootnoteView`'s own doc comment) gives the browser nothing
+ * to actually land a real cursor on, so the selection silently fell back
+ * to wherever it was *before* the insert instead, and everything typed
+ * right after landed in the surrounding paragraph, not the footnote at
+ * all. The same placeholder `pmMigration.ts`'s own `walkInline` already
+ * uses for a migrated empty comment anchor, for the same underlying
+ * reason (see `insertCommentAnchorMark`, above).
+ */
+export function insertFootnote(view: EditorView): void {
+  const { state } = view
+  const from = state.selection.from
+  const footnoteNode = essaySchema.nodes.footnote.create(null, essaySchema.text('​'))
+  const tr = state.tr.replaceSelectionWith(footnoteNode, false)
+  tr.setSelection(TextSelection.create(tr.doc, from + 2))
+  view.dispatch(tr)
+  view.focus()
+}
+
+/**
  * A block quote pulled from a source, followed by its own citation — same
  * shape `insertQuote` in the old `EssayWorkspace.tsx` produced
  * (`<blockquote class="quote">` + a citation paragraph right after it).

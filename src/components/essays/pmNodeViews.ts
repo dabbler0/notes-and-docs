@@ -1,7 +1,9 @@
 import type { Node as PMNode } from 'prosemirror-model'
+import { TextSelection } from 'prosemirror-state'
 import type { EditorView, NodeView, ViewMutationRecord } from 'prosemirror-view'
 import { citationLabel } from '../../lib/bibtex'
 import { promptDialog } from '../../lib/prompt'
+import { renderMathHtml } from '../../lib/math'
 import type { Source } from '../../models/types'
 
 /**
@@ -159,5 +161,198 @@ export class SectionView implements NodeView {
   // document.
   ignoreMutation(record: ViewMutationRecord) {
     return !this.contentDOM.contains(record.target as Node)
+  }
+}
+
+/**
+ * `footnote` NodeView — ported from the standalone prototype's own
+ * `FootnoteView` (`pm-editor/src/nodeViews.ts`) essentially unchanged; see
+ * that file's own doc comment for the three specific, hard-won reasons
+ * `update()`/`ignoreMutation()` both unconditionally return `true` and why
+ * `pmSchema.ts`'s own `footnote` node uses `content: "inline*"`, not
+ * `"paragraph+"` — all still apply verbatim here.
+ *
+ * A footnote's own body is real, directly-editable PM content now — a
+ * genuine simplification over the old per-node model's separate
+ * `Footnote[]` array, numbered-list-at-the-bottom-of-the-section
+ * rendering, and orphan-pruning machinery (`pruneOrphanedFootnotes`,
+ * `essaysRepo.ts`): there's no second record to keep in sync with the
+ * marker at all. The marker itself (`<sup class="pm-footnote-marker">`)
+ * is numbered the same way the old model's own `sup.footnote-ref` was —
+ * a pure CSS counter scoped to the enclosing `.section-body` (see
+ * styles.css), so nothing here tracks or stores a footnote's own number.
+ *
+ * Starts open when the footnote is still empty — unlike the prototype
+ * (which never needed to, since nothing there actually created a
+ * footnote through the live editor), `pmCommands.ts`'s own
+ * `insertFootnote` places the cursor right inside a brand new one so it's
+ * ready to type into immediately; `contentDOM` sits inside `wrapper`,
+ * which starts `display: none` otherwise, and a browser can't put a real
+ * selection inside an element nobody can see (confirmed live: the
+ * selection silently fell back to the surrounding paragraph instead,
+ * with everything typed landing there rather than in the footnote at
+ * all — the exact same "needs a real place to land" reasoning
+ * `createMathView`'s own `editing = !node.attrs.latex` already applies
+ * for a freshly-created, still-empty equation).
+ */
+export class FootnoteView implements NodeView {
+  dom: HTMLElement
+  contentDOM: HTMLElement
+  private wrapper: HTMLElement
+  private marker: HTMLElement
+  private open: boolean
+
+  constructor(node: PMNode) {
+    this.open = !node.textContent.replace(/​/g, '')
+    this.dom = document.createElement('footnote')
+    this.dom.className = 'pm-footnote'
+    this.marker = document.createElement('sup')
+    this.marker.className = 'pm-footnote-marker'
+    this.marker.title = 'Click to expand/collapse this footnote’s own body'
+    this.wrapper = document.createElement('span')
+    this.wrapper.className = 'pm-footnote-wrapper'
+    this.wrapper.style.display = this.open ? 'inline' : 'none'
+    this.contentDOM = document.createElement('span')
+    this.contentDOM.className = 'pm-footnote-body'
+    this.wrapper.appendChild(this.contentDOM)
+    this.dom.append(this.marker, this.wrapper)
+    this.marker.addEventListener('mousedown', (e) => {
+      e.preventDefault()
+      this.open = !this.open
+      this.wrapper.style.display = this.open ? 'inline' : 'none'
+    })
+  }
+
+  update(node: PMNode) {
+    return node.type.name === 'footnote'
+  }
+
+  stopEvent(event: Event) {
+    return event.target === this.marker
+  }
+
+  ignoreMutation() {
+    return true
+  }
+}
+
+/**
+ * `math_inline`/`math_block` NodeView — the real-KaTeX, click-to-edit
+ * upgrade the prototype's own `mathView` (which just prompted for raw
+ * LaTeX text) deferred to the actual migration. Reuses `renderMathHtml`
+ * (`lib/math.ts`) and the old per-node model's own `.math-rendered`/
+ * `.math-editor-input` styling unchanged — only the editing mechanism
+ * underneath is new: a plain `<textarea>` this NodeView owns directly
+ * (committing via `setNodeMarkup`, same transaction-based pattern as
+ * every other NodeView here) rather than the old model's own
+ * `MathBody.tsx`, which was built around a literal `data-latex` DOM
+ * attribute and a `.node-content` shard to dispatch an `input` event
+ * into — neither of which exists in this model (there's no shard, and an
+ * atom's own `attrs.latex` already *is* the live, single source of
+ * truth, no separate DOM-vs-stored-data sync step needed).
+ *
+ * A freshly-created, still-empty equation (see `pmInputRules.ts`'s own
+ * `$$`/`\(` shortcuts) starts open for editing automatically — "ready to
+ * type LaTeX into immediately" was the whole point of a typed shortcut
+ * creating one in the first place, same as the old model's own
+ * `autoMathify`. Committing with empty text removes the node outright
+ * rather than leaving a permanently-empty bubble behind, the equation
+ * counterpart of the old model's `handleSourceChipEmptying`.
+ */
+export function createMathView(displayMode: boolean): new (node: PMNode, view: EditorView, getPos: () => number | undefined) => NodeView {
+  return class MathView implements NodeView {
+    dom: HTMLElement
+    node: PMNode
+    view: EditorView
+    getPos: () => number | undefined
+    private editing: boolean
+
+    constructor(node: PMNode, view: EditorView, getPos: () => number | undefined) {
+      this.node = node
+      this.view = view
+      this.getPos = getPos
+      this.editing = !node.attrs.latex
+      this.dom = document.createElement(displayMode ? 'math-block' : 'math-inline')
+      this.dom.addEventListener('click', () => {
+        if (this.editing) return
+        this.editing = true
+        this.render()
+      })
+      this.render()
+    }
+
+    private render() {
+      this.dom.innerHTML = ''
+      if (this.editing) {
+        this.dom.className = `math-editor${displayMode ? ' math-editor-block' : ' math-editor-inline'}`
+        const textarea = document.createElement('textarea')
+        textarea.className = 'math-editor-input'
+        textarea.rows = displayMode ? 2 : 1
+        textarea.placeholder = 'LaTeX, e.g. x^2 + y^2 = z^2'
+        textarea.value = this.node.attrs.latex
+        textarea.addEventListener('keydown', (e) => {
+          e.stopPropagation()
+          if (e.key === 'Enter' && !e.shiftKey) {
+            e.preventDefault()
+            this.commit(textarea.value.trim())
+          } else if (e.key === 'Escape') {
+            e.preventDefault()
+            this.commit((this.node.attrs.latex as string).trim())
+          }
+        })
+        textarea.addEventListener('blur', () => this.commit(textarea.value.trim()))
+        this.dom.appendChild(textarea)
+        requestAnimationFrame(() => {
+          textarea.focus()
+          textarea.select()
+        })
+      } else {
+        const latex = this.node.attrs.latex as string
+        if (latex) {
+          this.dom.className = `math-rendered${displayMode ? ' math-rendered-block' : ' math-rendered-inline'}`
+          this.dom.innerHTML = renderMathHtml(latex, displayMode)
+        } else {
+          this.dom.className = `math-rendered math-rendered-empty${displayMode ? ' math-rendered-block' : ' math-rendered-inline'}`
+          this.dom.textContent = '(empty equation — click to write LaTeX)'
+        }
+      }
+    }
+
+    private commit(value: string) {
+      const pos = this.getPos()
+      if (pos == null) return
+      this.editing = false
+      if (value === '') {
+        this.view.dispatch(this.view.state.tr.delete(pos, pos + this.node.nodeSize))
+        // The node itself is gone — PM destroys this NodeView along with
+        // it, so there's nothing of our own left to re-render.
+      } else {
+        let tr = this.view.state.tr.setNodeMarkup(pos, undefined, { latex: value })
+        tr = tr.setSelection(TextSelection.near(tr.doc.resolve(pos + 1), 1))
+        this.view.dispatch(tr)
+        // Escape re-commits the *same* latex the node already had — a
+        // value-equal node (`node.eq()` true) is indistinguishable from
+        // "nothing changed" to ProseMirror's own reconciliation, which
+        // skips calling `update()` below as a real, confirmed-live
+        // optimization (the editor otherwise stayed visibly stuck open
+        // after Escape, forever, since nothing ever flipped it back).
+        // Rendering here directly, instead of trusting `update()` to run,
+        // means `editing`'s own DOM state is never contingent on whether
+        // PM happened to consider this particular commit a "real" change.
+        this.render()
+      }
+      this.view.focus()
+    }
+
+    update(node: PMNode) {
+      if (node.type.name !== (displayMode ? 'math_block' : 'math_inline')) return false
+      this.node = node
+      this.render()
+      return true
+    }
+
+    stopEvent() {
+      return true
+    }
   }
 }
