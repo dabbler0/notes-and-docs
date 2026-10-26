@@ -63,6 +63,25 @@ export interface LegacyEssay {
 }
 
 /**
+ * A snipped-out chunk of a node's own content, kept for recovery
+ * (`sendSelectionToGraveyard` in the real app's `EssayWorkspace.tsx`) —
+ * `html` is a plain cloned-selection fragment, the same shape as one of a
+ * node's own text segments (see `migrate.ts`'s own `migrateGraveyardFragment`,
+ * which reuses `htmlToBlocks` for exactly that reason), never a whole
+ * node or subtree. Never has its own footnotes/comments of its own — a
+ * footnote reference caught inside the cut selection still resolves
+ * against `nodeId`'s own `footnotes` array, same as live.
+ */
+export interface LegacyGraveyardFragment {
+  id: string
+  essayId: string
+  nodeId: string
+  nodeTitle: string
+  html: string
+  deleted?: boolean
+}
+
+/**
  * The migrated app's own `Comment` shape — mostly unchanged from the real
  * app's (see its own doc comment in `models/types.ts`), with one new field
  * forced by the "maximal" single-document model: comments are no longer

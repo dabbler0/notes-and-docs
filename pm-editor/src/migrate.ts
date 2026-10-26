@@ -16,7 +16,7 @@
 import { getChildIds, parseSegments } from './childMarkers'
 import { extractLegacyCitationNote } from './bibtex'
 import { id } from './id'
-import type { Comment, LegacyComment, LegacyEssay, LegacyEssayNode, Source } from './types'
+import type { Comment, LegacyComment, LegacyEssay, LegacyEssayNode, LegacyGraveyardFragment, Source } from './types'
 
 /** Loose on purpose — this file only ever builds plain JSON objects matching `schema.ts`'s own shape, checked for real by round-tripping through `Node.fromJSON(essaySchema, ...)` in `migrate.test.ts`, not by a parallel hand-maintained TypeScript type here. */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -66,15 +66,70 @@ export function migrateEssay(essay: LegacyEssay, allNodes: LegacyEssayNode[], so
   const root = nodeMap.get(essay.rootNodeId)
   if (!root) {
     warnings.push(`This essay's own root section (${essay.rootNodeId}) is missing or was deleted — produced an empty document instead of losing the essay entirely.`)
-    return { title: essay.title, doc: { type: 'doc', content: [emptySection(id())] }, comments, warnings }
+    return { title: essay.title, doc: { type: 'doc', content: [emptySection(id(), essay.title)] }, comments, warnings }
   }
   const ctx: MigrateCtx = { nodeMap, sources, warnings, comments, seenNodeIds: new Set(), currentNode: root }
   const rootSection = convertNode(root, ctx)
+  // The document's own top-level title is the *essay's* own title, never
+  // the root node's own `.title` — `convertNode` (shared with every
+  // subsection) fills it with `node.title` by default, which is right for
+  // a subsection but wrong here: the real app's own title-rename flow
+  // (`EssayWorkspace.tsx`'s `saveEssayTitle`) only ever writes
+  // `essay.title`, never the root `EssayNode`'s own `title` field, which
+  // stays frozen at whatever it was when `createEssay` first seeded it
+  // equal to the essay's *original* title — any essay renamed since
+  // creation has the two diverge. `essayToMarkdown`/`essayToLatex` already
+  // get this right (`` `# ${essay.title}` ``/`` `\title{${essay.title}}` ``,
+  // never `node.title`) — overriding it here after the fact, rather than
+  // threading an essay-title override through `convertNode` itself, keeps
+  // that function identical for every other (non-root) call site.
+  rootSection.content[0] = sectionTitleJson(essay.title)
   return { title: essay.title, doc: { type: 'doc', content: [rootSection] }, comments, warnings }
 }
 
-function emptySection(sectionId: string): PMJson {
-  return { type: 'section', attrs: { id: sectionId }, content: [{ type: 'section_title' }, { type: 'paragraph' }] }
+function emptySection(sectionId: string, title = ''): PMJson {
+  return { type: 'section', attrs: { id: sectionId }, content: [sectionTitleJson(title), { type: 'paragraph' }] }
+}
+
+/**
+ * A graveyard fragment (`LegacyGraveyardFragment`) isn't a node in any
+ * essay's live tree — just a cut-out shard of one's own content, kept for
+ * recovery — so it gets its own standalone one-section `MigratedEssay`
+ * instead of going through `convertNode`: reuses `htmlToBlocks` (the exact
+ * same text-segment conversion a live node's own content goes through)
+ * directly on `fragment.html`. Footnote references inside the cut
+ * selection still resolve against `originNode`'s own `footnotes` array —
+ * the same node the fragment was cut from, found by `nodeId` in the full
+ * node list the way `buildLegacyNodeMap` finds everything else — falling
+ * back to an honest warning (not a crash) when that node's gone too. A
+ * child-embed marker caught inside the cut selection (the selection
+ * spanned clean across a whole subsection chip) has no subtree to recover
+ * here — the fragment's own `html` never carried that child's content,
+ * only the marker div pointing at an id — so it's dropped with its own
+ * warning rather than silently vanishing.
+ */
+export function migrateGraveyardFragment(fragment: LegacyGraveyardFragment, allNodes: LegacyEssayNode[], sources: Map<string, Source>): MigratedEssay {
+  const warnings: string[] = []
+  const originNode = allNodes.find((n) => n.id === fragment.nodeId)
+  if (!originNode) {
+    warnings.push(`This fragment's original section (${fragment.nodeId}) no longer exists — any footnote references inside it couldn't be resolved.`)
+  }
+  const childIds = getChildIds(fragment.html)
+  if (childIds.length > 0) {
+    warnings.push(`This fragment includes ${childIds.length} subsection marker(s) whose own content isn't part of the cut fragment itself — dropped.`)
+  }
+  const ctx: MigrateCtx = {
+    nodeMap: new Map(),
+    sources,
+    warnings,
+    comments: [],
+    seenNodeIds: new Set(),
+    currentNode: originNode ?? { id: fragment.nodeId, essayId: fragment.essayId, title: fragment.nodeTitle, draftContent: '' },
+  }
+  const blocks = htmlToBlocks(fragment.html, ctx)
+  const content: PMJson[] = [sectionTitleJson(fragment.nodeTitle), ...(blocks.length ? blocks : [{ type: 'paragraph' }])]
+  const title = fragment.nodeTitle || 'Untitled section'
+  return { title, doc: { type: 'doc', content: [{ type: 'section', attrs: { id: fragment.id }, content }] }, comments: [], warnings }
 }
 
 function sectionTitleJson(title: string): PMJson {
@@ -143,49 +198,74 @@ function migrateComment(c: LegacyComment, sectionId: string): Comment {
   }
 }
 
-/** Splits one text segment's HTML into PM block nodes — the structural mirror of `export.ts`'s own `htmlToMarkdownBlocks`. */
+/**
+ * Splits one text segment's HTML into PM block nodes — the structural
+ * mirror of `export.ts`'s own `htmlToMarkdownBlocks`, genuinely recursive
+ * the same way that function is (`div`/`p` both `flush()`, walk every
+ * child — including a further-nested `div`/`p`, `blockquote`, list, or
+ * math block — then `flush()` again), not just a single flat pass over
+ * `doc.body`'s own direct children. A plain top-level-only pass misreads
+ * two real structural cases the old app's own contentEditable HTML
+ * routinely produces: a `<blockquote>` (or list, or math block) sitting
+ * nested a level or two down inside a wrapping `<div>` — seen live in
+ * older stored content — silently flattens to plain inline text instead of
+ * becoming its own block (nothing in `walkInline`'s own default case
+ * understands any of those tags, by design — they're never meant to
+ * appear inline); and any paragraph break nested below the top level is
+ * simply never seen at all.
+ */
 function htmlToBlocks(html: string, ctx: MigrateCtx): PMJson[] {
   const doc = new DOMParser().parseFromString(html || '', 'text/html')
   const blocks: PMJson[] = []
   let current: PMJson[] = []
+  // Drops a block that amounts to nothing (see `isMeaningfulInline`) —
+  // mirrors `htmlToMarkdownBlocks`'s own `if (t) blocks.push(t)` after
+  // `.trim()`ing — rather than keeping it as a spurious extra blank
+  // paragraph. The most common real source: a whitespace-only text node
+  // (indentation, a line-wrap) sitting directly between two sibling
+  // `<div>`s in pretty-printed or pasted-in HTML, which a browser's own
+  // ordinary text flow would never have rendered as a paragraph break on
+  // its own either.
   const flush = () => {
-    if (current.length > 0) {
-      blocks.push({ type: 'paragraph', content: current })
-      current = []
-    }
+    if (current.some(isMeaningfulInline)) blocks.push({ type: 'paragraph', content: trimHardBreaks(current) })
+    current = []
   }
-  for (const node of Array.from(doc.body.childNodes)) {
+  const walk = (node: Node) => {
     if (node.nodeType === Node.TEXT_NODE) {
       walkInline(node, [], ctx, current)
-      continue
+      return
     }
-    if (node.nodeType !== Node.ELEMENT_NODE) continue
+    if (node.nodeType !== Node.ELEMENT_NODE) return
     const el = node as HTMLElement
     const tag = el.tagName.toLowerCase()
     if (tag === 'blockquote') {
       flush()
       blocks.push(blockquoteToPM(el, ctx))
-      continue
+      return
     }
     if (tag === 'span' && el.classList.contains('math-block')) {
       flush()
       blocks.push({ type: 'math_block', attrs: { latex: el.getAttribute('data-latex') ?? '' } })
-      continue
+      return
     }
     if (tag === 'ul' || tag === 'ol') {
       flush()
       blocks.push(listToPM(el, ctx))
-      continue
+      return
     }
     if (tag === 'div' || tag === 'p') {
       flush()
-      const inline: PMJson[] = []
-      for (const child of Array.from(el.childNodes)) walkInline(child, [], ctx, inline)
-      blocks.push({ type: 'paragraph', content: inline.length ? inline : undefined })
-      continue
+      for (const child of Array.from(el.childNodes)) walk(child)
+      flush()
+      return
+    }
+    if (tag === 'br') {
+      current.push({ type: 'hard_break' })
+      return
     }
     walkInline(el, [], ctx, current)
   }
+  for (const node of Array.from(doc.body.childNodes)) walk(node)
   flush()
   return blocks
 }
@@ -239,6 +319,44 @@ function addMark(marks: PMJson[], mark: PMJson): PMJson[] {
 }
 
 /**
+ * Collapses any run of whitespace — including a literal newline — down to
+ * a single space, the same way a browser already visually renders an
+ * ordinary text node under the default `white-space: normal` the old
+ * editor's own contentEditable surfaces always used. This editor's own CSS
+ * deliberately uses `white-space: pre-wrap` instead (`index.html` — fixes a
+ * ProseMirror whitespace-collapsing console warning), so raw whitespace
+ * baked into old stored HTML — a literal `\n` is common in pasted text or
+ * PDF-extracted quotes (`reflowTextItems` in `lib/pdf.ts` deliberately
+ * writes one per line-wrap) — renders as a real, visible line break here
+ * unless it's collapsed explicitly first, instead of getting the
+ * collapsing for free from the browser the way the old view did. Mirrors
+ * `lib/export.ts`'s own `mdEscapeText` exactly, and for the exact same
+ * reason (see its own doc comment there).
+ */
+function collapseWhitespace(s: string): string {
+  return s.replace(/\s+/g, ' ')
+}
+
+/** A node contributes real, visible content to a paragraph — not a hard break (never alone enough to justify keeping an otherwise-empty paragraph; see `htmlToBlocks`'s own `flush`) and not a whitespace-only, mark-less text node (the common case for a run of indentation/line-wrap whitespace sitting between sibling block elements in pretty-printed or pasted-in HTML — a browser's own normal text flow would never have rendered that as a paragraph of its own, so this migration doesn't either). A whitespace-only text node that *does* carry a mark is kept regardless — see `walkInline`'s own empty-comment-anchor handling, which plants exactly this (a zero-width space marking an anchor with nothing selected) on purpose. */
+function isMeaningfulInline(n: PMJson): boolean {
+  if (n.type === 'hard_break') return false
+  if (n.type === 'text') {
+    if (n.marks && n.marks.length > 0) return true
+    return (n.text as string).trim().length > 0
+  }
+  return true
+}
+
+/** Drops a purely cosmetic leading/trailing `<br>` — the DOM equivalent of the trailing-newline a browser's own contentEditable routinely leaves at the end of a paragraph `<div>` just to keep it from collapsing, never a break the author actually meant to see. An internal one (between two runs of real text) is left alone; only the ends are trimmed, mirroring `htmlToMarkdownBlocks`'s own `current.trim()` in `lib/export.ts`, which silently drops exactly the same leading/trailing `\n` a `<br>` there produces. */
+function trimHardBreaks(nodes: PMJson[]): PMJson[] {
+  let start = 0
+  let end = nodes.length
+  while (start < end && nodes[start].type === 'hard_break') start++
+  while (end > start && nodes[end - 1].type === 'hard_break') end--
+  return nodes.slice(start, end)
+}
+
+/**
  * Walks one DOM node (and everything inside it) into PM inline JSON,
  * appending to `out` — the structural mirror of `export.ts`'s own
  * `inlineHtmlToMarkdown`, just building typed nodes/marks instead of
@@ -250,7 +368,7 @@ function addMark(marks: PMJson[], mark: PMJson): PMJson[] {
  */
 function walkInline(node: Node, marks: PMJson[], ctx: MigrateCtx, out: PMJson[]): void {
   if (node.nodeType === Node.TEXT_NODE) {
-    const text = node.textContent ?? ''
+    const text = collapseWhitespace(node.textContent ?? '')
     if (text) out.push(marks.length ? { type: 'text', text, marks } : { type: 'text', text })
     return
   }

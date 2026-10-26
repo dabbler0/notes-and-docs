@@ -104,8 +104,42 @@ warning-count badge), and clicking one loads its migrated document into
 the live editor, with its comments and warnings shown in the panel below.
 The uploaded backup's own real `sources` replace the hard-coded fake ones
 everywhere at once (`src/activeSources.ts` — citations in both the editor
-and the Export panel re-render against whichever map is active). Nothing
-is written back anywhere; this only ever reads the zip.
+and the Export panel re-render against whichever map is active). The
+backup's own `graveyard` (deleted/cut fragments kept for recovery) is
+migrated too, each one standalone (`migrateGraveyardFragment`) since a
+fragment isn't part of any essay's own live tree — its own section in the
+sidebar, same click-to-load/warnings behavior as an essay. Nothing is
+written back anywhere; this only ever reads the zip.
+
+### Real-backup bugs found and fixed
+
+Three issues surfaced migrating an actual backup, all in `migrate.ts`
+(see its own doc comments for the full reasoning):
+
+- **Paragraph breaks going missing or multiplying.** This editor's own CSS
+  uses `white-space: pre-wrap` (fixes a ProseMirror console warning), so a
+  literal `\n` embedded in old stored text — common from a paste or a
+  PDF-extracted quote — now renders as a real visible line break, where the
+  old browser view's default `white-space: normal` silently collapsed it.
+  `walkInline` now collapses whitespace the same way `lib/export.ts`'s own
+  `mdEscapeText` already does. Separately, a purely cosmetic trailing
+  `<br>` a browser leaves at the end of a paragraph `<div>` was being kept
+  as a visible extra break — now trimmed — and a whitespace-only text node
+  sitting between two sibling `<div>`s (pretty-printed/pasted HTML) was
+  producing its own spurious empty paragraph — now dropped, the same way
+  `htmlToMarkdownBlocks`'s own `.trim()` already silently drops it.
+- **Essay title showing as "Untitled essay" in the editor.** The document's
+  root heading was reading the root `EssayNode`'s own `.title`, which the
+  real app's rename flow (`EssayWorkspace.tsx`'s `saveEssayTitle`) never
+  touches — only `Essay.title` gets updated, so the two diverge the moment
+  an essay is renamed after creation. Now uses `essay.title`, matching
+  `essayToMarkdown`/`essayToLatex`.
+- **Some blockquotes rendering as plain text.** `htmlToBlocks` only
+  checked `doc.body`'s own direct children for a `<blockquote>`/list/math
+  block — one nested a level down inside a wrapping `<div>` (seen in older
+  stored content) fell through to plain inline text instead. Now a real
+  recursive walk, the structural mirror of `htmlToMarkdownBlocks` in
+  `lib/export.ts`, which already handled this correctly.
 
 ## Running it
 

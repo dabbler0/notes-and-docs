@@ -23,9 +23,8 @@ import {
 } from './export'
 import { fakeSourcesMap } from './sources'
 import { activeSources, setActiveSources } from './activeSources'
-import { migrateEssay, type MigratedEssay } from './migrate'
+import { migrateEssay, migrateGraveyardFragment, type MigratedEssay } from './migrate'
 import { loadBackupZip } from './backupLoader'
-import type { LegacyEssay } from './types'
 
 setActiveSources(fakeSourcesMap)
 
@@ -66,13 +65,15 @@ const backupErrorEl = document.querySelector<HTMLDivElement>('#backupError')!
 const backupStatusEl = document.querySelector<HTMLDivElement>('#backupStatus')!
 const useSampleBtn = document.querySelector<HTMLButtonElement>('#useSampleBtn')!
 
-interface EssayEntry {
-  essay: LegacyEssay
+/** Either a live essay or a graveyard fragment, migrated up front — the sidebar and `mountEditor` treat both the same way, since `migrateGraveyardFragment` returns the same `MigratedEssay` shape `migrateEssay` does. */
+interface WorkspaceEntry {
+  kind: 'essay' | 'graveyard'
+  id: string
   migrated: MigratedEssay
 }
 
-let essayEntries: EssayEntry[] = []
-let activeEssayId: string | null = null
+let entries: WorkspaceEntry[] = []
+let activeEntryId: string | null = null
 let view: EditorView
 
 backupFileInput.addEventListener('change', async () => {
@@ -82,16 +83,20 @@ backupFileInput.addEventListener('change', async () => {
   backupStatusEl.textContent = 'Reading backup…'
   try {
     const backup = await loadBackupZip(file)
-    backupStatusEl.textContent = `Loaded ${backup.essays.length} essay(s), ${backup.nodes.length} node(s), ${backup.sources.size} source(s). Migrating…`
+    backupStatusEl.textContent = `Loaded ${backup.essays.length} essay(s), ${backup.nodes.length} node(s), ${backup.sources.size} source(s), ${backup.graveyard.length} graveyard fragment(s). Migrating…`
     const liveEssays = backup.essays.filter((e) => !e.deleted)
-    essayEntries = liveEssays
-      .map((essay) => ({ essay, migrated: migrateEssay(essay, backup.nodes, backup.sources) }))
-      .sort((a, b) => a.essay.title.localeCompare(b.essay.title))
+    const essayList: WorkspaceEntry[] = liveEssays
+      .map((essay) => ({ kind: 'essay' as const, id: essay.id, migrated: migrateEssay(essay, backup.nodes, backup.sources) }))
+      .sort((a, b) => a.migrated.title.localeCompare(b.migrated.title))
+    const graveyardList: WorkspaceEntry[] = backup.graveyard
+      .map((fragment) => ({ kind: 'graveyard' as const, id: fragment.id, migrated: migrateGraveyardFragment(fragment, backup.nodes, backup.sources) }))
+      .sort((a, b) => a.migrated.title.localeCompare(b.migrated.title))
+    entries = [...essayList, ...graveyardList]
     setActiveSources(backup.sources)
-    backupStatusEl.textContent = `Migrated ${essayEntries.length} essay(s). Click one on the left to load it.`
+    backupStatusEl.textContent = `Migrated ${essayList.length} essay(s) and ${graveyardList.length} graveyard fragment(s). Click one on the left to load it.`
     enterWorkspace()
     renderSidebar()
-    if (essayEntries.length > 0) loadEssay(essayEntries[0].essay.id)
+    if (essayList.length > 0) loadEntry(essayList[0].id)
   } catch (err) {
     backupErrorEl.textContent = err instanceof Error ? err.message : String(err)
     backupErrorEl.style.display = 'block'
@@ -100,8 +105,8 @@ backupFileInput.addEventListener('change', async () => {
 })
 
 useSampleBtn.addEventListener('click', () => {
-  essayEntries = []
-  activeEssayId = null
+  entries = []
+  activeEntryId = null
   setActiveSources(fakeSourcesMap)
   enterWorkspace()
   renderSidebar()
@@ -117,27 +122,15 @@ function enterWorkspace() {
 
 function renderSidebar() {
   sidebarEl.innerHTML = ''
-  if (essayEntries.length === 0) {
+  if (entries.length === 0) {
     sidebarEl.innerHTML = '<p style="color:#888;margin:0">Sample document — reload the page to load a backup instead.</p>'
     return
   }
-  const heading = document.createElement('h3')
-  heading.textContent = `Essays (${essayEntries.length})`
-  sidebarEl.append(heading)
-  for (const entry of essayEntries) {
-    const item = document.createElement('div')
-    item.className = 'essay-item' + (entry.essay.id === activeEssayId ? ' active' : '')
-    const label = document.createElement('span')
-    label.textContent = entry.essay.title || 'Untitled'
-    item.append(label)
-    if (entry.migrated.warnings.length > 0) {
-      const badge = document.createElement('span')
-      badge.className = 'warn-badge'
-      badge.textContent = `⚠ ${entry.migrated.warnings.length}`
-      item.append(badge)
-    }
-    item.addEventListener('click', () => loadEssay(entry.essay.id))
-    sidebarEl.append(item)
+  const essayList = entries.filter((e) => e.kind === 'essay')
+  const graveyardList = entries.filter((e) => e.kind === 'graveyard')
+  renderEntryGroup(`Essays (${essayList.length})`, essayList)
+  if (graveyardList.length > 0) {
+    renderEntryGroup(`Graveyard (${graveyardList.length})`, graveyardList, 'Deleted/cut fragments kept for recovery — each one migrated standalone, not part of any essay\'s own tree.')
   }
   const reloadBtn = document.createElement('button')
   reloadBtn.className = 'secondary'
@@ -153,12 +146,39 @@ function renderSidebar() {
   sidebarEl.append(reloadBtn)
 }
 
-function loadEssay(essayId: string) {
-  const entry = essayEntries.find((e) => e.essay.id === essayId)
+function renderEntryGroup(headingText: string, group: WorkspaceEntry[], note?: string) {
+  const heading = document.createElement('h3')
+  heading.textContent = headingText
+  sidebarEl.append(heading)
+  if (note) {
+    const p = document.createElement('p')
+    p.style.cssText = 'color:#888;font-size:11px;margin:0 0 8px'
+    p.textContent = note
+    sidebarEl.append(p)
+  }
+  for (const entry of group) {
+    const item = document.createElement('div')
+    item.className = 'essay-item' + (entry.id === activeEntryId ? ' active' : '')
+    const label = document.createElement('span')
+    label.textContent = entry.migrated.title || 'Untitled'
+    item.append(label)
+    if (entry.migrated.warnings.length > 0) {
+      const badge = document.createElement('span')
+      badge.className = 'warn-badge'
+      badge.textContent = `⚠ ${entry.migrated.warnings.length}`
+      item.append(badge)
+    }
+    item.addEventListener('click', () => loadEntry(entry.id))
+    sidebarEl.append(item)
+  }
+}
+
+function loadEntry(entryId: string) {
+  const entry = entries.find((e) => e.id === entryId)
   if (!entry) return
-  activeEssayId = essayId
+  activeEntryId = entryId
   renderSidebar()
-  mountEditor(entry.migrated.doc, entry.migrated.comments, entry.migrated.warnings, entry.essay.title)
+  mountEditor(entry.migrated.doc, entry.migrated.comments, entry.migrated.warnings, entry.migrated.title)
 }
 
 function mountEditor(docJson: unknown, comments: MigratedEssay['comments'], warnings: string[], title?: string) {
@@ -339,7 +359,7 @@ function showExportPanel() {
       bibliographyStyle: biblioSel.value as PrintCitationOptions['bibliographyStyle'],
     }
     const cited = pmCitedSources(view.state.doc, sources)
-    const essayTitle = essayEntries.find((e) => e.essay.id === activeEssayId)?.essay.title ?? 'Test Essay'
+    const essayTitle = entries.find((e) => e.id === activeEntryId)?.migrated.title ?? 'Test Essay'
     const plainMd = pmEssayToMarkdown(essayTitle, view.state.doc, sources) + referencesMarkdown(cited, biblioSel.value as never)
     mdPre.textContent = plainMd
 

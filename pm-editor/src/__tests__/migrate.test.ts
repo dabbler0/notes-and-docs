@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { Node as PMNode } from 'prosemirror-model'
 import { essaySchema as schema } from '../schema'
-import { buildLegacyNodeMap, migrateEssay } from '../migrate'
+import { buildLegacyNodeMap, migrateEssay, migrateGraveyardFragment } from '../migrate'
 import type { LegacyEssay, LegacyEssayNode, Source } from '../types'
 
 function essay(rootNodeId: string, title = 'Test Essay'): LegacyEssay {
@@ -48,16 +48,19 @@ describe('migrateEssay: basic structure', () => {
     expect(warnings).toEqual([])
   })
 
-  it("never renders the root node's own title as visible text (matching the old export pipeline's own depth-0 exception)", () => {
-    const root = node({ id: 'root', title: 'Root Title Never Shown', draftContent: '<p>Body.</p>' })
-    const { doc } = migrateEssay(essay('root'), [root], sources)
+  it("renders the essay's own title, not the root node's own (possibly stale) title, as the document's visible heading", () => {
+    // `EssayWorkspace.tsx`'s own rename flow (`saveEssayTitle`) only ever
+    // writes `essay.title`, never the root `EssayNode`'s own `.title` —
+    // which stays frozen at whatever `createEssay` first seeded it to, so
+    // the two diverge the moment an essay gets renamed after creation.
+    // Matches `essayToMarkdown`/`essayToLatex`, which already use
+    // `essay.title` for exactly this reason.
+    const root = node({ id: 'root', title: 'Stale Node Title From Creation', draftContent: '<p>Body.</p>' })
+    const { doc } = migrateEssay(essay('root', 'Renamed Essay Title'), [root], sources)
     const pm = assertValidDoc(doc)
     const sectionTitle = pm.firstChild!.firstChild!
     expect(sectionTitle.type.name).toBe('section_title')
-    expect(sectionTitle.textContent).toBe('Root Title Never Shown')
-    // It's still *stored* (unlike the Markdown/print export, which never
-    // keeps it at all) — just never the essay's own displayed title. The
-    // demo app is responsible for using Essay.title, not this, as the H1.
+    expect(sectionTitle.textContent).toBe('Renamed Essay Title')
   })
 
   it('nests a child section at the position its marker actually sits, interleaved with surrounding text — not reordered to "all text then all children"', () => {
@@ -424,5 +427,110 @@ describe('migrateEssay: lists, blockquotes, math', () => {
     })
     expect(inlineLatex).toBe('x^2')
     expect(blockLatex).toBe('\\int x')
+  })
+
+  it('finds a blockquote nested inside a wrapping <div> (an older-document shape), not just a direct child', () => {
+    const root = node({ id: 'root', draftContent: '<div><blockquote>Nested quote.</blockquote></div>' })
+    const { doc } = migrateEssay(essay('root'), [root], sources)
+    const pm = assertValidDoc(doc)
+    const bq = pm.firstChild!.content.content[1]
+    expect(bq.type.name).toBe('blockquote')
+    expect(bq.textContent).toBe('Nested quote.')
+  })
+
+  it('finds a list nested inside a wrapping <div> too', () => {
+    const root = node({ id: 'root', draftContent: '<div><ul><li>one</li></ul></div>' })
+    const { doc } = migrateEssay(essay('root'), [root], sources)
+    const pm = assertValidDoc(doc)
+    expect(pm.firstChild!.content.content[1].type.name).toBe('bullet_list')
+  })
+})
+
+describe('migrateEssay: whitespace and paragraph breaks', () => {
+  it('collapses a literal newline embedded in a text node to a single space, instead of rendering it as a visible line break under this editor\'s own white-space: pre-wrap', () => {
+    const root = node({ id: 'root', draftContent: '<p>Line one\nline two, same paragraph.</p>' })
+    const { doc } = migrateEssay(essay('root'), [root], sources)
+    const pm = assertValidDoc(doc)
+    const para = pm.firstChild!.content.content[1]
+    expect(para.textContent).toBe('Line one line two, same paragraph.')
+  })
+
+  it('collapses a run of several literal newlines (e.g. from a paste) to one space, not several visible blank lines', () => {
+    const root = node({ id: 'root', draftContent: '<p>Para text\n\n\nstill one paragraph.</p>' })
+    const { doc } = migrateEssay(essay('root'), [root], sources)
+    const pm = assertValidDoc(doc)
+    const para = pm.firstChild!.content.content[1]
+    expect(para.textContent).toBe('Para text still one paragraph.')
+  })
+
+  it('does not insert a spurious empty paragraph for a whitespace-only text node sitting between two sibling <div>s (pretty-printed/pasted HTML)', () => {
+    const root = node({ id: 'root', draftContent: '<div>First.</div>\n  <div>Second.</div>' })
+    const { doc } = migrateEssay(essay('root'), [root], sources)
+    const pm = assertValidDoc(doc)
+    const blocks = pm.firstChild!.content.content.slice(1)
+    expect(blocks.map((b) => b.textContent)).toEqual(['First.', 'Second.'])
+  })
+
+  it('keeps two sibling <div>s as two separate paragraphs (real spacing), not merged into one via a hard break', () => {
+    const root = node({ id: 'root', draftContent: '<div>Paragraph one.</div><div>Paragraph two.</div>' })
+    const { doc } = migrateEssay(essay('root'), [root], sources)
+    const pm = assertValidDoc(doc)
+    const blocks = pm.firstChild!.content.content.slice(1)
+    expect(blocks.length).toBe(2)
+    expect(blocks.every((b) => b.type.name === 'paragraph')).toBe(true)
+    expect(blocks.map((b) => b.textContent)).toEqual(['Paragraph one.', 'Paragraph two.'])
+  })
+
+  it('drops a purely cosmetic trailing <br> a browser leaves at the end of a paragraph <div>, rather than keeping it as a visible extra line break', () => {
+    const root = node({ id: 'root', draftContent: '<div>Some text.<br></div>' })
+    const { doc } = migrateEssay(essay('root'), [root], sources)
+    const pm = assertValidDoc(doc)
+    const para = pm.firstChild!.content.content[1]
+    expect(para.childCount).toBe(1)
+    expect(para.firstChild!.type.name).toBe('text')
+    expect(para.textContent).toBe('Some text.')
+  })
+
+  it('keeps a real internal <br> (an intentional soft line break) as a hard_break, not dropped', () => {
+    const root = node({ id: 'root', draftContent: '<div>Line one.<br>Line two.</div>' })
+    const { doc } = migrateEssay(essay('root'), [root], sources)
+    const pm = assertValidDoc(doc)
+    const para = pm.firstChild!.content.content[1]
+    const typeNames = para.content.content.map((n) => n.type.name)
+    expect(typeNames).toEqual(['text', 'hard_break', 'text'])
+  })
+})
+
+describe('migrateGraveyardFragment', () => {
+  it("converts a cut fragment's own HTML into a standalone one-section document", () => {
+    const originNode = node({ id: 'origin', draftContent: '<p>unused</p>' })
+    const fragment = { id: 'frag1', essayId: 'e1', nodeId: 'origin', nodeTitle: 'Cut From Here', html: '<p>Some <b>bold</b> cut text.</p>' }
+    const { doc, title, warnings } = migrateGraveyardFragment(fragment, [originNode], sources)
+    expect(title).toBe('Cut From Here')
+    const pm = assertValidDoc(doc)
+    expect(pm.firstChild!.type.name).toBe('section')
+    expect(pm.firstChild!.firstChild!.textContent).toBe('Cut From Here')
+    expect(pm.firstChild!.content.content[1].textContent).toBe('Some bold cut text.')
+    expect(warnings).toEqual([])
+  })
+
+  it('warns, but still produces a document, when the fragment\'s own origin node no longer exists', () => {
+    const fragment = { id: 'frag1', essayId: 'e1', nodeId: 'missing', nodeTitle: 'Orphaned Fragment', html: '<p>text</p>' }
+    const { doc, warnings } = migrateGraveyardFragment(fragment, [], sources)
+    assertValidDoc(doc)
+    expect(warnings.some((w) => w.includes('no longer exists'))).toBe(true)
+  })
+
+  it('warns and drops a child-embed marker caught inside a cut fragment, rather than silently losing the subtree it pointed at with no trace', () => {
+    const originNode = node({ id: 'origin', draftContent: '<p>unused</p>' })
+    const fragment = {
+      id: 'frag1',
+      essayId: 'e1',
+      nodeId: 'origin',
+      nodeTitle: 'Had A Child',
+      html: '<p>Before.</p><div class="child-embed" data-child-id="a" contenteditable="false"></div>',
+    }
+    const { warnings } = migrateGraveyardFragment(fragment, [originNode], sources)
+    expect(warnings.some((w) => w.includes('subsection marker'))).toBe(true)
   })
 })
