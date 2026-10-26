@@ -5,14 +5,23 @@
  * rather than duplicated, so re-importing the same project twice doesn't
  * pile up copies), hand the resolved source map to `parseLatexDocument()`
  * (see `lib/latexImport.ts` for the actual parsing — this file is
- * deliberately thin around it), then persist the resulting tree as a real
- * Essay + EssayNode records.
+ * deliberately thin around it), then builds a real, doc-based `Essay`
+ * record out of the resulting tree.
+ *
+ * `parseLatexDocument` already produces a `ParsedLatexNode` tree shaped
+ * exactly like a real `EssayNode` tree (`html`-as-`draftContent`, children
+ * embedded via the same `markerHtml` markers, footnotes scoped per node) —
+ * rather than hand-building PM JSON nodes a second time here, this flattens
+ * that tree into real-shaped (if never-persisted) `EssayNode` objects and
+ * feeds them straight through `migrateEssay` (`lib/pmMigration.ts`), the
+ * exact same HTML->doc conversion a real account's own essays go through.
  */
 import JSZip from 'jszip'
-import { backend } from '../storage'
 import { id } from '../lib/id'
 import { parseBibtex } from '../lib/bibtex'
 import { extractBibSource, parseLatexDocument, pickMainTexFile, type ParsedLatexNode, type ProjectFile } from '../lib/latexImport'
+import { migrateEssay } from '../lib/pmMigration'
+import { backend } from '../storage'
 import { createSource, listSources } from './sourcesRepo'
 import type { Essay, EssayNode, Source } from './types'
 
@@ -44,22 +53,20 @@ function titleFromFileName(path: string): string {
   return spaced || 'Imported LaTeX project'
 }
 
-/** Persists a parsed node tree depth-first, writing each node's own record directly (bypassing essaysRepo's createEssay/createChildNode, which each mint their own id — this tree already has real ids baked into its embedded child markers and footnote-ref attributes, from parseLatexDocument). */
-async function persistTree(essayId: string, node: ParsedLatexNode, now: number): Promise<void> {
-  const record: EssayNode = {
+/** Flattens a parsed node tree into real-shaped `EssayNode` objects, depth-first — never persisted, just `migrateEssay`'s own expected input shape (it already walks from a root id through child markers exactly like `loadNodeMap` does on real stored nodes). */
+function flattenParsedTree(essayId: string, node: ParsedLatexNode, now: number, out: EssayNode[]): void {
+  out.push({
     id: node.id,
     essayId,
     title: node.title,
-    versions: [{ id: id(), content: node.html, createdAt: now, label: 'Imported from LaTeX' }],
+    versions: [],
     headVersionId: '',
     draftContent: node.html,
     footnotes: node.footnotes,
     createdAt: now,
     updatedAt: now,
-  }
-  record.headVersionId = record.versions[0].id
-  await backend.docs.put<EssayNode>('nodes', record)
-  for (const child of node.children) await persistTree(essayId, child, now)
+  })
+  for (const child of node.children) flattenParsedTree(essayId, child, now, out)
 }
 
 export async function importLatexProject(zipFile: Blob): Promise<LatexImportSummary> {
@@ -82,8 +89,18 @@ export async function importLatexProject(zipFile: Blob): Promise<LatexImportSumm
   const parsed = parseLatexDocument(mainTex.content, sourceByKey, titleFromFileName(mainTex.path))
 
   const now = Date.now()
-  const essay: Essay = { id: id(), title: parsed.title, rootNodeId: parsed.root.id, createdAt: now, updatedAt: now }
-  await persistTree(essay.id, parsed.root, now)
+  const essayId = id()
+  const flatNodes: EssayNode[] = []
+  flattenParsedTree(essayId, parsed.root, now, flatNodes)
+  // `citationHtml` (used by `parseLatexDocument`/`convertInline` above)
+  // bakes each citation chip's `data-source-id` as the `Source`'s own
+  // `id`, not its bibtex key — `migrateEssay` needs its `sources` map
+  // keyed the same way to resolve them back, unlike `sourceByKey` here
+  // (keyed by bibtex key, for citation-key/footnote-matching lookups).
+  const sourcesById = new Map<string, Source>([...sourceByKey.values()].map((s) => [s.id, s]))
+  const migrated = migrateEssay({ title: parsed.title, rootNodeId: parsed.root.id }, flatNodes, sourcesById)
+
+  const essay: Essay = { id: essayId, title: parsed.title, rootNodeId: parsed.root.id, doc: migrated.doc, comments: migrated.comments, createdAt: now, updatedAt: now }
   await backend.docs.put<Essay>('essays', essay)
 
   return {
@@ -92,6 +109,6 @@ export async function importLatexProject(zipFile: Blob): Promise<LatexImportSumm
     sourcesAdded,
     footnotesConverted: parsed.stats.footnotesConverted,
     footnotesKept: parsed.stats.footnotesKept,
-    warnings: parsed.warnings,
+    warnings: [...parsed.warnings, ...migrated.warnings],
   }
 }

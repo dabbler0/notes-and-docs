@@ -121,11 +121,20 @@ export function EssayWorkspace({ essayId, onBack, embedded = false }: { essayId:
   async function reload() {
     const e = await getEssay(essayId)
     if (!e) return
-    setEssay(e)
-    setEssayTitle(e.title)
+    // Sources loaded and merged into the stable `sources` ref *before*
+    // `setEssay` below mounts/remounts `PMEssayEditor` — its `citation`
+    // NodeView (`pmNodeViews.ts`'s `createCitationView`) only re-renders
+    // a citation chip's own label when ProseMirror calls its `update()`
+    // (on a doc change), never just because `sources` was mutated
+    // afterward, so a citation referencing a source minted in the very
+    // same operation that created this essay (LaTeX import) would
+    // otherwise render "unknown source" until something *else* happened
+    // to force a redraw.
     const list = await listSources()
     sources.clear()
     for (const s of list) sources.set(s.id, s)
+    setEssay(e)
+    setEssayTitle(e.title)
   }
 
   useEffect(() => {

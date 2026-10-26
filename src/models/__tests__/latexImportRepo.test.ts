@@ -10,9 +10,20 @@
  */
 import { beforeEach, describe, expect, it } from 'vitest'
 import JSZip from 'jszip'
+import { Node as PMNode } from 'prosemirror-model'
 import { importLatexProject } from '../latexImportRepo'
-import { getNode, loadNodeMap } from '../essaysRepo'
+import { getEssay } from '../essaysRepo'
 import { listSources } from '../sourcesRepo'
+import { essaySchema as schema } from '../../lib/pmSchema'
+
+/** Finds the `section` node whose own title text matches, anywhere in the doc — the doc-based equivalent of `loadNodeMap(essay).get(id)`'s own `.title` lookup, since a migrated essay has no `EssayNode` records to look one up on. */
+function findSectionByTitle(doc: PMNode, title: string): PMNode | null {
+  let found: PMNode | null = null
+  doc.descendants((n) => {
+    if (n.type.name === 'section' && n.firstChild?.type.name === 'section_title' && n.firstChild.textContent === title) found = n
+  })
+  return found
+}
 
 interface FakeStorageModule {
   createFakeBackend(): unknown
@@ -62,26 +73,33 @@ describe('importLatexProject', () => {
     const sources = await listSources()
     expect(sources.map((s) => s.bibtex.key).sort()).toEqual(['jones2018', 'smith2020'])
 
-    const nodeMap = await loadNodeMap(summary.essay)
-    const root = nodeMap.get(summary.essay.rootNodeId)!
-    expect(root.draftContent).toContain('data-source-id')
+    const doc = PMNode.fromJSON(schema, summary.essay.doc)
+    let rootHasCitation = false
+    doc.descendants((n) => {
+      if (n.type.name === 'citation') rootHasCitation = true
+    })
+    expect(rootHasCitation).toBe(true)
 
-    expect(nodeMap.size).toBe(2) // root + "Background"
-    const background = [...nodeMap.values()].find((n) => n.title === 'Background')!
+    const background = findSectionByTitle(doc, 'Background')!
     expect(background).toBeTruthy()
 
     // The footnote that reads like a citation was converted; the other one
     // (with no author/year in it at all) was kept as a real footnote,
     // attached to the section it actually appeared in.
-    expect(background.draftContent).toContain('data-source-id')
-    expect(background.footnotes).toHaveLength(1)
-    expect(background.footnotes![0].content).toContain('not a citation at all')
-    expect(background.draftContent).toContain(`data-footnote-id="${background.footnotes![0].id}"`)
+    let backgroundHasCitation = false
+    let footnoteBody: PMNode | null = null
+    background.descendants((n) => {
+      if (n.type.name === 'citation') backgroundHasCitation = true
+      if (n.type.name === 'footnote') footnoteBody = n
+    })
+    expect(backgroundHasCitation).toBe(true)
+    expect(footnoteBody).not.toBeNull()
+    expect(footnoteBody!.textContent).toContain('not a citation at all')
 
     expect(summary.footnotesConverted).toBe(1)
     expect(summary.footnotesKept).toBe(1)
 
-    expect(background.draftContent).toContain('A quoted passage worth keeping.')
+    expect(background.textContent).toContain('A quoted passage worth keeping.')
   })
 
   it('does not duplicate a source whose bibtex key already exists locally', async () => {
@@ -117,7 +135,8 @@ describe('importLatexProject', () => {
     zip.file('figure.png', 'not really a png')
     const blob = await zip.generateAsync({ type: 'blob' })
     const summary = await importLatexProject(blob)
-    const node = await getNode(summary.essay.rootNodeId)
-    expect(node?.draftContent).toContain('Hello.')
+    const liveEssay = (await getEssay(summary.essay.id))!
+    const doc = PMNode.fromJSON(schema, liveEssay.doc)
+    expect(doc.textContent).toContain('Hello.')
   })
 })
