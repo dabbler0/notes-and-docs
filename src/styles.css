@@ -3284,14 +3284,15 @@ select {
      shifts sideways when a section's rule appears/disappears as the
      cursor moves through the document. */
   border-left: 2px solid transparent;
-  /* Small on purpose — body text's own left edge sits right where the
-     chevron does (`section > .section-chevron`'s own `left: 4px`,
-     below), overlapping it rather than being indented clear of it. Only
-     the title needs real clearance from the chevron, which it gets from
-     `.section-number`'s own `margin-left` instead (see that rule's own
-     doc comment) — not from padding here, which would push every other
-     block in the section's body over with it. */
-  padding-left: 4px;
+  /* Body text's own left edge lands under the chevron's own horizontal
+     center (`section > .section-chevron`'s own `left: 4px` plus half its
+     own ~13-14px rendered width) rather than flush with its left edge —
+     enough clearance to read as a margin between the rule/chevron and the
+     text, not an overlap. (Absolute-positioned siblings like the chevron
+     measure their own `left` from this box's border-inner edge, which
+     this padding doesn't move — only normal-flow content, i.e. the body
+     text below and `.section-number`'s own float, shifts with it.) */
+  padding-left: 11px;
   padding-right: 28px;
   margin: 18px 0;
 }
@@ -3374,15 +3375,14 @@ select {
      empty instance exactly as tall as one text line, so it still holds
      the title clear of the chevron even with nothing to display. */
   min-height: 1.2em;
-  /* Clears the chevron sitting at the same `left: 4px` this element's own
-     containing block starts from — body text, by contrast, deliberately
-     has no such margin of its own (see `section`'s own `padding-left`
-     doc comment above), so only the number+title line is actually pushed
-     clear of the chevron; every other line in the section's body starts
-     right under/beside it. Present (and still taking up this same
-     margin) even when this section has no number to show (the root-level
-     "Abstract" exception) — an empty floated box's own margin still
-     holds the title at the same starting position either way. */
+  /* Clears the chevron the same way `section`'s own `padding-left` now
+     clears it for ordinary body text (see that rule's own doc comment) —
+     just further, since the number+title line needs to clear the whole
+     chevron glyph, not just land at its center. Present (and still
+     taking up this same margin) even when this section has no number to
+     show (the root-level "Abstract" exception) — an empty floated box's
+     own margin still holds the title at the same starting position
+     either way. */
   margin-left: 18px;
   margin-right: 0.35em;
 }
@@ -3424,8 +3424,17 @@ select {
 .pm-editor-root .ProseMirror blockquote {
   margin: 1em 0;
   padding: 0.6em 1em;
-  border-radius: 6px;
+  border-left: 3px solid var(--ink-dim);
+  border-radius: 0 6px 6px 0;
   background: var(--surface-2);
+}
+
+/* A list item's own paragraph(s) keep the same default spacing as any
+   other paragraph when read on their own, but back-to-back items in the
+   same list should read as one list, separated only by their own line
+   height — not the extra paragraph-sized gap between them. */
+.pm-editor-root .ProseMirror li > p {
+  margin: 0;
 }
 
 .pm-editor-root .ProseMirror citation.pm-citation {

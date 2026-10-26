@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'preact/hooks'
+import { useEffect, useRef, useState } from 'preact/hooks'
 import { Modal } from '../Modal'
 import { hasQuotableText, listSources, matchesSourceQuery } from '../../models/sourcesRepo'
 import { displayAuthors, displayTitle } from '../../lib/bibtex'
@@ -28,18 +28,44 @@ export function CitationPickerDialog({
   // a number — a page is the common case, but this is also where anything
   // else worth noting on a citation (a chapter, "forthcoming", …) goes.
   const [note, setNote] = useState('')
+  const searchRef = useRef<HTMLInputElement>(null)
 
   useEffect(() => {
     listSources().then(setSources)
   }, [])
 
+  // The plain `autoFocus` attribute only auto-applies when the browser
+  // itself parses an element at load time — an element a framework
+  // inserts into an already-open page (every modal, this one included)
+  // never actually receives focus from it, so this dialog's search box
+  // needs a real, explicit `.focus()` call once it's mounted.
+  useEffect(() => {
+    searchRef.current?.focus()
+  }, [])
+
   const filtered = sources.filter((s) => matchesSourceQuery(s, query) && (!pdfOnly || hasQuotableText(s)) && (!requireUrl || !!s.bibtex.fields.url))
+
+  // Enter picks the top search result, same as clicking its card — from
+  // either the search box or the note field, since the note is read fresh
+  // off `note` state either way rather than from whichever input the key
+  // happened to land in.
+  function handleEnter(e: KeyboardEvent) {
+    if (e.key !== 'Enter') return
+    e.preventDefault()
+    if (filtered.length > 0) onSelect(filtered[0], note.trim() || undefined)
+  }
 
   return (
     <Modal onClose={onClose}>
       <h2>{title ?? 'Insert citation'}</h2>
       <div className="field">
-        <input autoFocus placeholder="Search by title or author…" value={query} onInput={(e) => setQuery((e.target as HTMLInputElement).value)} />
+        <input
+          ref={searchRef}
+          placeholder="Search by title or author…"
+          value={query}
+          onInput={(e) => setQuery((e.target as HTMLInputElement).value)}
+          onKeyDown={handleEnter}
+        />
       </div>
       {requireUrl ? (
         sources.some((s) => !s.bibtex.fields.url) && (
@@ -59,6 +85,7 @@ export function CitationPickerDialog({
               placeholder="Page or other note (optional)"
               value={note}
               onInput={(e) => setNote((e.target as HTMLInputElement).value)}
+              onKeyDown={handleEnter}
               style={{ width: 220 }}
             />
           </div>

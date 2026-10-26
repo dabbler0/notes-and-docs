@@ -85,6 +85,7 @@ export function PMEssayEditor({
   sources,
   commentsHolder,
   onAnchorClick,
+  onCiteShortcut,
   editable = true,
   onViewReady,
   onViewDestroyed,
@@ -97,6 +98,8 @@ export function PMEssayEditor({
   commentsHolder: { current: Essay | null }
   /** A `comment_anchor` mark (margin) or an inline comment's own preview chip was clicked — see `pmCommentPlugin.ts`'s own doc comment for why this is the one place both route through. */
   onAnchorClick?: (commentId: string) => void
+  /** Mod-Shift-K pressed inside the editor — `EssayWorkspace.tsx`'s own keyboard-shortcut counterpart to clicking the "Cite a source" toolbar button. */
+  onCiteShortcut?: () => void
   editable?: boolean
   onViewReady?: (view: EditorView) => void
   onViewDestroyed?: () => void
@@ -120,6 +123,8 @@ export function PMEssayEditor({
   // were no comments yet).
   const onAnchorClickRef = useRef(onAnchorClick)
   onAnchorClickRef.current = onAnchorClick
+  const onCiteShortcutRef = useRef(onCiteShortcut)
+  onCiteShortcutRef.current = onCiteShortcut
 
   useEffect(() => {
     if (!containerRef.current) return
@@ -155,6 +160,10 @@ export function PMEssayEditor({
           Tab: (state, dispatch, view) => {
             const sink = sinkListItem(essaySchema.nodes.list_item)
             if (sink(state, dispatch, view)) return true
+            return true
+          },
+          'Mod-Shift-k': () => {
+            onCiteShortcutRef.current?.()
             return true
           },
         }),

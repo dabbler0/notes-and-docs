@@ -544,7 +544,7 @@ export function EssayWorkspace({ essayId, onBack, embedded = false }: { essayId:
                   <Icon name="list-ol" />
                 </button>
                 <span className="toolbar-divider" />
-                <button className="btn btn-sm icon-btn-toolbar" title="Cite a source" onMouseDown={(e) => e.preventDefault()} onClick={() => setShowCitation(true)}>
+                <button className="btn btn-sm icon-btn-toolbar" title="Cite a source (Mod-Shift-K)" onMouseDown={(e) => e.preventDefault()} onClick={() => setShowCitation(true)}>
                   <Icon name="cite" />
                 </button>
                 <button className="btn btn-sm icon-btn-toolbar" title="Insert a quote from a source" onMouseDown={(e) => e.preventDefault()} onClick={() => setShowQuoteDialog(true)}>
@@ -618,6 +618,7 @@ export function EssayWorkspace({ essayId, onBack, embedded = false }: { essayId:
               sources={sources}
               commentsHolder={commentsHolder}
               onAnchorClick={handleAnchorClick}
+              onCiteShortcut={() => setShowCitation(true)}
               editable={!commentMode}
               onViewReady={(view) => {
                 viewRef.current = view
