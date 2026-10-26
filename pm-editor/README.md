@@ -41,17 +41,32 @@ whole reason this ported so fast:
   `ensureCitationSpacing`, `moveFootnoteCitationsPastPeriod`,
   `floatPrintFootnotes`, `addAuthorAttribution`, every bibliography-style
   formatter (APA/MLA/Chicago) — all pure string/HTML transforms that never
-  cared where the Markdown came from, now proven against the new model
-  too. LaTeX export isn't ported yet (same shape of work as
-  `pmEssayToMarkdown`, deliberately deferred to keep this checkpoint
-  focused).
+  cared where the Markdown came from, now proven against the new model too.
 
-One real bug found live while wiring up the Export panel, documented in
-place (`citationMarkdown`'s own doc comment in `export.ts`): the plain
-`.md` export path was wrapping every citation in the print-pipeline-only
-`<cite class="print-citation">` scaffold meant to be unwrapped later by
-`ensureCitationSpacing` — a stage the plain `.md` path never runs, so the
-raw tag was leaking into literal Markdown text.
+**LaTeX export is also ported** (`pmEssayToLatex`) — same shape of work as
+`pmEssayToMarkdown` (a second PM-doc walk, LaTeX-flavored this time,
+kept as its own pipeline rather than routing through Markdown — real
+`\footnote{}`/`\cite{}` are genuine single LaTeX constructs, unlike
+Markdown's label-plus-separate-definition workarounds). Visible in the
+Export panel's third pane.
+
+Two real bugs found live while building the Export panel, both documented
+in place:
+- `citationMarkdown`'s own doc comment in `export.ts`: the plain `.md`
+  export path was wrapping every citation in the print-pipeline-only
+  `<cite class="print-citation">` scaffold meant to be unwrapped later by
+  `ensureCitationSpacing` — a stage the plain `.md` path never runs, so
+  the raw tag was leaking into literal Markdown text.
+- `texEscape`'s own doc comment: the real app's version chains several
+  sequential `.replace()` calls, each of which inserts its own `\`/`{`/`}`
+  characters that a *later* step in the same chain then matches and
+  escapes all over again — confirmed two different ways live (escaping
+  `\` first corrupts its own `\textbackslash{}` output; escaping it last
+  instead corrupts every other step's own escaped output). Fixed here
+  with a single combined regex + replacer function, which sidesteps the
+  whole bug class since `String.replace` never re-scans text a
+  replacement just produced. Worth porting back to the real app's own
+  `lib/export.ts` separately.
 
 ## Running it
 
@@ -73,4 +88,3 @@ npm run test   # vitest — covers src/export.ts's own PM-doc-dependent half
 - Section drag-and-drop reordering isn't implemented — only "add sibling"/
   "add child" via the toolbar.
 - No persistence at all — refreshing the page resets to the sample doc.
-- LaTeX export not yet ported (see above).

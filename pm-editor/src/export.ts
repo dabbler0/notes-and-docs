@@ -779,3 +779,227 @@ export function referencesHtml(cited: Source[], style: BibliographyStyle = 'plai
   const tag = numbered ? 'ol' : 'ul'
   return `<h2 class="print-references-heading">References</h2><${tag} class="print-references-list">${items.join('')}</${tag}>`
 }
+
+// ============================================================================
+// LaTeX (PM doc -> .tex) — the second document-model-dependent walk this
+// file's own doc comment said was deliberately deferred; now ported, same
+// shape of work as `pmEssayToMarkdown` above (walk the PM doc directly
+// instead of parsing HTML strings), and for the same reason it was worth
+// doing as its own pass rather than routing through the Markdown
+// intermediate: LaTeX has real, different escaping rules and its own
+// native constructs for things Markdown has to fake (`\footnote{}` is
+// genuinely inline and self-numbering, unlike `[^label]` + a separate
+// definition list) — exactly the same reasoning the real app's own
+// `essayToLatex` already gave for being a separate pipeline, not a
+// consumer of `essayToMarkdown`'s own output.
+// ============================================================================
+
+const SECTION_CMDS = ['section', 'subsection', 'subsubsection', 'paragraph', 'subparagraph']
+function sectionCmd(depth: number): string {
+  return SECTION_CMDS[Math.min(depth - 1, SECTION_CMDS.length - 1)]
+}
+
+/**
+ * Ported from the real app's own `texEscape`, with one real bug fixed
+ * along the way (found live by this prototype's own tests, which the
+ * real app's own test suite never happened to exercise \u2014 no existing
+ * test fed it a literal backslash character): the real app chains
+ * several separate global `.replace()` calls, each escaping one more
+ * character class by inserting a `\`-prefixed LaTeX command of its own \u2014
+ * but every one of those insertions is itself text containing `\`/`{`/`}`
+ * characters, which a *later* step in the same chain then matches and
+ * escapes all over again (confirmed two different ways live: escaping
+ * `\` first corrupts a literal backslash into `\textbackslash\{\}`
+ * because the following `{}` step re-escapes the braces `\textbackslash{}`
+ * itself just inserted; escaping `\` last instead corrupts *every other*
+ * escaped character, because by then the string is already full of the
+ * backslashes earlier steps inserted as part of `\%`, `\$`, etc.). A
+ * single combined regex with a replacer function sidesteps the whole bug
+ * class at once \u2014 `String.replace` only ever matches against the
+ * *original* string, never re-scanning text a replacement just produced,
+ * so there is no "later step sees an earlier step's own output" case
+ * left to get wrong. Worth porting back to the real app's own
+ * `lib/export.ts` separately \u2014 this prototype doesn't touch that file.
+ */
+function texEscape(s: string): string {
+  return s
+    .replace(/\u200B/g, '')
+    .replace(/\s+/g, ' ')
+    .replace(/[\\%$#_{}&~^]/g, (ch) => {
+      switch (ch) {
+        case '\\':
+          return '\\textbackslash{}'
+        case '~':
+          return '\\textasciitilde{}'
+        case '^':
+          return '\\textasciicircum{}'
+        default:
+          return `\\${ch}`
+      }
+    })
+}
+
+interface LatexCtx {
+  sources: Map<string, Source>
+  citeCmd: string
+}
+
+/**
+ * A citation node's own LaTeX — unlike `citationMarkdown`'s plain-.md
+ * fallback (there's no equivalent "no citationOptions" case for LaTeX;
+ * the real app's own `essayToLatex` never had one either, since
+ * `\cite{key}` is just as valid read directly off the source as any
+ * styled rendering), a missing source falls back to the raw `sourceId`
+ * as the BibTeX key — the same degrade-gracefully choice the real app's
+ * own `inlineHtmlToLatex` made.
+ */
+function citationLatex(node: PMNode, ctx: LatexCtx): string {
+  const source = ctx.sources.get(node.attrs.sourceId)
+  const key = source?.bibtex.key ?? node.attrs.sourceId
+  const note: string | undefined = node.attrs.note ?? undefined
+  return note ? `${ctx.citeCmd}[${texEscape(note)}]{${key}}` : `${ctx.citeCmd}{${key}}`
+}
+
+/** A footnote node's own LaTeX — `\footnote{}` is genuinely inline and self-numbering, so (unlike the Markdown path's `[^label]` + a separate definition list) this is the one export format where a footnote round-trips back to exactly the single LaTeX construct it most likely came from. Its content is real PM inline content (see `schema.ts`'s own doc comment) walked directly, same as `footnoteMarkdown` above — no separate lookup needed. */
+function footnoteLatex(node: PMNode, ctx: LatexCtx): string {
+  return `\\footnote{${inlineContentToLatex(node, ctx).trim()}}`
+}
+
+function inlineLeafToLatex(node: PMNode, ctx: LatexCtx): string {
+  if (node.isText) {
+    let text = texEscape(node.text ?? '')
+    const linkMark = node.marks.find((m) => m.type.name === 'link')
+    if (node.marks.some((m) => m.type.name === 'underline')) text = `\\underline{${text}}`
+    if (node.marks.some((m) => m.type.name === 'em')) text = `\\textit{${text}}`
+    if (node.marks.some((m) => m.type.name === 'strong')) text = `\\textbf{${text}}`
+    if (linkMark) text = `\\href{${linkMark.attrs.href}}{${text}}`
+    return text
+  }
+  switch (node.type.name) {
+    case 'citation':
+      return citationLatex(node, ctx)
+    case 'footnote':
+      return footnoteLatex(node, ctx)
+    case 'math_inline':
+      return `$${node.attrs.latex}$`
+    default:
+      return ''
+  }
+}
+
+function inlineContentToLatex(parent: PMNode, ctx: LatexCtx): string {
+  let out = ''
+  parent.forEach((child) => {
+    out += inlineLeafToLatex(child, ctx)
+  })
+  return out
+}
+
+/** `bullet_list`/`ordered_list` -> `itemize`/`enumerate`, one `\item` per `list_item` — see `listToMarkdown`'s own doc comment above for the nested-list handling, which applies identically here. */
+function listToLatex(listNode: PMNode, ctx: LatexCtx): string {
+  const env = listNode.type.name === 'ordered_list' ? 'enumerate' : 'itemize'
+  const items: string[] = []
+  listNode.forEach((listItem) => {
+    const nested: PMNode[] = []
+    const inlineParts: string[] = []
+    listItem.forEach((child) => {
+      if (child.type.name === 'bullet_list' || child.type.name === 'ordered_list') nested.push(child)
+      else inlineParts.push(blockToLatex(child, ctx))
+    })
+    let item = `\\item ${inlineParts.join(' ').trim()}`
+    for (const nestedList of nested) item += `\n${listToLatex(nestedList, ctx)}`
+    items.push(item)
+  })
+  return `\\begin{${env}}\n${items.join('\n')}\n\\end{${env}}`
+}
+
+function blockToLatex(node: PMNode, ctx: LatexCtx): string {
+  switch (node.type.name) {
+    case 'paragraph':
+      return inlineContentToLatex(node, ctx)
+    case 'blockquote': {
+      const lines: string[] = []
+      node.forEach((para) => lines.push(inlineContentToLatex(para, ctx)))
+      return `\\begin{quote}\n${lines.join('\n\n')}\n\\end{quote}`
+    }
+    case 'bullet_list':
+    case 'ordered_list':
+      return listToLatex(node, ctx)
+    case 'math_block':
+      return `\\[\n${node.attrs.latex}\n\\]`
+    default:
+      return ''
+  }
+}
+
+/**
+ * The PM-doc equivalent of the real app's `essayToLatex` — same document
+ * shape (`\documentclass{article}` + `natbib`/`biblatex` depending on
+ * `citeCommand`), same abstract special-case: the root section's own
+ * *first* `section`-type child, if its title is exactly "Abstract" (see
+ * `isAbstractTitle` above), becomes a plain `\abstract{}` macro argument
+ * (its own text content only — not the block-level `\section{}`/list/
+ * quote structure a normal section's subsections could produce) rather
+ * than a numbered `\section{}`, the same structural exception
+ * `addPrintChrome`/`pmEssayToMarkdown` both make for it.
+ */
+export function pmEssayToLatex(title: string, doc: PMNode, sources: Map<string, Source>, opts: { citeCommand?: '\\cite' | '\\footcite' } = {}): string {
+  const citeCmd = opts.citeCommand ?? '\\cite'
+  const ctx: LatexCtx = { sources, citeCmd }
+  const body: string[] = []
+  const root = doc.firstChild!
+  let abstractIndex = -1
+  root.forEach((child, _offset, index) => {
+    if (abstractIndex === -1 && child.type.name === 'section') abstractIndex = index
+  })
+
+  function renderSection(section: PMNode, depth: number, isAbstract: boolean) {
+    if (depth > 0 && !isAbstract) {
+      body.push(`\\${sectionCmd(depth)}{${texEscape(section.firstChild?.textContent || 'Untitled section')}}`, '')
+    }
+    if (isAbstract) {
+      const ownBlocks: string[] = []
+      section.forEach((child, _offset, index) => {
+        if (index === 0 || child.type.name === 'section') return
+        const block = blockToLatex(child, ctx)
+        if (block) ownBlocks.push(block)
+      })
+      body.push(`\\abstract{${ownBlocks.join('\n\n')}}`, '')
+      section.forEach((child) => {
+        if (child.type.name === 'section') renderSection(child, depth + 1, false)
+      })
+      return
+    }
+    section.forEach((child, _offset, index) => {
+      if (index === 0) return
+      if (child.type.name === 'section') {
+        const childIsAbstract = depth === 0 && index === abstractIndex && isAbstractTitle(child.firstChild?.textContent)
+        renderSection(child, depth + 1, childIsAbstract)
+      } else {
+        const block = blockToLatex(child, ctx)
+        if (block) body.push(block, '')
+      }
+    })
+  }
+  renderSection(root, 0, false)
+
+  const usesBiblatex = citeCmd === '\\footcite'
+  return [
+    '\\documentclass{article}',
+    '\\usepackage[utf8]{inputenc}',
+    '\\usepackage{hyperref}',
+    usesBiblatex ? '\\usepackage{biblatex}' : '\\usepackage{natbib}',
+    usesBiblatex ? '\\addbibresource{references.bib}' : '',
+    `\\title{${texEscape(title)}}`,
+    '\\begin{document}',
+    '\\maketitle',
+    '',
+    ...body,
+    usesBiblatex ? '\\printbibliography' : '\\bibliographystyle{plain}\n\\bibliography{references}',
+    '\\end{document}',
+    '',
+  ]
+    .filter((l) => l !== '')
+    .join('\n')
+    .replace(/\n{3,}/g, '\n\n')
+}

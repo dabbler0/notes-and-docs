@@ -7,6 +7,7 @@ import {
   markdownToHtml,
   moveFootnoteCitationsPastPeriod,
   pmCitedSources,
+  pmEssayToLatex,
   pmEssayToMarkdown,
   referencesMarkdown,
   type PrintCitationOptions,
@@ -183,5 +184,121 @@ describe('end-to-end: pmEssayToMarkdown feeding the unchanged print pipeline', (
     const md = pmEssayToMarkdown('T', d, sources) + referencesMarkdown(pmCitedSources(d, sources), 'chicago')
     expect(md).toContain('## References')
     expect(md).toContain('Smith, Jane. "An Early Paper." *Journal of Examples* (2020).')
+  })
+})
+
+describe('pmEssayToLatex', () => {
+  it('emits a title, document shell, and \\section{} per nested section', () => {
+    const d = doc(section('root', '', [section('a', 'First Section', [para('Body text.')])]))
+    const tex = pmEssayToLatex('Test Essay', d, sources)
+    expect(tex).toContain('\\title{Test Essay}')
+    expect(tex).toContain('\\section{First Section}')
+    expect(tex).toContain('Body text.')
+    expect(tex).toContain('\\begin{document}')
+    expect(tex).toContain('\\end{document}')
+    expect(tex).not.toContain('Untitled') // root's own title is never rendered, same as Markdown/HTML
+  })
+
+  it('nests \\subsection{}/\\subsubsection{} correctly for depth 2/3', () => {
+    const d = doc(section('root', '', [section('a', 'A', [section('a1', 'A1', [section('a1a', 'A1a', [para('deep')])])])]))
+    const tex = pmEssayToLatex('T', d, sources)
+    expect(tex).toContain('\\section{A}')
+    expect(tex).toContain('\\subsection{A1}')
+    expect(tex).toContain('\\subsubsection{A1a}')
+  })
+
+  it('renders marks as \\textbf/\\textit/\\underline/\\href', () => {
+    const d = doc(
+      section('root', '', [
+        {
+          type: 'paragraph',
+          content: [
+            { type: 'text', text: 'bold', marks: [{ type: 'strong' }] },
+            { type: 'text', text: ' italic', marks: [{ type: 'em' }] },
+            { type: 'text', text: ' under', marks: [{ type: 'underline' }] },
+            { type: 'text', text: ' link', marks: [{ type: 'link', attrs: { href: 'https://example.com' } }] },
+          ],
+        },
+      ]),
+    )
+    const tex = pmEssayToLatex('T', d, sources)
+    expect(tex).toContain('\\textbf{bold}')
+    expect(tex).toContain('\\textit{ italic}')
+    expect(tex).toContain('\\underline{ under}')
+    expect(tex).toContain('\\href{https://example.com}{ link}')
+  })
+
+  it('renders a citation as \\cite{key} (or \\cite[note]{key}), using the real BibTeX key, not the internal sourceId', () => {
+    const d = doc(
+      section('root', '', [
+        { type: 'paragraph', content: [{ type: 'citation', attrs: { sourceId: 'smith', note: null } }, { type: 'citation', attrs: { sourceId: 'smith', note: 'p. 5' } }] },
+      ]),
+    )
+    const tex = pmEssayToLatex('T', d, sources)
+    expect(tex).toContain('\\cite{smith2020}')
+    expect(tex).toContain('\\cite[p. 5]{smith2020}')
+  })
+
+  it('uses \\footcite and biblatex when citeCommand is \\footcite', () => {
+    const d = doc(section('root', '', [{ type: 'paragraph', content: [{ type: 'citation', attrs: { sourceId: 'smith', note: null } }] }]))
+    const tex = pmEssayToLatex('T', d, sources, { citeCommand: '\\footcite' })
+    expect(tex).toContain('\\footcite{smith2020}')
+    expect(tex).toContain('\\usepackage{biblatex}')
+    expect(tex).toContain('\\printbibliography')
+    expect(tex).not.toContain('\\usepackage{natbib}')
+  })
+
+  it("renders a footnote as a real, inline \\footnote{} — the one format where it's a single construct, not a label plus a separate definition", () => {
+    const d = doc(section('root', '', [{ type: 'paragraph', content: [{ type: 'text', text: 'A claim' }, { type: 'footnote', content: [{ type: 'text', text: 'The note.' }] }] }]))
+    const tex = pmEssayToLatex('T', d, sources)
+    expect(tex).toContain('\\footnote{The note.}')
+  })
+
+  it('renders a blockquote as \\begin{quote}, a list as \\begin{itemize}/\\begin{enumerate}, and math with $...$/\\[...\\]', () => {
+    const d = doc(
+      section('root', '', [
+        { type: 'blockquote', content: [para('quoted')] },
+        { type: 'bullet_list', content: [{ type: 'list_item', content: [para('one')] }] },
+        { type: 'ordered_list', content: [{ type: 'list_item', content: [para('first')] }] },
+        { type: 'paragraph', content: [{ type: 'math_inline', attrs: { latex: 'x^2' } }] },
+        { type: 'math_block', attrs: { latex: '\\int x' } },
+      ]),
+    )
+    const tex = pmEssayToLatex('T', d, sources)
+    expect(tex).toContain('\\begin{quote}\nquoted\n\\end{quote}')
+    expect(tex).toContain('\\begin{itemize}')
+    expect(tex).toContain('\\begin{enumerate}')
+    expect(tex).toContain('$x^2$')
+    expect(tex).toContain('\\[\n\\int x\n\\]')
+  })
+
+  it('turns a root-level section titled exactly "Abstract" into a plain \\abstract{} macro, not a numbered \\section{}, and still renders its own nested sections normally afterward', () => {
+    const d = doc(
+      section('root', '', [
+        section('abs', 'Abstract', [para('A short summary.'), section('nested-in-abstract', 'Nested In Abstract', [para('still a real section')])]),
+        section('intro', 'Introduction', [para('Body.')]),
+      ]),
+    )
+    const tex = pmEssayToLatex('T', d, sources)
+    expect(tex).toContain('\\abstract{A short summary.}')
+    expect(tex).not.toContain('\\section{Abstract}')
+    // The abstract's own nested section still renders as a real, numbered
+    // section — one level deeper than a normal root-level section, since
+    // it still occupies the abstract's own (unnumbered) depth structurally.
+    expect(tex).toContain('\\subsection{Nested In Abstract}')
+    expect(tex).toContain('\\section{Introduction}')
+  })
+
+  it('does not treat a later root-level section named "Abstract" as the abstract — only the first child counts', () => {
+    const d = doc(section('root', '', [section('intro', 'Introduction', [para('Body.')]), section('abs', 'Abstract', [para('Too late to count.')])]))
+    const tex = pmEssayToLatex('T', d, sources)
+    expect(tex).toContain('\\section{Abstract}')
+    expect(tex).not.toContain('\\abstract{')
+  })
+
+  it('escapes LaTeX-special characters (%, $, #, _, {, }, &, ~, ^, \\\\) in plain text', () => {
+    const d = doc(section('root', '', [para('100% $5 #1 a_b {x} y&z ~w ^v \\n')]))
+    const tex = pmEssayToLatex('T', d, sources)
+    expect(tex).toContain('100\\% \\$5 \\#1 a\\_b \\{x\\} y\\&z \\textasciitilde{}w \\textasciicircum{}v \\textbackslash{}n')
   })
 })

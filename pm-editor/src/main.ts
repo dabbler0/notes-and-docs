@@ -15,6 +15,7 @@ import {
   markdownToHtml,
   moveFootnoteCitationsPastPeriod,
   pmCitedSources,
+  pmEssayToLatex,
   pmEssayToMarkdown,
   referencesHtml,
   referencesMarkdown,
@@ -121,7 +122,7 @@ toolbarEl.append(
     window.alert('Document JSON logged to the browser console.')
   }),
   divider(),
-  button('Export', 'Show Markdown and print-HTML export, produced by walking this document directly (export.ts)', () => showExportPanel()),
+  button('Export', 'Show Markdown, print-HTML, and LaTeX export, produced by walking this document directly (export.ts)', () => showExportPanel()),
 )
 
 /**
@@ -154,6 +155,8 @@ function showExportPanel() {
   mdPre.style.cssText = 'background:#f6f5f2;padding:12px;border-radius:6px;white-space:pre-wrap;font-size:12px;max-height:240px;overflow:auto;'
   const htmlFrame = document.createElement('iframe')
   htmlFrame.style.cssText = 'width:100%;height:420px;border:1px solid #ddd;border-radius:6px;background:#fff;'
+  const texPre = document.createElement('pre')
+  texPre.style.cssText = 'background:#f6f5f2;padding:12px;border-radius:6px;white-space:pre-wrap;font-size:12px;max-height:280px;overflow:auto;'
 
   function rerender() {
     const sources = fakeSourcesMap
@@ -180,6 +183,8 @@ function showExportPanel() {
       .print-references-list { line-height: 1.3; }
       .print-footnotes { font-size: 0.9em; }
     </style></head><body>${html}</body></html>`
+
+    texPre.textContent = pmEssayToLatex('Test Essay', view.state.doc, sources)
   }
 
   for (const sel of [placementSel, styleSel, biblioSel]) sel.addEventListener('change', rerender)
@@ -198,6 +203,9 @@ function showExportPanel() {
   const h3b = document.createElement('h3')
   h3b.textContent = 'Print HTML (same pipeline, citation-styled)'
   panel.append(h3b, htmlFrame)
+  const h3c = document.createElement('h3')
+  h3c.textContent = 'LaTeX (.tex export)'
+  panel.append(h3c, texPre)
   overlay.append(panel)
   document.body.append(overlay)
   rerender()
