@@ -101,6 +101,20 @@ describe('restoring a pre-quote-bank/graveyard backup', () => {
     expect(await listGraveyard('essay-1')).toEqual([])
   })
 
+  it('migrates a restored pre-ProseMirror essay (no doc, old node tree) into the new Essay.doc shape, even though this device already migrated its own — empty — data before the restore ever ran', async () => {
+    // Matches what a fresh device/browser actually does: `runPendingMigrations`
+    // runs once, against whatever's in local storage *before* this restore —
+    // nothing yet — so by the time `restoreBackup` writes the backup's old-shaped
+    // essay/node in, the device's own schema version is already fully current,
+    // with no essay left in it for that one-time run to have converted.
+    const oldBackup = await zipWithManifest(oldFormatManifest())
+    await restoreBackup(oldBackup, { mode: 'merge' })
+
+    const essay = (await getEssay('essay-1'))!
+    expect(essay.doc).toBeDefined()
+    expect(JSON.stringify(essay.doc)).toContain('Old content')
+  })
+
   it('merge-restoring an old backup does not wipe quotes/graveyard entries already local to this device', async () => {
     await addQuoteToBank('source-1', 1, 'a quote already on this device', '')
     await addToGraveyard('essay-1', 'node-1', 'Pre-existing essay', '<p>already cut</p>')

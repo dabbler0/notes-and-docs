@@ -10,6 +10,7 @@
  */
 import JSZip from 'jszip'
 import { backend } from '../storage'
+import { ALL_MIGRATIONS } from '../storage/migrationRegistry'
 import type { Bookmark, Essay, EssayCommitEntry, EssayNode, GraveyardFragment, Project, QuoteBankEntry, Source, TodoItem } from '../models/types'
 import type { StoredSourceContent } from '../models/sourcesRepo'
 
@@ -199,6 +200,25 @@ export async function restoreBackup(file: File | Blob, opts: { mode: 'merge' | '
     const bytes = await blobFile.async('arraybuffer')
     await backend.blobs.put(blobId, new Blob([bytes], { type: 'application/pdf' }))
     result.blobs++
+  }
+
+  // A restored backup can carry data in an older shape than whatever this
+  // device's own schema version already is — `localBackend.ts`'s
+  // `runPendingMigrations` only ever runs once per connection, against
+  // whatever was already in IndexedDB *before* this function wrote
+  // anything in, so it has no reason to run again just because new
+  // (possibly old-shaped) documents showed up afterward. The schema
+  // version alone can't tell it to: a freshly opened, previously-empty
+  // local database reaches the current version immediately, with nothing
+  // in it yet to migrate — exactly the state a restore right after first
+  // opening a brand new device/browser runs into. Rather than threading a
+  // "re-run migrations" signal through that version-gated runner, every
+  // migration in this codebase is already written to be a safe, cheap
+  // no-op against already-current data (see `storage/migrations.ts`'s own
+  // doc comment on that convention) — so it's simplest and most robust to
+  // just run every one of them again, directly, right here.
+  for (const migration of [...ALL_MIGRATIONS].sort((a, b) => a.version - b.version)) {
+    await migration.run(backend.docs)
   }
 
   return result
