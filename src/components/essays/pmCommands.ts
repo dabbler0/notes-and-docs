@@ -153,35 +153,33 @@ export function splitIntoSection(state: EditorState, dispatch?: (tr: Transaction
 }
 
 /**
- * "Demote": the inverse of `splitIntoSection` — folds the section
- * containing the selection back into its own parent, splicing its content
- * (everything but its own `section_title`, which is simply discarded —
- * same as the old app's own `demoteChild`, which only ever ported a
- * child's `draftContent` up, never its title) directly in at the position
- * the section itself used to occupy. Grandchildren (nested sections)
- * travel along for free, since they're just more content inside what gets
- * spliced in.
+ * "Demote": the inverse of `splitIntoSection` — folds a section back into
+ * its own parent, splicing its content (everything but its own
+ * `section_title`, which is simply discarded — same as the old app's own
+ * `demoteChild`, which only ever ported a child's `draftContent` up,
+ * never its title) directly in at the position the section itself used
+ * to occupy. Grandchildren (nested sections) travel along for free, since
+ * they're just more content inside what gets spliced in.
+ *
+ * Driven by a known section position rather than the current selection —
+ * `pmNodeViews.ts`'s own `SectionView` has its own `getPos()` already,
+ * and its demote button (sitting in that section's own header, not the
+ * toolbar) has to work regardless of whether the cursor is anywhere near
+ * it. `pos` is the section's own start position (`getPos()`'s own
+ * convention, same as every other NodeView-dispatched command in this
+ * file) — resolving just inside it (`pos + 1`) lands at this section's
+ * own nesting depth.
  */
-export function demoteSection(state: EditorState, dispatch?: (tr: Transaction) => void): boolean {
-  const { $from } = state.selection
-  let sectionDepth = -1
-  for (let d = $from.depth; d >= 0; d--) {
-    if ($from.node(d).type.name === 'section') {
-      sectionDepth = d
-      break
-    }
-  }
+export function demoteSectionAt(view: EditorView, pos: number): boolean {
+  const $pos = view.state.doc.resolve(pos + 1)
+  const sectionDepth = $pos.depth
   // Depth 1 is the document's own single root section — nothing to demote into.
   if (sectionDepth <= 1) return false
-  if (dispatch) {
-    const sectionNode = $from.node(sectionDepth)
-    const start = $from.before(sectionDepth)
-    const end = $from.after(sectionDepth)
-    // Every child but the first (section_title) is what gets spliced in.
-    const content = sectionNode.content.cut(sectionNode.firstChild!.nodeSize)
-    const tr = state.tr.replaceWith(start, end, content)
-    dispatch(tr)
-  }
+  const sectionNode = $pos.node(sectionDepth)
+  const start = $pos.before(sectionDepth)
+  const end = $pos.after(sectionDepth)
+  const content = sectionNode.content.cut(sectionNode.firstChild!.nodeSize)
+  view.dispatch(view.state.tr.replaceWith(start, end, content))
   return true
 }
 

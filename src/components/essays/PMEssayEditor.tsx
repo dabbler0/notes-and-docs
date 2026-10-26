@@ -10,6 +10,8 @@ import { essaySchema } from '../../lib/pmSchema'
 import { saveEssay } from '../../models/essaysRepo'
 import { createCitationView, SectionView, FootnoteView, createMathView } from './pmNodeViews'
 import { createCommentPlugin } from './pmCommentPlugin'
+import { createCitationArrowPlugin } from './pmCitationArrowPlugin'
+import { createActiveSectionPlugin } from './pmActiveSectionPlugin'
 import { createMathInputRules } from './pmInputRules'
 import type { Essay, Source } from '../../models/types'
 
@@ -146,9 +148,11 @@ export function PMEssayEditor({
           'Mod-u': toggleMark(essaySchema.marks.underline),
           Enter: splitListItem(essaySchema.nodes.list_item),
         }),
+        createCitationArrowPlugin(),
         keymap(baseKeymap),
         createMathInputRules(),
         createCommentPlugin(commentsHolder, (commentId) => onAnchorClickRef.current?.(commentId)),
+        createActiveSectionPlugin(),
       ],
     })
 

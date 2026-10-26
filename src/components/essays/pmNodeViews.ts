@@ -1,10 +1,19 @@
 import type { Node as PMNode } from 'prosemirror-model'
 import { TextSelection } from 'prosemirror-state'
 import type { EditorView, NodeView, ViewMutationRecord } from 'prosemirror-view'
-import { citationLabel } from '../../lib/bibtex'
-import { promptDialog } from '../../lib/prompt'
+import { citationLabelOpen } from '../../lib/bibtex'
 import { renderMathHtml } from '../../lib/math'
+import { demoteSectionAt } from './pmCommands'
 import type { Source } from '../../models/types'
+
+/** The one thing `pmCitationArrowPlugin.ts` needs back out of a citation's own DOM — there's no public ProseMirror API to recover a NodeView instance from a position, only its DOM (`view.nodeDOM`), so `CitationView` stashes itself on its own root element for that plugin to read via `getCitationView` below. */
+const CITATION_VIEW_KEY = '__pmCitationView'
+interface CitationViewHost {
+  focusNote(side: -1 | 1): void
+}
+export function getCitationView(dom: Node | null): CitationViewHost | null {
+  return dom && typeof dom === 'object' && CITATION_VIEW_KEY in dom ? ((dom as unknown as Record<string, CitationViewHost>)[CITATION_VIEW_KEY] ?? null) : null
+}
 
 /**
  * `citation` NodeView factory, closed over the live `sources` map
@@ -13,10 +22,21 @@ import type { Source } from '../../models/types'
  * label (see `pmSchema.ts`'s own doc comment on `citation`: this is the
  * entire point of making it a real atom rather than baked-in chip text,
  * matching `renderPrintCitation`'s own "always re-render, never trust a
- * stored label" rule for export). Clicking opens the same page/note
- * editor the old app's `handleCitationDblClick` did, via the same
- * `promptDialog`, writing the result straight back as a transaction
- * instead of mutating chip DOM by hand.
+ * stored label" rule for export).
+ *
+ * The note is a real, always-present `<input>` living right where it
+ * would print — not a modal — restoring the old per-node model's own
+ * design (`citationLabelOpen`/`citationHtml` in `lib/bibtex.ts`: a fixed,
+ * non-editable "(Author, Year" base and ")" close, with only the note
+ * between them genuinely editable in place; that model used literal
+ * `contenteditable="false"` spans around an ordinary editable text node
+ * since the whole chip sat inside a `contentEditable` document, but a PM
+ * atom has no content of its own to make part-editable that way, so an
+ * actual native `<input>` embedded in the NodeView's own DOM is this
+ * model's equivalent). `pmCitationArrowPlugin.ts` is the other half of
+ * this: it's what makes ArrowRight/ArrowLeft *approaching* the chip from
+ * surrounding document text land the caret in this input instead of
+ * selecting the whole atom, the normal PM default for a selectable atom.
  */
 export function createCitationView(sources: Map<string, Source>): new (node: PMNode, view: EditorView, getPos: () => number | undefined) => NodeView {
   return class CitationView implements NodeView {
@@ -24,6 +44,10 @@ export function createCitationView(sources: Map<string, Source>): new (node: PMN
     node: PMNode
     view: EditorView
     getPos: () => number | undefined
+    private baseSpan: HTMLElement
+    private separator: HTMLElement
+    private noteInput: HTMLInputElement
+    private closeSpan: HTMLElement
 
     constructor(node: PMNode, view: EditorView, getPos: () => number | undefined) {
       this.node = node
@@ -31,33 +55,103 @@ export function createCitationView(sources: Map<string, Source>): new (node: PMN
       this.getPos = getPos
       this.dom = document.createElement('citation')
       this.dom.className = 'pm-citation'
-      this.render(node)
-      this.dom.addEventListener('click', (e) => {
-        e.preventDefault()
-        this.handleClick()
+      ;(this.dom as unknown as Record<string, unknown>)[CITATION_VIEW_KEY] = this
+
+      this.baseSpan = document.createElement('span')
+      this.baseSpan.className = 'pm-citation-base'
+
+      this.separator = document.createElement('span')
+      this.separator.className = 'pm-citation-separator'
+      this.separator.textContent = ', '
+
+      this.noteInput = document.createElement('input')
+      this.noteInput.type = 'text'
+      this.noteInput.className = 'pm-citation-note-input'
+      this.noteInput.setAttribute('aria-label', 'Citation page or note')
+      this.noteInput.addEventListener('mousedown', (e) => e.stopPropagation())
+      this.noteInput.addEventListener('input', () => {
+        this.autoSize()
+        this.syncHasNote()
+        this.commitNote()
       })
+      this.noteInput.addEventListener('keydown', (e) => this.handleNoteKeydown(e))
+
+      this.closeSpan = document.createElement('span')
+      this.closeSpan.className = 'pm-citation-close'
+      this.closeSpan.textContent = ')'
+
+      this.dom.append(this.baseSpan, this.separator, this.noteInput, this.closeSpan)
+      this.render()
     }
 
-    private render(node: PMNode) {
-      const source = sources.get(node.attrs.sourceId)
-      this.dom.textContent = source ? citationLabel(source.bibtex, node.attrs.note ?? undefined) : `(unknown source: ${node.attrs.sourceId})`
-      this.dom.title = 'Double-click to edit page/note'
+    /** Re-renders the two fixed (non-editable) parts fresh from the source's current bibtex, and resyncs the note input's own value from `node.attrs.note` — but only while it isn't the thing the user is actively typing into, so a transaction this same input's own `input` handler just dispatched never steals its own focus/caret back out from under it (same "don't clobber what's live-focused" reasoning as `createMathView`'s own `editing` gate, just keyed off `document.activeElement` instead of a separate mode flag, since this input is always present, never toggled in/out of existence). */
+    private render() {
+      const source = sources.get(this.node.attrs.sourceId)
+      this.baseSpan.textContent = source ? citationLabelOpen(source.bibtex) : `(unknown source: ${this.node.attrs.sourceId}`
+      if (document.activeElement !== this.noteInput) {
+        this.noteInput.value = this.node.attrs.note ?? ''
+        this.autoSize()
+      }
+      this.syncHasNote()
     }
 
-    private async handleClick() {
+    /** No CSS width can track an `<input>`'s own content automatically — sized by hand to the note text's own length, same idea as an autosizing textarea, so the input reads as plain inline text rather than a fixed-width form field sitting in running prose. */
+    private autoSize() {
+      this.noteInput.style.width = `${Math.max(1, this.noteInput.value.length)}ch`
+    }
+
+    /** The ", " separator only makes sense in front of a real note — otherwise the chip would read "(Smith, 2020, )" for a plain, note-less citation. Toggled via a class (not conditional DOM removal) so the separator span's own position never has to be re-inserted around whatever's currently focused. */
+    private syncHasNote() {
+      this.dom.classList.toggle('pm-citation-has-note', this.noteInput.value.trim().length > 0)
+    }
+
+    private commitNote() {
       const pos = this.getPos()
       if (pos == null) return
-      const next = await promptDialog('Page number or other note for this citation?', { defaultValue: this.node.attrs.note ?? '', placeholder: 'e.g. p. 5', confirmLabel: 'Save' })
-      if (next === null) return
-      const note = next.trim()
+      const note = this.noteInput.value.trim()
+      if (note === (this.node.attrs.note ?? '')) return
       const tr = this.view.state.tr.setNodeMarkup(pos, undefined, { ...this.node.attrs, note: note || null })
       this.view.dispatch(tr)
+    }
+
+    /** ArrowLeft at the input's own start, or ArrowRight at its own end, hands the caret back to the surrounding document instead of just doing nothing (the browser's own default for a single-line input at its own text boundary) — "navigated in/out of via arrow keys" is the whole point of this being a real input sitting in the document's own reading order, not a one-off popup. Escape/Enter both just leave the note as already-committed and move on, same exit as ArrowRight — there's nothing further to "confirm," since every keystroke already committed. */
+    private handleNoteKeydown(e: KeyboardEvent) {
+      if (e.shiftKey || e.metaKey || e.ctrlKey || e.altKey) return
+      const atStart = this.noteInput.selectionStart === 0 && this.noteInput.selectionEnd === 0
+      const atEnd = this.noteInput.selectionStart === this.noteInput.value.length && this.noteInput.selectionEnd === this.noteInput.value.length
+      if (e.key === 'ArrowLeft' && atStart) {
+        e.preventDefault()
+        this.exitTo(-1)
+      } else if (e.key === 'ArrowRight' && atEnd) {
+        e.preventDefault()
+        this.exitTo(1)
+      } else if (e.key === 'Escape' || e.key === 'Enter') {
+        e.preventDefault()
+        this.exitTo(1)
+      }
+    }
+
+    private exitTo(side: -1 | 1) {
+      const pos = this.getPos()
+      if (pos == null) return
+      const target = side === -1 ? pos : pos + this.node.nodeSize
+      const tr = this.view.state.tr.setSelection(TextSelection.near(this.view.state.doc.resolve(target), side))
+      this.view.dispatch(tr)
+      this.view.focus()
+    }
+
+    /** Focuses the note input and places the caret at the given edge — `pmCitationArrowPlugin.ts`'s own counterpart to `exitTo` above, called when the surrounding document's own ArrowLeft/ArrowRight handling decides the caret should land in *this* chip instead of becoming a NodeSelection around it. */
+    focusNote(side: -1 | 1) {
+      this.noteInput.focus()
+      // Entering from the chip's own left edge (-1, an ArrowRight moving into it) lands at the note's own start, so continuing right steps forward through it; entering from the right edge (1, ArrowLeft) lands at its end, so continuing left steps backward — normal text-navigation direction either way, never a surprise jump to the opposite end of what was just typed.
+      const pos = side === -1 ? 0 : this.noteInput.value.length
+      this.noteInput.setSelectionRange(pos, pos)
     }
 
     update(node: PMNode) {
       if (node.type.name !== 'citation') return false
       this.node = node
-      this.render(node)
+      this.render()
       return true
     }
 
@@ -87,6 +181,11 @@ export function createCitationView(sources: Map<string, Source>): new (node: PMN
  * `section`) gets no chevron at all, matching the old app's own
  * `SectionBlock.tsx`: nothing above it to fold it away into.
  */
+/** True when `section`'s own title is exactly "Abstract" — the PM-doc counterpart of `treeNumbering.ts`'s own `isAbstractTitle`, just reading a real section node's first child instead of an `EssayNode.title` string. */
+function isAbstractTitled(section: PMNode): boolean {
+  return (section.firstChild?.textContent ?? '').trim() === 'Abstract'
+}
+
 export class SectionView implements NodeView {
   dom: HTMLElement
   contentDOM: HTMLElement
@@ -94,6 +193,8 @@ export class SectionView implements NodeView {
   view: EditorView
   getPos: () => number | undefined
   private chevron: HTMLButtonElement | null = null
+  private numberLabel: HTMLElement | null = null
+  private demoteBtn: HTMLButtonElement | null = null
 
   constructor(node: PMNode, view: EditorView, getPos: () => number | undefined) {
     this.node = node
@@ -116,12 +217,35 @@ export class SectionView implements NodeView {
       })
       this.dom.appendChild(chevron)
       this.chevron = chevron
+
+      const numberLabel = document.createElement('span')
+      numberLabel.className = 'section-number'
+      numberLabel.contentEditable = 'false'
+      this.dom.appendChild(numberLabel)
+      this.numberLabel = numberLabel
+
+      const demoteBtn = document.createElement('button')
+      demoteBtn.type = 'button'
+      demoteBtn.className = 'section-demote icon-btn'
+      demoteBtn.contentEditable = 'false'
+      demoteBtn.title = "Demote: fold this section's text back into its parent, removing the subsection but keeping the text"
+      demoteBtn.textContent = '⤴'
+      demoteBtn.addEventListener('mousedown', (e) => e.preventDefault())
+      demoteBtn.addEventListener('click', (e) => {
+        e.preventDefault()
+        e.stopPropagation()
+        const pos = this.getPos()
+        if (pos != null) demoteSectionAt(this.view, pos)
+      })
+      this.dom.appendChild(demoteBtn)
+      this.demoteBtn = demoteBtn
     }
 
     this.contentDOM = document.createElement('div')
     this.contentDOM.className = 'section-body'
     this.dom.appendChild(this.contentDOM)
     this.syncCollapsed()
+    this.syncNumber()
   }
 
   private toggle() {
@@ -140,25 +264,88 @@ export class SectionView implements NodeView {
     }
   }
 
+  /**
+   * This section's own `x.y.z` numbering path, recomputed fresh from
+   * `view.state.doc` on every mount/`update()` — the PM-doc counterpart of
+   * `treeNumbering.ts`'s own `pathOf`, which print/PDF export's
+   * `addPrintChrome` (`lib/export.ts`) already shows the very same way;
+   * restoring it live here means the document always reads with the same
+   * numbers it'll actually print with. Walks this section's own resolved
+   * position upward rather than storing/threading a path through props —
+   * nothing else in this NodeView model has a channel for "tell every
+   * section when any *other* section's numbering might have changed," and
+   * ProseMirror already re-invokes `update()` on the sections a structural
+   * edit actually affects. Only counts `section`-typed siblings (a
+   * section's own content can freely mix paragraphs in with subsections),
+   * and, like `pathOf`, a root-level section titled exactly "Abstract"
+   * neither gets a number nor consumes a numbering slot — the real section
+   * right after it still reads "1", not "2".
+   */
+  private syncNumber() {
+    if (!this.numberLabel) return
+    const path = this.computeNumberPath()
+    this.numberLabel.textContent = path ? `${path.join('.')}` : ''
+  }
+
+  private computeNumberPath(): number[] | null {
+    const pos = this.getPos()
+    if (pos == null) return null
+    const $pos = this.view.state.doc.resolve(pos)
+    if ($pos.depth === 0) return null // the root section itself — never numbered
+    // The root's own first *section*-typed child, specifically — never just
+    // its first child overall, which root's own body can freely have
+    // ordinary paragraphs in front of (same as any other section) without
+    // that pushing its real first subsection out of the "could be the
+    // abstract" slot. -1 when root has no child sections at all yet.
+    const root = this.view.state.doc.firstChild
+    let abstractChildIndex = -1
+    if (root) {
+      for (let i = 0; i < root.childCount; i++) {
+        const child = root.child(i)
+        if (child.type.name !== 'section') continue
+        abstractChildIndex = isAbstractTitled(child) ? i : -1
+        break
+      }
+    }
+    if ($pos.depth === 1 && $pos.index(1) === abstractChildIndex) return null
+    const path: number[] = []
+    for (let d = 1; d <= $pos.depth; d++) {
+      const parent = $pos.node(d)
+      const myIndex = $pos.index(d)
+      let count = 0
+      for (let i = 0; i < myIndex; i++) {
+        const child = parent.child(i)
+        if (child.type.name !== 'section') continue
+        if (d === 1 && i === abstractChildIndex) continue
+        count++
+      }
+      path.push(count + 1)
+    }
+    return path
+  }
+
   update(node: PMNode) {
     if (node.type.name !== 'section') return false
     this.node = node
     this.dom.dataset.sectionId = node.attrs.id ?? ''
     this.syncCollapsed()
+    this.syncNumber()
     return true
   }
 
-  // The chevron sits outside `contentDOM` purely for layout/UI — clicks on
-  // it shouldn't be interpreted as a document selection the way a click
-  // inside the real content would be.
+  // The chevron/number/demote button sit outside `contentDOM` purely for
+  // layout/UI — clicks on them shouldn't be interpreted as a document
+  // selection the way a click inside the real content would be.
   stopEvent(event: Event) {
-    return !!this.chevron && event.target instanceof Node && this.chevron.contains(event.target)
+    const target = event.target
+    if (!(target instanceof Node)) return false
+    return !!(this.chevron?.contains(target) || this.demoteBtn?.contains(target))
   }
 
-  // Same reasoning in the other direction: the chevron's own attribute
-  // changes (title/class, set by `syncCollapsed` above) are DOM mutations
-  // outside `contentDOM` — nothing PM needs to reconcile against the
-  // document.
+  // Same reasoning in the other direction: the chevron/number/demote
+  // button's own attribute changes (title/class/text, set by `syncCollapsed`/
+  // `syncNumber` above) are DOM mutations outside `contentDOM` — nothing PM
+  // needs to reconcile against the document.
   ignoreMutation(record: ViewMutationRecord) {
     return !this.contentDOM.contains(record.target as Node)
   }

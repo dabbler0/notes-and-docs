@@ -34,7 +34,6 @@ import {
   insertQuoteInline,
   insertSourceLink,
   splitIntoSection,
-  demoteSection,
   sliceToHtml,
   toggleSectionCollapsed,
   findEnclosingSection,
@@ -570,9 +569,6 @@ export function EssayWorkspace({ essayId, onBack, embedded = false }: { essayId:
                 <span className="toolbar-divider" />
                 <button className="btn btn-sm icon-btn-toolbar" title="Split selection into subsection" onMouseDown={(e) => e.preventDefault()} onClick={() => run(splitIntoSection)}>
                   <Icon name="subsection" />
-                </button>
-                <button className="btn btn-sm icon-btn-toolbar" title="Demote: fold the current section back into its parent" onMouseDown={(e) => e.preventDefault()} onClick={() => run(demoteSection)}>
-                  <Icon name="demote" />
                 </button>
                 <button
                   className="btn btn-sm icon-btn-toolbar"

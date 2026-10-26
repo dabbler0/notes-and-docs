@@ -3277,25 +3277,53 @@ select {
 
 .pm-editor-root .ProseMirror section {
   position: relative;
-  border-left: 2px solid var(--border);
-  padding-left: 18px;
+  /* Transparent, not var(--border) — the rule itself only shows for a
+     focused section and its ancestors (pmActiveSectionPlugin.ts toggles
+     .section-rule-active); keeping it transparent rather than `none`
+     means the 2px of layout space stays reserved either way, so nothing
+     shifts sideways when a section's rule appears/disappears as the
+     cursor moves through the document. */
+  border-left: 2px solid transparent;
+  padding-left: 38px;
+  padding-right: 28px;
   margin: 18px 0;
 }
 
-.pm-editor-root .ProseMirror section section {
+.pm-editor-root .ProseMirror section.section-rule-active {
   border-left-color: var(--border);
 }
 
-/* The collapse/expand chevron (SectionView, pmNodeViews.ts) sits outside
-   .section-body — ProseMirror's own content — as a sibling, positioned to
-   overlap the section's own left rule rather than taking up a line of its
-   own; reuses .section-chevron's base look (see the outline sidebar's own
-   copy, above) with just the positioning that's specific to sitting next
-   to a line of real document text instead of a tree row. */
+/* Collapse chevron, section number, and demote button (SectionView,
+   pmNodeViews.ts) all sit outside .section-body — ProseMirror's own
+   content — as siblings, absolutely positioned within the section's own
+   left/right padding gutters rather than taking up a line of their own:
+   rule, then chevron, then number, then the title itself (left side);
+   demote alone on the right. The chevron reuses .section-chevron's base
+   look (see the outline sidebar's own copy, above) with just the
+   positioning that's specific to sitting next to a line of real document
+   text instead of a tree row. */
 .pm-editor-root .ProseMirror section > .section-chevron {
   position: absolute;
-  left: -11px;
+  left: 4px;
   top: 1px;
+}
+
+.pm-editor-root .ProseMirror section > .section-number {
+  position: absolute;
+  left: 22px;
+  top: 3px;
+  font-size: 0.8em;
+  font-weight: 600;
+  color: var(--ink-dim);
+  white-space: nowrap;
+  user-select: none;
+}
+
+.pm-editor-root .ProseMirror section > .section-demote {
+  position: absolute;
+  right: 0;
+  top: 0;
+  font-size: 13px;
 }
 
 /* Collapsed: every child of .section-body but the first (the section's own
@@ -3338,8 +3366,41 @@ select {
   border-radius: 6px;
   font-size: 0.85em;
   color: #2b4a63;
-  cursor: pointer;
+  display: inline-flex;
+  align-items: baseline;
+}
+
+/* The citation chip's own fixed, non-editable "(Author, Year" / ")" —
+   only the note `<input>` between them is ever actually editable; see
+   pmNodeViews.ts's own CitationView doc comment. */
+.pm-editor-root .ProseMirror .pm-citation-base,
+.pm-editor-root .ProseMirror .pm-citation-close {
+  white-space: nowrap;
+}
+
+.pm-editor-root .ProseMirror .pm-citation-separator {
+  display: none;
+  white-space: pre;
+}
+
+.pm-editor-root .ProseMirror citation.pm-citation-has-note .pm-citation-separator {
   display: inline;
+}
+
+/* Sized by CitationView's own `autoSize()` (a fixed CSS width can't track
+   an <input>'s own content) — everything else here just makes it read as
+   plain inline text sitting in the chip, not a form field: no border/
+   background/focus ring of its own, same color and font as the rest of
+   the citation. */
+.pm-editor-root .ProseMirror .pm-citation-note-input {
+  border: none;
+  outline: none;
+  background: transparent;
+  font: inherit;
+  color: inherit;
+  padding: 0;
+  margin: 0;
+  min-width: 5px;
 }
 
 .pm-editor-root .ProseMirror a[data-source-id] {
