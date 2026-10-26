@@ -115,6 +115,7 @@ export function createCitationView(sources: Map<string, Source>): new (node: PMN
     private render() {
       const source = sources.get(this.node.attrs.sourceId)
       this.baseSpan.textContent = source ? citationLabelOpen(source.bibtex) : `(unknown source: ${this.node.attrs.sourceId}`
+      this.dom.classList.toggle('pm-citation-unavailable', !source)
       if (document.activeElement !== this.noteInput) {
         this.noteInput.value = this.node.attrs.note ?? ''
         this.autoSize()

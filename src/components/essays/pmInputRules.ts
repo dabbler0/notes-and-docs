@@ -1,4 +1,4 @@
-import { InputRule, inputRules } from 'prosemirror-inputrules'
+import { InputRule, inputRules, wrappingInputRule } from 'prosemirror-inputrules'
 import type { Plugin } from 'prosemirror-state'
 import { essaySchema } from '../../lib/pmSchema'
 
@@ -30,6 +30,32 @@ export function createMathInputRules(): Plugin {
       new InputRule(/\\\[$/, (state, _match, start, end) => {
         return state.tr.replaceWith(start, end, essaySchema.nodes.math_block.create({ latex: '' }))
       }),
+    ],
+  })
+}
+
+/**
+ * The PM-native counterpart of the old app's own `autoListify` — typing
+ * `- ` (or `* `/`+ `) at the start of a line wraps the current textblock
+ * in a `bullet_list`, `1. ` (any starting number) wraps it in an
+ * `ordered_list` starting at that number, same two triggers as before.
+ * `wrappingInputRule` (from `prosemirror-inputrules`, the same package
+ * `createMathInputRules` above already depends on) is the standard
+ * ProseMirror recipe for exactly this — it also handles the "typing `2. `
+ * right after an existing ordered-list item" case, extending that list
+ * instead of starting a new nested one, via its own join-predicate
+ * argument.
+ */
+export function createListInputRules(): Plugin {
+  return inputRules({
+    rules: [
+      wrappingInputRule(/^\s*([-+*])\s$/, essaySchema.nodes.bullet_list),
+      wrappingInputRule(
+        /^(\d+)\.\s$/,
+        essaySchema.nodes.ordered_list,
+        (match) => ({ order: Number(match[1]) }),
+        (match, node) => node.childCount + node.attrs.order === Number(match[1]),
+      ),
     ],
   })
 }

@@ -4,7 +4,7 @@ import { EditorView } from 'prosemirror-view'
 import { baseKeymap, toggleMark } from 'prosemirror-commands'
 import { keymap } from 'prosemirror-keymap'
 import { history, undo, redo } from 'prosemirror-history'
-import { splitListItem } from 'prosemirror-schema-list'
+import { splitListItem, sinkListItem } from 'prosemirror-schema-list'
 import { Node as PMNode } from 'prosemirror-model'
 import { essaySchema } from '../../lib/pmSchema'
 import { saveEssay } from '../../models/essaysRepo'
@@ -12,7 +12,7 @@ import { createCitationView, SectionView, FootnoteView, createMathView } from '.
 import { createCommentPlugin } from './pmCommentPlugin'
 import { createCitationArrowPlugin } from './pmCitationArrowPlugin'
 import { createActiveSectionPlugin } from './pmActiveSectionPlugin'
-import { createMathInputRules } from './pmInputRules'
+import { createMathInputRules, createListInputRules } from './pmInputRules'
 import type { Essay, Source } from '../../models/types'
 
 /**
@@ -147,10 +147,21 @@ export function PMEssayEditor({
           'Mod-i': toggleMark(essaySchema.marks.em),
           'Mod-u': toggleMark(essaySchema.marks.underline),
           Enter: splitListItem(essaySchema.nodes.list_item),
+          // Captured unconditionally — even outside a list, Tab's default
+          // browser behavior (moving focus to the next focusable element
+          // entirely out of the editor) is worse than doing nothing, so
+          // the fallback below always returns true once `sinkListItem`
+          // itself declines.
+          Tab: (state, dispatch, view) => {
+            const sink = sinkListItem(essaySchema.nodes.list_item)
+            if (sink(state, dispatch, view)) return true
+            return true
+          },
         }),
         createCitationArrowPlugin(),
         keymap(baseKeymap),
         createMathInputRules(),
+        createListInputRules(),
         createCommentPlugin(commentsHolder, (commentId) => onAnchorClickRef.current?.(commentId)),
         createActiveSectionPlugin(),
       ],

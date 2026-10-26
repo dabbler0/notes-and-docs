@@ -3365,7 +3365,6 @@ select {
 .pm-editor-root .ProseMirror section > .section-number {
   float: left;
   font-weight: 600;
-  color: var(--ink-dim);
   white-space: nowrap;
   user-select: none;
   /* A float with no text content collapses to zero height, not just zero
@@ -3423,10 +3422,10 @@ select {
 }
 
 .pm-editor-root .ProseMirror blockquote {
-  border-left: 3px solid var(--ink-dim);
   margin: 1em 0;
-  padding-left: 1em;
-  color: var(--ink-dim);
+  padding: 0.6em 1em;
+  border-radius: 6px;
+  background: var(--surface-2);
 }
 
 .pm-editor-root .ProseMirror citation.pm-citation {
@@ -3451,6 +3450,13 @@ select {
 .pm-editor-root .ProseMirror .pm-citation-separator {
   display: none;
   white-space: pre;
+}
+
+/* A citation whose source no longer exists (deleted, or never synced) —
+   `CitationView.render` (pmNodeViews.ts) toggles this when `sources` has
+   no entry for the node's own `sourceId`. */
+.pm-editor-root .ProseMirror citation.pm-citation.pm-citation-unavailable {
+  color: var(--red, #a23b2c);
 }
 
 .pm-editor-root .ProseMirror citation.pm-citation-has-note .pm-citation-separator {

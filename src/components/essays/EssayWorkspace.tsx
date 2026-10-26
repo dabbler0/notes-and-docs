@@ -1,8 +1,8 @@
 import { useEffect, useRef, useState } from 'preact/hooks'
 import type { Node as PMNode } from 'prosemirror-model'
 import type { EditorView } from 'prosemirror-view'
-import { toggleMark, lift } from 'prosemirror-commands'
-import { wrapInList, liftListItem } from 'prosemirror-schema-list'
+import { toggleMark } from 'prosemirror-commands'
+import { wrapInList } from 'prosemirror-schema-list'
 import type { EditorState, Transaction } from 'prosemirror-state'
 import { cloneEssay, getEssay, saveEssay } from '../../models/essaysRepo'
 import { groupEssays } from '../../models/projectsRepo'
@@ -542,19 +542,6 @@ export function EssayWorkspace({ essayId, onBack, embedded = false }: { essayId:
                 </button>
                 <button className="btn btn-sm icon-btn-toolbar" title="Numbered list" onMouseDown={(e) => e.preventDefault()} onClick={() => run(wrapInList(essaySchema.nodes.ordered_list))}>
                   <Icon name="list-ol" />
-                </button>
-                <button
-                  className="btn btn-sm icon-btn-toolbar"
-                  title="Outdent list item / block"
-                  onMouseDown={(e) => e.preventDefault()}
-                  onClick={() => {
-                    const view = viewRef.current
-                    if (!view) return
-                    const liftItem = liftListItem(essaySchema.nodes.list_item)
-                    run(liftItem(view.state) ? liftItem : lift)
-                  }}
-                >
-                  <Icon name="outdent" />
                 </button>
                 <span className="toolbar-divider" />
                 <button className="btn btn-sm icon-btn-toolbar" title="Cite a source" onMouseDown={(e) => e.preventDefault()} onClick={() => setShowCitation(true)}>
