@@ -48,17 +48,21 @@
  * converting — it's left in place, inert, exactly as `sourcesMigrations.ts`
  * leaves old pre-split source shapes in place once superseded.
  *
- * One known, deliberately accepted imprecision: a node whose legacy
- * `Comment`s still sit unflattened in `version.comments` (not yet migrated
- * onto `node.comments` — see `essaysRepo.ts`'s own `migrateComments`, a
- * *lazy* migration that only runs when a node is actually loaded through
- * `getNode()`, never through this module's own direct `ctx.list` reads)
- * shows up here with an empty `comments` array in every migrated snapshot.
- * Nothing is lost — the real comment data is untouched on the node record
- * itself, and `migrateComments` still flattens it correctly the next time
- * that node is actually opened in the app — only the *historical* replay of
- * that one node's comments is incomplete, not worth duplicating
- * `migrateComments`'s own logic here for.
+ * A node whose legacy `Comment`s still sit unflattened in
+ * `version.comments` (not yet migrated onto `node.comments` — see
+ * `essaysRepo.ts`'s own `migrateComments`, normally a *lazy* migration that
+ * only runs when a node is actually loaded through `getNode()`) needs that
+ * same flattening run explicitly here first — this module's own direct
+ * `ctx.list` reads never go through `getNode()` at all. Both `run`
+ * functions below call `migrateComments(n)` on every raw node before using
+ * it for exactly this reason: skipping it would leave every such node's
+ * comments invisible to `walkSnapshot`/`migrateEssay` (which only ever
+ * read the already-flattened `node.comments`), even though that node's own
+ * comment *anchors* — baked directly into `draftContent` as literal
+ * `<mark class="comment-anchor">` elements, never dependent on this
+ * flattening — would still show up fine. That mismatch (an anchor with no
+ * comment to show for it) was a real bug here before `migrateComments` was
+ * exported and wired in below, not a merely theoretical one.
  */
 import type { Migration } from '../storage/migrations'
 import type { DocStore } from '../storage/types'
@@ -66,6 +70,7 @@ import { getChildIds } from '../lib/childMarkers'
 import { diffSnapshots, snapshotText } from '../lib/essayHistory'
 import { id } from '../lib/id'
 import { migrateEssay, migrateEssayHistory } from '../lib/pmMigration'
+import { migrateComments } from './essaysRepo'
 import type { Essay, EssayCommitEntry, EssayNode, LegacyEssaySnapshot, Source } from './types'
 
 const ESSAYS = 'essays'
@@ -138,6 +143,13 @@ export const migrateVersionsToEssayHistory: Migration = {
     const nodesByEssay = new Map<string, EssayNode[]>()
     for (const n of allNodes) {
       if (n.deleted) continue
+      // `ctx.list` reads the node straight off storage, never through
+      // `getNode()` — the only other place `migrateComments` normally runs
+      // from — so a node whose comments still sit unflattened in
+      // `version.comments` needs it run explicitly here, or `walkSnapshot`
+      // below (which only ever reads `node.comments`) would see nothing to
+      // put in each migrated commit's own snapshot.
+      migrateComments(n)
       if (!nodesByEssay.has(n.essayId)) nodesByEssay.set(n.essayId, [])
       nodesByEssay.get(n.essayId)!.push(n)
     }
@@ -180,6 +192,14 @@ async function migratePMDocumentsRun(ctx: DocStore): Promise<void> {
   const nodesByEssay = new Map<string, EssayNode[]>()
   for (const n of allNodes) {
     if (n.deleted) continue
+    // Same reasoning as `migrateVersionsToEssayHistory`'s own identical
+    // call: `ctx.list` never goes through `getNode()`, so a node whose
+    // comments are still sitting unflattened in `version.comments` needs
+    // this run explicitly, or `migrateEssay` below (which only ever reads
+    // `node.comments`) would migrate that node's own comment *anchors*
+    // (baked directly into `draftContent`) with no actual `Comment`
+    // records to go with them.
+    migrateComments(n)
     if (!nodesByEssay.has(n.essayId)) nodesByEssay.set(n.essayId, [])
     nodesByEssay.get(n.essayId)!.push(n)
   }

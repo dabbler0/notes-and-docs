@@ -163,9 +163,19 @@ interface LegacyComment {
  * inline-positioning logic to actually find.
  *
  * Only ever runs once per node: a node that already has `comments` (even an
- * empty array) is left alone.
+ * empty array) is left alone. Exported — not just an implicit side effect
+ * of `getNode()` — because `essaysMigrations.ts` reads nodes straight off
+ * `DocStore.list()` (never through `getNode()`, the only other caller that
+ * ever triggers this), so a node whose comments were never lazily
+ * flattened yet needs this run explicitly before either essay-level
+ * migration (`migrateVersionsToEssayHistory`, `migratePMDocuments`) reads
+ * its `.comments`, or they'd silently see nothing to migrate — the exact
+ * bug this was written to fix: a comment's own anchor mark survives
+ * (baked directly into `draftContent`, which neither migration needs this
+ * for), but the comment itself, still sitting unflattened in
+ * `version.comments`, doesn't.
  */
-function migrateComments(node: EssayNode): void {
+export function migrateComments(node: EssayNode): void {
   if (node.comments) return
   const flat: Comment[] = []
   const replyIds = new Set<string>()

@@ -235,6 +235,46 @@ describe('migratePMDocuments', () => {
     expect(migratedEssay.rootNodeId).toBe('root')
   })
 
+  it("flattens a node's still-legacy version.comments into essay.comments, not just its draftContent's own comment-anchor marks", async () => {
+    const { docs } = createFakeBackend()
+    // `node()`'s own default sets `comments: []` (already-flattened, the
+    // normal case) — this node instead has `comments` left `undefined`
+    // entirely, with the real comment data still sitting in
+    // `version.comments`, an old field no longer declared on `NodeVersion`
+    // but still exactly how already-stored data from before comments were
+    // flattened onto the node itself looks. `getNode()` would lazily
+    // flatten this the first time the node was actually opened in the
+    // app — this migration never calls `getNode()`, so it has to do that
+    // flattening itself (`migrateComments`, wired into both `run`
+    // functions below) or the comment's own anchor mark (baked directly
+    // into `draftContent`, migrated regardless) would survive with no
+    // actual `Comment` record behind it.
+    const root = node({
+      id: 'root',
+      essayId: 'e1',
+      draftContent: '<p>Body text<mark class="comment-anchor" data-comment-id="c1">with an anchor</mark>.</p>',
+      versions: [{ id: 'v1', content: '', createdAt: 0, comments: [{ id: 'c1', parentId: null, anchorKind: 'text', anchorText: 'with an anchor', body: '<p>A real comment.</p>', resolved: false, createdAt: 0, updatedAt: 0 }] } as unknown as EssayNode['versions'][number]],
+    })
+    root.comments = undefined
+    await docs.put('essays', essay({ id: 'e1', title: 'My Essay', rootNodeId: 'root' }))
+    await docs.put('nodes', root)
+
+    await migratePMDocuments.run(docs)
+
+    const migratedEssay = (await docs.list<Essay>('essays')).find((e) => e.id === 'e1')!
+    expect(migratedEssay.comments).toHaveLength(1)
+    expect(migratedEssay.comments![0].id).toBe('c1')
+    expect(migratedEssay.comments![0].body).toBe('<p>A real comment.</p>')
+    expect(migratedEssay.comments![0].sectionId).toBe('root')
+
+    const pm = PMNode.fromJSON(essaySchema, migratedEssay.doc)
+    let foundAnchor = false
+    pm.descendants((n) => {
+      if (n.marks.some((m) => m.type.name === 'comment_anchor' && m.attrs.commentId === 'c1')) foundAnchor = true
+    })
+    expect(foundAnchor).toBe(true)
+  })
+
   it("converts an essay's entire existing commit history to the new format in the same pass", async () => {
     const { docs } = createFakeBackend()
     const root = node({ id: 'root', essayId: 'e1', draftContent: '<p>v1</p>', versions: [] })
