@@ -17,7 +17,7 @@ import { AuthorNoteDialog } from './AuthorNoteDialog'
 import { SplitPickerDialog } from './SplitPickerDialog'
 import { CitationPickerDialog } from './CitationPickerDialog'
 import { QuoteInsertDialog } from './QuoteInsertDialog'
-import { insertCitation, insertQuoteBlock, insertQuoteInline, insertSourceLink, splitIntoSection, demoteSection, sliceToHtml } from './pmCommands'
+import { insertCitation, insertQuoteBlock, insertQuoteInline, insertSourceLink, splitIntoSection, demoteSection, sliceToHtml, toggleSectionCollapsed } from './pmCommands'
 import { Modal } from '../Modal'
 import { useIsMobile } from '../../lib/useIsMobile'
 
@@ -50,7 +50,6 @@ export function EssayWorkspace({ essayId, onBack, embedded = false }: { essayId:
   // snapshot forever after. `reload()` and the insert-citation/quote/link
   // handlers below all mutate it in place for exactly this reason.
   const sources = useRef<Map<string, Source>>(new Map()).current
-  const [collapsed, setCollapsed] = useState<Set<string>>(new Set())
   const [splitEssayId, setSplitEssayId] = useState<string | null>(null)
   const [showSplitPicker, setShowSplitPicker] = useState(false)
   const [showTree, setShowTree] = useState(true)
@@ -220,12 +219,8 @@ export function EssayWorkspace({ essayId, onBack, embedded = false }: { essayId:
   }
 
   function toggleCollapse(id: string) {
-    setCollapsed((prev) => {
-      const next = new Set(prev)
-      if (next.has(id)) next.delete(id)
-      else next.add(id)
-      return next
-    })
+    const view = viewRef.current
+    if (view) toggleSectionCollapsed(view, id)
   }
 
   if (!essay || !essay.doc) return <div className="page-pad">Loading…</div>
@@ -262,7 +257,7 @@ export function EssayWorkspace({ essayId, onBack, embedded = false }: { essayId:
           !splitEssayId &&
           (showTree ? (
             <div className="tree-panel-shell">
-              {doc && <NodeTree doc={doc} essayTitle={essayTitle} collapsed={collapsed} onToggleCollapse={toggleCollapse} onScrollTo={scrollToNode} />}
+              {doc && <NodeTree doc={doc} essayTitle={essayTitle} onToggleCollapse={toggleCollapse} onScrollTo={scrollToNode} />}
               <button className="panel-edge-toggle left" onClick={() => setShowTree(false)} title="Collapse outline">
                 ‹
               </button>
@@ -276,8 +271,8 @@ export function EssayWorkspace({ essayId, onBack, embedded = false }: { essayId:
         <div className="editor-panel">
           <div className="editor-toolbar doc-toolbar">
             {isMobile && (
-              <button className="btn btn-sm" onClick={() => setMobileTreeOpen(true)}>
-                ☰ Outline
+              <button className="btn btn-sm icon-btn-toolbar" title="Outline" onClick={() => setMobileTreeOpen(true)}>
+                <Icon name="outline" /> <span className="btn-label">Outline</span>
               </button>
             )}
             <button className="btn btn-sm icon-btn-toolbar" title="Bold (Mod-B)" onMouseDown={(e) => e.preventDefault()} onClick={() => run(toggleMark(essaySchema.marks.strong))}>
@@ -300,7 +295,7 @@ export function EssayWorkspace({ essayId, onBack, embedded = false }: { essayId:
               <Icon name="list-ol" />
             </button>
             <button
-              className="btn btn-sm"
+              className="btn btn-sm icon-btn-toolbar"
               title="Outdent list item / block"
               onMouseDown={(e) => e.preventDefault()}
               onClick={() => {
@@ -310,7 +305,7 @@ export function EssayWorkspace({ essayId, onBack, embedded = false }: { essayId:
                 run(liftItem(view.state) ? liftItem : lift)
               }}
             >
-              Outdent
+              <Icon name="outdent" />
             </button>
             <span className="toolbar-divider" />
             <button className="btn btn-sm icon-btn-toolbar" title="Cite a source" onMouseDown={(e) => e.preventDefault()} onClick={() => setShowCitation(true)}>
@@ -326,8 +321,8 @@ export function EssayWorkspace({ essayId, onBack, embedded = false }: { essayId:
             <button className="btn btn-sm icon-btn-toolbar" title="Split selection into subsection" onMouseDown={(e) => e.preventDefault()} onClick={() => run(splitIntoSection)}>
               <Icon name="subsection" />
             </button>
-            <button className="btn btn-sm" title="Demote: fold the current section back into its parent" onMouseDown={(e) => e.preventDefault()} onClick={() => run(demoteSection)}>
-              Demote
+            <button className="btn btn-sm icon-btn-toolbar" title="Demote: fold the current section back into its parent" onMouseDown={(e) => e.preventDefault()} onClick={() => run(demoteSection)}>
+              <Icon name="demote" />
             </button>
             <span className="toolbar-divider" />
             <button className="btn btn-sm icon-btn-toolbar" title="Send selection to the graveyard" onMouseDown={(e) => e.preventDefault()} onClick={sendSelectionToGraveyard}>
@@ -365,7 +360,6 @@ export function EssayWorkspace({ essayId, onBack, embedded = false }: { essayId:
             <NodeTree
               doc={doc}
               essayTitle={essayTitle}
-              collapsed={collapsed}
               onToggleCollapse={toggleCollapse}
               onScrollTo={(sectionId) => {
                 setMobileTreeOpen(false)

@@ -48,6 +48,9 @@ export type IconName =
   | 'chevron-right'
   | 'trash'
   | 'word-count'
+  | 'outdent'
+  | 'demote'
+  | 'outline'
 
 const STROKE = { fill: 'none', stroke: 'currentColor', strokeWidth: 2, strokeLinecap: 'round' as const, strokeLinejoin: 'round' as const }
 
@@ -101,6 +104,20 @@ export function Icon({ name, size = 18, className }: { name: IconName; size?: nu
         <svg {...props} {...STROKE}>
           <path d="M6 4v8a4 4 0 0 0 4 4h7" />
           <polyline points="13 12 17 16 13 20" />
+        </svg>
+      )
+    case 'demote':
+      // 'subsection' (above) mirrored left-to-right: the same single
+      // connected corner arrow, but curving down-and-*left* instead of
+      // down-and-right — "this section's content moves back up and out,
+      // into its parent" is the exact inverse motion of "this becomes a
+      // child," so the icon is the exact inverse shape, not an unrelated
+      // glyph (an eject/undo arrow, etc.) for what is, structurally, just
+      // `subsection` run backwards.
+      return (
+        <svg {...props} {...STROKE}>
+          <path d="M18 4v8a4 4 0 0 1-4 4H7" />
+          <polyline points="11 12 7 16 11 20" />
         </svg>
       )
     case 'comment':
@@ -251,6 +268,32 @@ export function Icon({ name, size = 18, className }: { name: IconName; size?: nu
         </svg>
       )
     }
+    case 'outdent':
+      // The standard word-processor "decrease indent" glyph: a left-facing
+      // arrow (the margin moving left) beside a block of right-aligned
+      // lines (the text following it in). Deliberately distinct from
+      // 'demote' — this is a generic list/block indent level, not "fold a
+      // whole subsection back into its parent."
+      return (
+        <svg {...props} {...STROKE}>
+          <polyline points="10 8 6 12 10 16" />
+          <line x1="13" y1="6" x2="21" y2="6" />
+          <line x1="13" y1="12" x2="21" y2="12" />
+          <line x1="13" y1="18" x2="21" y2="18" />
+        </svg>
+      )
+    case 'outline':
+      // Three left-aligned lines at successively deeper indents — "this
+      // button opens a tree of nested headings," distinct from 'list-ul'
+      // (whose bullets read as "formatting," not "navigation") at a
+      // glance.
+      return (
+        <svg {...props} {...STROKE}>
+          <line x1="3" y1="6" x2="17" y2="6" />
+          <line x1="7" y1="12" x2="21" y2="12" />
+          <line x1="11" y1="18" x2="21" y2="18" />
+        </svg>
+      )
     case 'search':
       return (
         <svg {...props} {...STROKE}>

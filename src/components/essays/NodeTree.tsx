@@ -8,6 +8,13 @@ import type { Node as PMNode } from 'prosemirror-model'
  * section's own stable `attrs.id` is what `onScrollTo` looks up in the
  * live DOM (`[data-section-id]`, from `pmSchema.ts`'s own `toDOM`).
  *
+ * Collapse state is `section.attrs.collapsed` itself (see `pmSchema.ts`'s
+ * own doc comment) — not separate component state — so this sidebar's own
+ * chevron and the matching one inside the document (`pmNodeViews.ts`'s
+ * `SectionView`) always agree about which sections are folded; toggling
+ * either one dispatches the same `pmCommands.ts` transaction and both
+ * re-render off the one resulting `doc`.
+ *
  * Drag-and-drop reordering (the old version's other job) is deferred to
  * the stage that adds structural editing (split/demote/move) as real PM
  * transactions — this is read-only navigation for now: click a row to
@@ -16,20 +23,18 @@ import type { Node as PMNode } from 'prosemirror-model'
 export function NodeTree({
   doc,
   essayTitle,
-  collapsed,
   onToggleCollapse,
   onScrollTo,
 }: {
   doc: PMNode
   essayTitle: string
-  collapsed: Set<string>
   onToggleCollapse: (id: string) => void
   onScrollTo: (id: string) => void
 }) {
   function renderSection(section: PMNode, depth: number) {
     const sectionId = section.attrs.id as string
     const isRoot = depth === 0
-    const isCollapsed = collapsed.has(sectionId)
+    const isCollapsed = !!section.attrs.collapsed
     const title = isRoot ? essayTitle : section.firstChild?.textContent || 'Untitled section'
 
     const children: PMNode[] = []

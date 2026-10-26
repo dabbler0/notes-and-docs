@@ -3276,6 +3276,7 @@ select {
 }
 
 .pm-editor-root .ProseMirror section {
+  position: relative;
   border-left: 2px solid var(--border);
   padding-left: 18px;
   margin: 18px 0;
@@ -3283,6 +3284,27 @@ select {
 
 .pm-editor-root .ProseMirror section section {
   border-left-color: var(--border);
+}
+
+/* The collapse/expand chevron (SectionView, pmNodeViews.ts) sits outside
+   .section-body — ProseMirror's own content — as a sibling, positioned to
+   overlap the section's own left rule rather than taking up a line of its
+   own; reuses .section-chevron's base look (see the outline sidebar's own
+   copy, above) with just the positioning that's specific to sitting next
+   to a line of real document text instead of a tree row. */
+.pm-editor-root .ProseMirror section > .section-chevron {
+  position: absolute;
+  left: -11px;
+  top: 1px;
+}
+
+/* Collapsed: every child of .section-body but the first (the section's own
+   title, always rendered first — see pmSchema.ts's own `content: "section_
+   title block+"`) is hidden — the title stays visible so a collapsed
+   section still reads as "a section," same as the old per-node model's own
+   `.section-content-row` staying hidden while its header did not. */
+.pm-editor-root .ProseMirror section.collapsed > .section-body > :not(:first-child) {
+  display: none;
 }
 
 .pm-editor-root .ProseMirror h2.section-title {

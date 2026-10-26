@@ -1,6 +1,7 @@
 import { Fragment, DOMSerializer } from 'prosemirror-model'
 import type { EditorState, Transaction } from 'prosemirror-state'
 import type { EditorView } from 'prosemirror-view'
+import type { Node as PMNode } from 'prosemirror-model'
 import { essaySchema } from '../../lib/pmSchema'
 import { pageNote } from '../../lib/bibtex'
 import { id } from '../../lib/id'
@@ -140,6 +141,28 @@ export function demoteSection(state: EditorState, dispatch?: (tr: Transaction) =
     dispatch(tr)
   }
   return true
+}
+
+/**
+ * Flips a section's own `collapsed` attr by its stable `id` — the one
+ * command shared by both collapse affordances (the in-document chevron,
+ * `pmNodeViews.ts`'s `SectionView`, which already has its own position via
+ * `getPos()` and dispatches directly instead of calling this; and the
+ * outline sidebar's chevron, `NodeTree.tsx`, which only has the section's
+ * `id` and needs a doc walk to find it). Both ultimately write the same
+ * attr on the same document, so the sidebar and the document itself can
+ * never show a section as open in one place and folded in the other.
+ */
+export function toggleSectionCollapsed(view: EditorView, sectionId: string): void {
+  const hits: { pos: number; node: PMNode }[] = []
+  view.state.doc.descendants((n, p) => {
+    if (hits.length) return false
+    if (n.type.name === 'section' && n.attrs.id === sectionId) hits.push({ pos: p, node: n })
+    return true
+  })
+  const hit = hits[0]
+  if (!hit) return
+  view.dispatch(view.state.tr.setNodeMarkup(hit.pos, undefined, { ...hit.node.attrs, collapsed: !hit.node.attrs.collapsed }))
 }
 
 /** Serializes a document slice to plain HTML via the schema's own `toDOM` — `pmSchema.ts` already defines exactly this for every node/mark, so no separate HTML-rendering logic is needed here. Used by "Send to graveyard," which keeps its own storage format (`GraveyardFragment.html`) unchanged regardless of what model the live editor uses. */

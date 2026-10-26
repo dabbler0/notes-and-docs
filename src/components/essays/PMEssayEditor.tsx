@@ -8,7 +8,7 @@ import { splitListItem } from 'prosemirror-schema-list'
 import { Node as PMNode } from 'prosemirror-model'
 import { essaySchema } from '../../lib/pmSchema'
 import { saveEssay } from '../../models/essaysRepo'
-import { createCitationView } from './pmNodeViews'
+import { createCitationView, SectionView } from './pmNodeViews'
 import type { Essay, Source } from '../../models/types'
 
 /**
@@ -97,6 +97,7 @@ export function PMEssayEditor({
       editable: () => editable,
       nodeViews: {
         citation: (node, v, getPos) => new (createCitationView(sources))(node, v, getPos as () => number | undefined),
+        section: (node, v, getPos) => new SectionView(node, v, getPos as () => number | undefined),
       },
       dispatchTransaction(tr) {
         const newState = view.state.apply(tr)

@@ -90,7 +90,14 @@ const nodes: Record<string, NodeSpec> = {
     content: 'section_title block+',
     group: 'block',
     defining: true,
-    attrs: { id: { default: null } },
+    // `collapsed` is UI-only state (the in-document fold toggle and the
+    // outline sidebar read/write this same attr, via `pmCommands.ts`'s
+    // `toggleSectionCollapsed` — see `pmNodeViews.ts`'s `SectionView`) —
+    // deliberately a real node attr rather than component-local state, so
+    // a section stays folded across a reload/essay-switch the same way
+    // any other edit would, and the sidebar and in-document chevrons can
+    // never disagree about which sections are open.
+    attrs: { id: { default: null }, collapsed: { default: false } },
     parseDOM: [{ tag: 'section', getAttrs: (dom) => ({ id: (dom as HTMLElement).getAttribute('data-section-id') }) }],
     toDOM(node) {
       return ['section', { 'data-section-id': node.attrs.id }, 0]
