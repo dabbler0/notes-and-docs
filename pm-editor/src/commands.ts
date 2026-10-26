@@ -8,11 +8,23 @@ function newSectionNode() {
   return schema.nodes.section.create({ id: id() }, [schema.nodes.section_title.create(), schema.nodes.paragraph.create()])
 }
 
-/** Inserts a new sibling `section` right after whichever section the selection is currently inside — the structural-node equivalent of the old app's "add a sibling subsection" tree action. */
+/**
+ * Inserts a new sibling `section` right after whichever section the
+ * selection is currently inside — the structural-node equivalent of the
+ * old app's "add a sibling subsection" tree action. The one exception:
+ * when that section's own parent is `doc` itself (we're inside the root
+ * section's own body text, not any numbered subsection), there's no doc-
+ * level sibling position to insert at — `doc`'s content is exactly one
+ * `section` (see `schema.ts`'s own doc comment) — so this falls back to
+ * appending a new *child* of the root instead, which is what "new
+ * section" from the top of the document has always meant: a new
+ * top-level numbered section.
+ */
 export const insertSiblingSection: Cmd = (state, dispatch) => {
   const { $from } = state.selection
   for (let d = $from.depth; d >= 0; d--) {
     if ($from.node(d).type.name === 'section') {
+      if (d === 0) return insertChildSection(state, dispatch)
       if (dispatch) dispatch(state.tr.insert($from.after(d), newSectionNode()).scrollIntoView())
       return true
     }

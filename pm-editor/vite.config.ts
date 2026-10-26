@@ -8,4 +8,7 @@ export default defineConfig({
     assetsInlineLimit: 100000000,
     cssCodeSplit: false,
   },
+  test: {
+    environment: 'jsdom',
+  },
 })

@@ -42,8 +42,18 @@ import { Schema, type NodeSpec, type MarkSpec } from 'prosemirror-model'
 const pDOM = ['p', 0] as const
 
 const nodes: Record<string, NodeSpec> = {
+  /**
+   * Exactly one top-level `section` — not `"section+"` — matching the old
+   * model's single root (`Essay.rootNodeId`/its one `EssayNode`): a
+   * second top-level section would be structurally ambiguous (is it a
+   * second root-level numbered section, or a sibling "root"?), so there
+   * is deliberately no shape for that to mean. `commands.ts`'s own
+   * `insertSiblingSection` is written to respect this — from inside the
+   * root section's own body text, "new section" adds a *child* of the
+   * root (a new numbered top-level section), never a doc-level sibling.
+   */
   doc: {
-    content: 'section+',
+    content: 'section',
   },
 
   /**
