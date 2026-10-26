@@ -9,6 +9,7 @@ import { Node as PMNode } from 'prosemirror-model'
 import { essaySchema } from '../../lib/pmSchema'
 import { saveEssay } from '../../models/essaysRepo'
 import { createCitationView, SectionView } from './pmNodeViews'
+import { createCommentPlugin } from './pmCommentPlugin'
 import type { Essay, Source } from '../../models/types'
 
 /**
@@ -79,6 +80,8 @@ function stripCollapsedAttrs(node: unknown): unknown {
 export function PMEssayEditor({
   essay,
   sources,
+  commentsHolder,
+  onAnchorClick,
   editable = true,
   onViewReady,
   onViewDestroyed,
@@ -87,12 +90,33 @@ export function PMEssayEditor({
   essay: Essay
   /** Live source map (`listSources()`, loaded once by `EssayWorkspace.tsx`) — closed over by the `citation` NodeView so every citation always renders fresh from current bibtex, never a cached label (see `pmSchema.ts`'s own doc comment). */
   sources: Map<string, Source>
+  /** A stable holder for the live `essay` (same "never replaced, always re-pointed at the current object" shape as `sources` above) — closed over once by `pmCommentPlugin.ts`'s own decorations, which need `essay.comments` fresh on every rebuild, not whatever it was the moment this `EditorView` first mounted. */
+  commentsHolder: { current: Essay | null }
+  /** A `comment_anchor` mark (margin) or an inline comment's own preview chip was clicked — see `pmCommentPlugin.ts`'s own doc comment for why this is the one place both route through. */
+  onAnchorClick?: (commentId: string) => void
   editable?: boolean
   onViewReady?: (view: EditorView) => void
   onViewDestroyed?: () => void
   onDocChanged?: (doc: PMNode) => void
 }) {
   const containerRef = useRef<HTMLDivElement>(null)
+  // Read live by `editable: () => editableRef.current` below, rather than
+  // closed over once — "Comment mode" (EssayWorkspace.tsx) needs to flip
+  // the live view between editable and read-only without remounting it
+  // (which would tear down undo history, scroll position, everything).
+  const editableRef = useRef(editable)
+  editableRef.current = editable
+  // Same reasoning as `sources`/`commentsHolder` above — the comment
+  // plugin's own click handler is built once, inside the mount effect
+  // below, so closing over the `onAnchorClick` *prop* directly would wire
+  // it to whichever render happened to be current at mount time (and, in
+  // turn, to that render's own stale `essay`/`openInlineComment` — this
+  // was a real bug, caught live: an inline comment's preview chip, added
+  // *after* the editor first mounted, didn't open its popover at all,
+  // because the handler closed over at mount time still thought there
+  // were no comments yet).
+  const onAnchorClickRef = useRef(onAnchorClick)
+  onAnchorClickRef.current = onAnchorClick
 
   useEffect(() => {
     if (!containerRef.current) return
@@ -122,12 +146,13 @@ export function PMEssayEditor({
           Enter: splitListItem(essaySchema.nodes.list_item),
         }),
         keymap(baseKeymap),
+        createCommentPlugin(commentsHolder, (commentId) => onAnchorClickRef.current?.(commentId)),
       ],
     })
 
     const view = new EditorView(containerRef.current, {
       state,
-      editable: () => editable,
+      editable: () => editableRef.current,
       nodeViews: {
         citation: (node, v, getPos) => new (createCitationView(sources))(node, v, getPos as () => number | undefined),
         section: (node, v, getPos) => new SectionView(node, v, getPos as () => number | undefined),
@@ -137,7 +162,7 @@ export function PMEssayEditor({
         view.updateState(newState)
         if (tr.docChanged) {
           onDocChanged?.(newState.doc)
-          if (editable) scheduleSave(newState.doc)
+          if (editableRef.current) scheduleSave(newState.doc)
         }
       },
     })
@@ -150,12 +175,11 @@ export function PMEssayEditor({
       onViewDestroyed?.()
     }
     // Only `essay.id` — a new EditorView per essay switch, never per
-    // unrelated prop/state change. `editable` is read once, at mount; a
-    // caller that needs a different editable-ness for the exact same
-    // essay.id (none does yet — a read-only history preview mounts a
-    // fresh instance against a different, historical doc, which already
-    // gets a fresh mount some other way) would need its own key to force
-    // a remount, not a live toggle.
+    // unrelated prop/state change. `editable` itself is read live off
+    // `editableRef` (see above) specifically so "Comment mode" can flip it
+    // without a remount; `sources`/`commentsHolder` are the same kind of
+    // stable, mutated-in-place container, read fresh by the NodeViews/
+    // plugin that close over them rather than re-closed-over per render.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [essay.id])
 

@@ -1,11 +1,23 @@
-import { Fragment, DOMSerializer } from 'prosemirror-model'
+import { Fragment, DOMSerializer, DOMParser as PMDOMParser } from 'prosemirror-model'
+import { TextSelection } from 'prosemirror-state'
 import type { EditorState, Transaction } from 'prosemirror-state'
 import type { EditorView } from 'prosemirror-view'
-import type { Node as PMNode } from 'prosemirror-model'
+import type { Node as PMNode, Mark, ResolvedPos } from 'prosemirror-model'
 import { essaySchema } from '../../lib/pmSchema'
 import { pageNote } from '../../lib/bibtex'
 import { id } from '../../lib/id'
 import type { Source } from '../../models/types'
+
+/** Walks up from `$pos` to the nearest enclosing `section` — shared by "Send to graveyard" (`sendSelectionToGraveyard`, EssayWorkspace.tsx) and comment-anchor insertion below, both of which need "which section does this position belong to" as a best-effort reference (never dereferenced structurally — a section can be renamed/moved/deleted without anything here needing to follow it). */
+export function findEnclosingSection($pos: ResolvedPos): { id: string; title: string } | null {
+  for (let d = $pos.depth; d >= 0; d--) {
+    const node = $pos.node(d)
+    if (node.type.name === 'section') {
+      return { id: node.attrs.id, title: node.firstChild?.textContent || 'Untitled section' }
+    }
+  }
+  return null
+}
 
 /** `citationHtml`'s own `note` formatting (`lib/bibtex.ts`) — an explicit note wins, otherwise `pageNote` derives "p. N" from a page number (empty if the source has no page numbers at all). Shared by every insertion command below, same as the old HTML-chip path shared it through `citationHtml` itself. */
 function resolveNote(source: Source, opts: { note?: string; page?: number }): string | null {
@@ -172,4 +184,95 @@ export function sliceToHtml(slice: { content: Fragment }): string {
   const div = document.createElement('div')
   div.appendChild(fragmentDom)
   return div.innerHTML
+}
+
+/**
+ * Wraps the current selection in a `comment_anchor` mark carrying a fresh
+ * `commentId` — the PM-native counterpart of the old app's own
+ * `insertCommentAnchor`, a real document edit (a `Transaction`) rather
+ * than DOM surgery on a live `contentEditable` shard. With nothing
+ * selected (an "inline comment, right here" — see `Comment.displayMode`'s
+ * own doc comment), there's no existing content to mark — PM can't apply
+ * a mark to a zero-length range — so this inserts one zero-width space
+ * first and marks that: the exact same placeholder `pmMigration.ts`'s own
+ * `walkInline` already invents when converting an old empty `<mark></mark>`
+ * anchor, so an essay's zero-width anchors look identical regardless of
+ * whether they were just created here or migrated from pre-PM data.
+ * Returns the anchor's own plain text (empty for a zero-width one), the id
+ * of its enclosing section, and the position right after it — the first
+ * two are what `essayCommentActions.ts` needs to build the `Comment`
+ * record itself; the third is where `EssayWorkspace.tsx`'s own
+ * `beginComment` positions the composer popup (`view.coordsAtPos`).
+ */
+export function insertCommentAnchorMark(view: EditorView, commentId: string): { anchorText: string; sectionId: string | null; pos: number } {
+  const { state } = view
+  const { $from, empty } = state.selection
+  const section = findEnclosingSection($from)
+  const mark = essaySchema.marks.comment_anchor.create({ commentId })
+  if (empty) {
+    const tr = state.tr.insertText('​')
+    const end = tr.selection.to
+    tr.addMark(end - 1, end, mark)
+    view.dispatch(tr)
+    return { anchorText: '', sectionId: section?.id ?? null, pos: end }
+  }
+  const { from, to } = state.selection
+  const anchorText = state.doc.textBetween(from, to, ' ').trim()
+  view.dispatch(state.tr.addMark(from, to, mark))
+  return { anchorText, sectionId: section?.id ?? null, pos: to }
+}
+
+/** Every `(from, to, mark)` hit for `commentId`'s own `comment_anchor` mark, across however many adjacent text runs it happens to span (a bold word in the middle of an otherwise-plain highlighted phrase is two text nodes carrying the same mark, not one) — the shared lookup `removeCommentAnchorMark`/`pmCommentPlugin.ts`'s inline-preview placement both need. */
+function findCommentAnchorHits(doc: PMNode, commentId: string): { from: number; to: number; mark: Mark; text: string }[] {
+  const hits: { from: number; to: number; mark: Mark; text: string }[] = []
+  doc.descendants((node, pos) => {
+    if (!node.isText) return
+    const mark = node.marks.find((m) => m.type.name === 'comment_anchor' && m.attrs.commentId === commentId)
+    if (mark) hits.push({ from: pos, to: pos + node.nodeSize, mark, text: node.text ?? '' })
+  })
+  return hits
+}
+
+/**
+ * Removes `commentId`'s own `comment_anchor` mark from wherever it sits in
+ * the live document — a run that's nothing but the zero-width-space
+ * placeholder `insertCommentAnchorMark` invents for an empty selection is
+ * deleted outright (nothing real to keep); a run of genuine highlighted
+ * text is just unmarked, keeping the text itself exactly as `unwrapCommentMark`
+ * (essaysRepo.ts) already does for the old model. Used both to cancel an
+ * in-progress (not-yet-submitted) comment composer and, from
+ * `essayCommentActions.ts`, to clean up a deleted top-level comment's own
+ * anchor. `placeCursorAfter` — used by "promote" — leaves the selection
+ * collapsed right where the (possibly now-shorter) anchor used to end, so
+ * a follow-up `insertHtmlAtSelection` call lands in exactly the right spot.
+ */
+export function removeCommentAnchorMark(view: EditorView, commentId: string, opts: { placeCursorAfter?: boolean } = {}): void {
+  const hits = findCommentAnchorHits(view.state.doc, commentId)
+  if (!hits.length) return
+  let tr = view.state.tr
+  for (let i = hits.length - 1; i >= 0; i--) {
+    const h = hits[i]
+    if (/^​+$/.test(h.text)) tr = tr.delete(h.from, h.to)
+    else tr = tr.removeMark(h.from, h.to, h.mark)
+  }
+  if (opts.placeCursorAfter) {
+    const mapped = tr.mapping.map(hits[hits.length - 1].to)
+    tr = tr.setSelection(TextSelection.create(tr.doc, mapped))
+  }
+  view.dispatch(tr)
+}
+
+/** The end position of `commentId`'s own `comment_anchor` mark — the last point it reaches, if it spans more than one text run — or `null` if it isn't anchored anywhere in the main document at all (an `'inline'`-anchorKind comment, whose anchor lives inside another comment's own `body` HTML instead — see `Comment`'s own doc comment). Exported for `pmCommentPlugin.ts`'s own inline-preview widget placement. */
+export function commentAnchorEndPos(doc: PMNode, commentId: string): number | null {
+  const hits = findCommentAnchorHits(doc, commentId)
+  if (!hits.length) return null
+  return Math.max(...hits.map((h) => h.to))
+}
+
+/** Parses `html` (a comment's own rich-text `body`) through the schema's own `parseDOM` rules and inserts it at the current selection — the PM-native inverse of `sliceToHtml` above, used only by "promote," which needs to turn a comment's body back into ordinary document content. */
+export function insertHtmlAtSelection(view: EditorView, html: string): void {
+  const dom = document.createElement('div')
+  dom.innerHTML = html
+  const slice = PMDOMParser.fromSchema(essaySchema).parseSlice(dom, { preserveWhitespace: true })
+  view.dispatch(view.state.tr.replaceSelection(slice))
 }

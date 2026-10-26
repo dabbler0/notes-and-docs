@@ -3349,3 +3349,39 @@ select {
 .pm-editor-root .ProseMirror quote-inline {
   color: var(--ink-dim);
 }
+
+/* `comment_anchor` (pmSchema.ts) — same pink highlight the old model's own
+   `mark.comment-anchor` used, just on the custom element this schema's
+   `toDOM` renders instead of a real `<mark>`. */
+.pm-editor-root .ProseMirror comment-anchor {
+  background: var(--pink);
+  border-radius: 3px;
+  cursor: pointer;
+}
+
+/* "Comment mode" (EssayWorkspace.tsx) reads close to a print view —
+   editing is off (PMEssayEditor's own dynamic `editable`), so the text
+   cursor the browser would otherwise still show over ordinary prose looks
+   like a leftover, not an affordance. */
+.doc-scroll.comment-mode .pm-editor-root .ProseMirror {
+  cursor: default;
+}
+
+/* The inline-preview chip `pmCommentPlugin.ts` renders right after an
+   inline-displayed top-level comment's own anchor — reuses the old
+   model's own `.inline-comment-preview` look (italic, muted, a dotted
+   underline) unchanged; only the mechanism producing it (a PM widget
+   decoration instead of a literal marker element) is new. */
+.pm-editor-root .ProseMirror .inline-comment-preview:empty::before {
+  content: '(click to view)';
+}
+
+/* The inline comment's own popover (EssayWorkspace.tsx's `openInlineComment`)
+   reuses `.inline-comment-editor`'s card look (background/shadow/padding —
+   see its own rule, above) but floats over the page instead of sitting
+   in the document's own flow, the same `position: fixed` + viewport-
+   relative placement `commentWidgetStyle` already gives the pending-
+   comment composer (`.comment-widget`). */
+.inline-comment-popover {
+  z-index: 40;
+}

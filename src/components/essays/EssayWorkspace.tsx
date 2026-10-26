@@ -7,8 +7,11 @@ import type { EditorState, Transaction } from 'prosemirror-state'
 import { getEssay, saveEssay } from '../../models/essaysRepo'
 import { listSources } from '../../models/sourcesRepo'
 import { addToGraveyard } from '../../models/graveyardRepo'
+import { addEssayComment, findEssayCommentById } from '../../models/essayCommentsRepo'
+import { deleteEssayComment, promoteEssayComment, toggleEssayCommentDisplayMode } from './essayCommentActions'
 import { essaySchema } from '../../lib/pmSchema'
 import { displayTitle } from '../../lib/bibtex'
+import { confirmDialog } from '../../lib/confirm'
 import type { Essay, Source } from '../../models/types'
 import { Icon } from '../Icon'
 import { PMEssayEditor } from './PMEssayEditor'
@@ -17,9 +20,24 @@ import { AuthorNoteDialog } from './AuthorNoteDialog'
 import { SplitPickerDialog } from './SplitPickerDialog'
 import { CitationPickerDialog } from './CitationPickerDialog'
 import { QuoteInsertDialog } from './QuoteInsertDialog'
-import { insertCitation, insertQuoteBlock, insertQuoteInline, insertSourceLink, splitIntoSection, demoteSection, sliceToHtml, toggleSectionCollapsed } from './pmCommands'
+import { CommentsPanel, CommentCard } from './CommentsPanel'
+import { GraveyardPanel } from './GraveyardPanel'
+import {
+  insertCitation,
+  insertQuoteBlock,
+  insertQuoteInline,
+  insertSourceLink,
+  splitIntoSection,
+  demoteSection,
+  sliceToHtml,
+  toggleSectionCollapsed,
+  findEnclosingSection,
+  insertCommentAnchorMark,
+  removeCommentAnchorMark,
+} from './pmCommands'
 import { Modal } from '../Modal'
 import { useIsMobile } from '../../lib/useIsMobile'
+import { id } from '../../lib/id'
 
 /**
  * The whole essay as one continuous, real ProseMirror document — see
@@ -50,6 +68,14 @@ export function EssayWorkspace({ essayId, onBack, embedded = false }: { essayId:
   // snapshot forever after. `reload()` and the insert-citation/quote/link
   // handlers below all mutate it in place for exactly this reason.
   const sources = useRef<Map<string, Source>>(new Map()).current
+  // Same "stable container, never replaced" shape as `sources` above —
+  // `pmCommentPlugin.ts`'s own inline-preview decorations close over this
+  // once, at `EditorView` mount, and need `essay.comments` fresh on every
+  // rebuild rather than whatever it was back then. Kept in sync below
+  // (plain assignment during render, not an effect — see that line's own
+  // comment).
+  const commentsHolder = useRef<Essay | null>(null)
+  commentsHolder.current = essay
   const [splitEssayId, setSplitEssayId] = useState<string | null>(null)
   const [showSplitPicker, setShowSplitPicker] = useState(false)
   const [showTree, setShowTree] = useState(true)
@@ -59,6 +85,20 @@ export function EssayWorkspace({ essayId, onBack, embedded = false }: { essayId:
   const [showCitation, setShowCitation] = useState(false)
   const [showQuoteDialog, setShowQuoteDialog] = useState(false)
   const [showLink, setShowLink] = useState(false)
+  const [commentMode, setCommentMode] = useState(false)
+  const [rightPanel, setRightPanel] = useState<'comments' | 'graveyard' | null>('comments')
+  const [mobilePanel, setMobilePanel] = useState<'comments' | 'graveyard' | null>(null)
+  /** The toolbar's "Comment" button, or selecting text while comment mode is on, opened a composer right here — not yet a real `Comment` until `submitComment` records it; see `beginComment`'s own doc comment. */
+  const [pendingComment, setPendingComment] = useState<{
+    commentId: string
+    sectionId: string | null
+    text: string
+    displayMode: 'margin' | 'inline'
+    anchorRect: { top: number; bottom: number; left: number; right: number }
+  } | null>(null)
+  /** Which inline-displayed top-level comment, if any, has its full `CommentCard` editor popped open as a floating popover right now — see `pmCommentPlugin.ts`'s own doc comment for why the editor lives here, in ordinary Preact state, rather than mounted inside the PM decoration itself. */
+  const [openInlineComment, setOpenInlineComment] = useState<{ id: string; rect: { top: number; bottom: number; left: number; right: number } } | null>(null)
+  const commentWidgetRef = useRef<HTMLDivElement>(null)
 
   const viewRef = useRef<EditorView | null>(null)
   const docScrollRef = useRef<HTMLDivElement>(null)
@@ -76,6 +116,149 @@ export function EssayWorkspace({ essayId, onBack, embedded = false }: { essayId:
   useEffect(() => {
     reload()
   }, [essayId])
+
+  // Dismiss the pending comment composer on an outside click, same as any
+  // other popover in this app.
+  useEffect(() => {
+    if (!pendingComment) return
+    function onDocDown(e: MouseEvent) {
+      if (commentWidgetRef.current && !commentWidgetRef.current.contains(e.target as Node)) {
+        cancelPendingComment()
+      }
+    }
+    document.addEventListener('mousedown', onDocDown)
+    return () => document.removeEventListener('mousedown', onDocDown)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pendingComment])
+
+  /**
+   * Notifies everything that reads `essay.comments` — the margin panel
+   * (ordinary Preact re-render, via `setEssay`) and the document's own
+   * inline-preview chips (`pmCommentPlugin.ts`, which only rebuilds its
+   * decorations in response to a PM transaction) — that a comment was
+   * added, edited, resolved, or deleted. `essay` itself was already
+   * mutated in place by whichever `essayCommentsRepo.ts` call just ran
+   * (same "same object, new shallow clone to force a re-render" shape
+   * `saveAuthorNote` already uses); the empty `view.dispatch(view.state.tr)`
+   * is a no-op transaction whose only job is making the comment plugin's
+   * own `apply` re-run (see that file's own doc comment).
+   */
+  function notifyCommentsChanged() {
+    setEssay((e) => (e ? { ...e } : e))
+    const view = viewRef.current
+    if (view) view.dispatch(view.state.tr)
+  }
+
+  /**
+   * The toolbar's "Comment" button — the primary way to add a comment,
+   * usable whether or not comment mode is on (comment mode isn't the only
+   * way to add one). Highlighted text opens the ordinary margin composer,
+   * same as selecting text in comment mode does (`handleMouseUpForComments`
+   * below, which just calls this once there's a real selection). Nothing
+   * highlighted creates an *inline* comment instead, anchored to a
+   * zero-width mark right at the cursor — see `Comment.displayMode`'s own
+   * doc comment, and `insertCommentAnchorMark`'s own for why that needs a
+   * placeholder character at all.
+   */
+  function beginComment() {
+    const view = viewRef.current
+    if (!view) {
+      alert('Click into the document first.')
+      return
+    }
+    const wasEmpty = view.state.selection.empty
+    const commentId = id()
+    const { anchorText, sectionId, pos } = insertCommentAnchorMark(view, commentId)
+    const displayMode: 'margin' | 'inline' = wasEmpty ? 'inline' : 'margin'
+    const coords = view.coordsAtPos(pos)
+    setPendingComment({ commentId, sectionId, text: anchorText, displayMode, anchorRect: coords })
+  }
+
+  /** Selecting text while in comment mode opens the same comment composer the toolbar's own "Comment" button does — this is just the mouseup-triggered shortcut for it that only applies while comment mode is on, and only for a real (non-collapsed) selection. */
+  function handleMouseUpForComments() {
+    if (!commentMode) return
+    const view = viewRef.current
+    if (!view || view.state.selection.empty) return
+    beginComment()
+  }
+
+  /**
+   * Undoes `beginComment`'s own `insertCommentAnchorMark` without ever
+   * saving anything — the mark (and, for a zero-width anchor, its
+   * placeholder character) only ever lived in the live, uncommitted
+   * document, so removing it here is enough; there's nothing persisted
+   * yet for a cancel to need to clean up in storage. Shared by the
+   * composer's own Cancel button and a click outside the widget.
+   */
+  function cancelPendingComment() {
+    if (pendingComment) {
+      const view = viewRef.current
+      if (view) removeCommentAnchorMark(view, pendingComment.commentId)
+    }
+    setPendingComment(null)
+  }
+
+  async function submitComment(body: string) {
+    if (!pendingComment || !essay) return
+    await addEssayComment(essay, {
+      anchorKind: 'text',
+      anchorText: pendingComment.text,
+      body,
+      commentId: pendingComment.commentId,
+      displayMode: pendingComment.displayMode,
+      sectionId: pendingComment.sectionId,
+    })
+    setPendingComment(null)
+    notifyCommentsChanged()
+  }
+
+  /**
+   * Routes a click on either kind of comment anchor in the document — a
+   * margin comment's own `comment-anchor` highlight, or an inline
+   * comment's small preview chip (both via `pmCommentPlugin.ts`'s one
+   * shared `handleClick`). An inline-displayed top-level comment toggles
+   * its own floating popover open/closed, positioned off the chip that
+   * was actually clicked; anything else (a margin comment's highlight)
+   * just scrolls its card into view — there's no separate "open" state
+   * for a margin card, since it's already visible in the panel.
+   */
+  function handleAnchorClick(commentId: string) {
+    if (!essay) return
+    const comment = findEssayCommentById(essay, commentId)
+    if (comment && comment.parentId === null && comment.anchorKind === 'text' && comment.displayMode === 'inline') {
+      if (openInlineComment?.id === commentId) {
+        setOpenInlineComment(null)
+        return
+      }
+      const el = document.querySelector(`.inline-comment-preview[data-comment-id="${cssEscape(commentId)}"]`) as HTMLElement | null
+      const rect = el?.getBoundingClientRect()
+      setOpenInlineComment({ id: commentId, rect: rect ? { top: rect.top, bottom: rect.bottom, left: rect.left, right: rect.right } : { top: 100, bottom: 100, left: 100, right: 100 } })
+      return
+    }
+    document.querySelector(`comment-anchor[data-comment-id="${cssEscape(commentId)}"]`)?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+  }
+
+  async function handleDeleteOpenInlineComment(commentId: string) {
+    if (!essay) return
+    if (!(await confirmDialog('Delete this comment, and everything replied or commented on it?', { confirmLabel: 'Delete', danger: true }))) return
+    await deleteEssayComment(essay, viewRef.current, commentId)
+    setOpenInlineComment(null)
+    notifyCommentsChanged()
+  }
+
+  async function handleToggleOpenInlineDisplayMode(commentId: string, target: 'margin' | 'inline') {
+    if (!essay) return
+    await toggleEssayCommentDisplayMode(essay, commentId, target)
+    setOpenInlineComment(null)
+    notifyCommentsChanged()
+  }
+
+  async function handlePromoteOpenInlineComment(commentId: string) {
+    if (!essay) return
+    await promoteEssayComment(essay, viewRef.current, commentId)
+    setOpenInlineComment(null)
+    notifyCommentsChanged()
+  }
 
   function run(command: (state: EditorState, dispatch?: (tr: Transaction) => void) => boolean) {
     const view = viewRef.current
@@ -181,18 +364,9 @@ export function EssayWorkspace({ essayId, onBack, embedded = false }: { essayId:
     const slice = view.state.doc.slice(from, to)
     const html = sliceToHtml(slice)
     if (!html.trim()) return
-    let sectionId = essay.rootNodeId
-    let sectionTitle = essayTitle
-    for (let d = $from.depth; d >= 0; d--) {
-      const node = $from.node(d)
-      if (node.type.name === 'section') {
-        sectionId = node.attrs.id
-        sectionTitle = node.firstChild?.textContent || 'Untitled section'
-        break
-      }
-    }
+    const section = findEnclosingSection($from)
     view.dispatch(view.state.tr.deleteSelection())
-    await addToGraveyard(essay.id, sectionId, sectionTitle, html)
+    await addToGraveyard(essay.id, section?.id ?? essay.rootNodeId, section?.title ?? essayTitle, html)
   }
 
   /** "Split view" → `SplitPickerDialog`'s "pick an existing project-mate" option: just opens it side by side, no data touched at all. */
@@ -225,6 +399,8 @@ export function EssayWorkspace({ essayId, onBack, embedded = false }: { essayId:
 
   if (!essay || !essay.doc) return <div className="page-pad">Loading…</div>
 
+  const openInlineCommentRecord = openInlineComment ? findEssayCommentById(essay, openInlineComment.id) : undefined
+
   return (
     <div className="essay-workspace-root">
       <div className="topbar essay-header" style={{ borderBottom: '1px solid var(--border)', padding: '10px 20px' }}>
@@ -237,6 +413,13 @@ export function EssayWorkspace({ essayId, onBack, embedded = false }: { essayId:
           onBlur={saveEssayTitle}
           style={{ border: 'none', outline: 'none', background: 'transparent', fontSize: 16, fontWeight: 700, flex: 1, minWidth: 0 }}
         />
+        <button
+          className={`btn btn-ghost btn-sm toolbar-toggle${commentMode ? ' active' : ''}`}
+          title="Comment mode: a closer-to-print reading view, with editing off but selecting text to comment on still on"
+          onClick={() => setCommentMode((v) => !v)}
+        >
+          <Icon name="comment" /> <span className="btn-label">{commentMode ? 'Commenting…' : 'Comment mode'}</span>
+        </button>
         <button className="btn btn-ghost btn-sm" title="Thanks/acknowledgements/disclosures for your author attribution in print exports" onClick={() => setShowAuthorNote(true)}>
           <Icon name="footnote" /> <span className="btn-label">Author note</span>
         </button>
@@ -271,70 +454,97 @@ export function EssayWorkspace({ essayId, onBack, embedded = false }: { essayId:
         <div className="editor-panel">
           <div className="editor-toolbar doc-toolbar">
             {isMobile && (
-              <button className="btn btn-sm icon-btn-toolbar" title="Outline" onClick={() => setMobileTreeOpen(true)}>
-                <Icon name="outline" /> <span className="btn-label">Outline</span>
-              </button>
+              <>
+                <button className="btn btn-sm icon-btn-toolbar" title="Outline" onClick={() => setMobileTreeOpen(true)}>
+                  <Icon name="outline" /> <span className="btn-label">Outline</span>
+                </button>
+                <button className="btn btn-sm icon-btn-toolbar" title="Comments" onClick={() => setMobilePanel('comments')}>
+                  <Icon name="comment" /> <span className="btn-label">Comments</span>
+                </button>
+                <button className="btn btn-sm icon-btn-toolbar" title="Graveyard" onClick={() => setMobilePanel('graveyard')}>
+                  <Icon name="graveyard" /> <span className="btn-label">Graveyard</span>
+                </button>
+              </>
             )}
-            <button className="btn btn-sm icon-btn-toolbar" title="Bold (Mod-B)" onMouseDown={(e) => e.preventDefault()} onClick={() => run(toggleMark(essaySchema.marks.strong))}>
-              <Icon name="bold" />
+            {/* Unlike every button below, this one works whether or not
+                comment mode is on — comment mode isn't the only way to add
+                a comment (see `beginComment`'s own doc comment). */}
+            <button className="btn btn-sm icon-btn-toolbar" title="Add a comment on the current selection, or an inline one at the cursor if nothing's selected" onMouseDown={(e) => e.preventDefault()} onClick={beginComment}>
+              <Icon name="comment" />
             </button>
-            <button className="btn btn-sm icon-btn-toolbar" title="Italic (Mod-I)" onMouseDown={(e) => e.preventDefault()} onClick={() => run(toggleMark(essaySchema.marks.em))}>
-              <Icon name="italic" />
-            </button>
-            <button className="btn btn-sm icon-btn-toolbar" title="Underline (Mod-U)" onMouseDown={(e) => e.preventDefault()} onClick={() => run(toggleMark(essaySchema.marks.underline))}>
-              <Icon name="underline" />
-            </button>
-            <button className="btn btn-sm icon-btn-toolbar" title="Clear formatting" onMouseDown={(e) => e.preventDefault()} onClick={() => run(clearFormatting)}>
-              <Icon name="clear-format" />
-            </button>
-            <span className="toolbar-divider" />
-            <button className="btn btn-sm icon-btn-toolbar" title="Bulleted list" onMouseDown={(e) => e.preventDefault()} onClick={() => run(wrapInList(essaySchema.nodes.bullet_list))}>
-              <Icon name="list-ul" />
-            </button>
-            <button className="btn btn-sm icon-btn-toolbar" title="Numbered list" onMouseDown={(e) => e.preventDefault()} onClick={() => run(wrapInList(essaySchema.nodes.ordered_list))}>
-              <Icon name="list-ol" />
-            </button>
-            <button
-              className="btn btn-sm icon-btn-toolbar"
-              title="Outdent list item / block"
-              onMouseDown={(e) => e.preventDefault()}
-              onClick={() => {
-                const view = viewRef.current
-                if (!view) return
-                const liftItem = liftListItem(essaySchema.nodes.list_item)
-                run(liftItem(view.state) ? liftItem : lift)
-              }}
-            >
-              <Icon name="outdent" />
-            </button>
-            <span className="toolbar-divider" />
-            <button className="btn btn-sm icon-btn-toolbar" title="Cite a source" onMouseDown={(e) => e.preventDefault()} onClick={() => setShowCitation(true)}>
-              <Icon name="cite" />
-            </button>
-            <button className="btn btn-sm icon-btn-toolbar" title="Insert a quote from a source" onMouseDown={(e) => e.preventDefault()} onClick={() => setShowQuoteDialog(true)}>
-              <Icon name="quote" />
-            </button>
-            <button className="btn btn-sm icon-btn-toolbar" title="Link to a source" onMouseDown={(e) => e.preventDefault()} onClick={() => setShowLink(true)}>
-              <Icon name="link" />
-            </button>
-            <span className="toolbar-divider" />
-            <button className="btn btn-sm icon-btn-toolbar" title="Split selection into subsection" onMouseDown={(e) => e.preventDefault()} onClick={() => run(splitIntoSection)}>
-              <Icon name="subsection" />
-            </button>
-            <button className="btn btn-sm icon-btn-toolbar" title="Demote: fold the current section back into its parent" onMouseDown={(e) => e.preventDefault()} onClick={() => run(demoteSection)}>
-              <Icon name="demote" />
-            </button>
-            <span className="toolbar-divider" />
-            <button className="btn btn-sm icon-btn-toolbar" title="Send selection to the graveyard" onMouseDown={(e) => e.preventDefault()} onClick={sendSelectionToGraveyard}>
-              <Icon name="graveyard" />
-            </button>
+            {/* Comment mode reads close to a print view — nearly every
+                text-editing affordance below only applies to a live draft,
+                so they're hidden rather than just disabled while
+                commenting (selecting text to comment on still works fully
+                — see PMEssayEditor's own dynamic `editable`). */}
+            {!commentMode && (
+              <>
+                <span className="toolbar-divider" />
+                <button className="btn btn-sm icon-btn-toolbar" title="Bold (Mod-B)" onMouseDown={(e) => e.preventDefault()} onClick={() => run(toggleMark(essaySchema.marks.strong))}>
+                  <Icon name="bold" />
+                </button>
+                <button className="btn btn-sm icon-btn-toolbar" title="Italic (Mod-I)" onMouseDown={(e) => e.preventDefault()} onClick={() => run(toggleMark(essaySchema.marks.em))}>
+                  <Icon name="italic" />
+                </button>
+                <button className="btn btn-sm icon-btn-toolbar" title="Underline (Mod-U)" onMouseDown={(e) => e.preventDefault()} onClick={() => run(toggleMark(essaySchema.marks.underline))}>
+                  <Icon name="underline" />
+                </button>
+                <button className="btn btn-sm icon-btn-toolbar" title="Clear formatting" onMouseDown={(e) => e.preventDefault()} onClick={() => run(clearFormatting)}>
+                  <Icon name="clear-format" />
+                </button>
+                <span className="toolbar-divider" />
+                <button className="btn btn-sm icon-btn-toolbar" title="Bulleted list" onMouseDown={(e) => e.preventDefault()} onClick={() => run(wrapInList(essaySchema.nodes.bullet_list))}>
+                  <Icon name="list-ul" />
+                </button>
+                <button className="btn btn-sm icon-btn-toolbar" title="Numbered list" onMouseDown={(e) => e.preventDefault()} onClick={() => run(wrapInList(essaySchema.nodes.ordered_list))}>
+                  <Icon name="list-ol" />
+                </button>
+                <button
+                  className="btn btn-sm icon-btn-toolbar"
+                  title="Outdent list item / block"
+                  onMouseDown={(e) => e.preventDefault()}
+                  onClick={() => {
+                    const view = viewRef.current
+                    if (!view) return
+                    const liftItem = liftListItem(essaySchema.nodes.list_item)
+                    run(liftItem(view.state) ? liftItem : lift)
+                  }}
+                >
+                  <Icon name="outdent" />
+                </button>
+                <span className="toolbar-divider" />
+                <button className="btn btn-sm icon-btn-toolbar" title="Cite a source" onMouseDown={(e) => e.preventDefault()} onClick={() => setShowCitation(true)}>
+                  <Icon name="cite" />
+                </button>
+                <button className="btn btn-sm icon-btn-toolbar" title="Insert a quote from a source" onMouseDown={(e) => e.preventDefault()} onClick={() => setShowQuoteDialog(true)}>
+                  <Icon name="quote" />
+                </button>
+                <button className="btn btn-sm icon-btn-toolbar" title="Link to a source" onMouseDown={(e) => e.preventDefault()} onClick={() => setShowLink(true)}>
+                  <Icon name="link" />
+                </button>
+                <span className="toolbar-divider" />
+                <button className="btn btn-sm icon-btn-toolbar" title="Split selection into subsection" onMouseDown={(e) => e.preventDefault()} onClick={() => run(splitIntoSection)}>
+                  <Icon name="subsection" />
+                </button>
+                <button className="btn btn-sm icon-btn-toolbar" title="Demote: fold the current section back into its parent" onMouseDown={(e) => e.preventDefault()} onClick={() => run(demoteSection)}>
+                  <Icon name="demote" />
+                </button>
+                <span className="toolbar-divider" />
+                <button className="btn btn-sm icon-btn-toolbar" title="Send selection to the graveyard" onMouseDown={(e) => e.preventDefault()} onClick={sendSelectionToGraveyard}>
+                  <Icon name="graveyard" />
+                </button>
+              </>
+            )}
             <div className="spacer" />
           </div>
 
-          <div className="editor-scroll doc-scroll" ref={docScrollRef}>
+          <div className={`editor-scroll doc-scroll${commentMode ? ' comment-mode' : ''}`} ref={docScrollRef} onMouseUp={handleMouseUpForComments}>
             <PMEssayEditor
               essay={essay}
               sources={sources}
+              commentsHolder={commentsHolder}
+              onAnchorClick={handleAnchorClick}
+              editable={!commentMode}
               onViewReady={(view) => {
                 viewRef.current = view
               }}
@@ -351,6 +561,35 @@ export function EssayWorkspace({ essayId, onBack, embedded = false }: { essayId:
             <EssayWorkspace essayId={splitEssayId} embedded onBack={() => setSplitEssayId(null)} />
           </div>
         )}
+
+        {!isMobile &&
+          !embedded &&
+          !splitEssayId &&
+          (rightPanel ? (
+            <div className="comments-panel-shell">
+              <div className="right-panel-tabs">
+                <button className={`right-panel-tab${rightPanel === 'comments' ? ' active' : ''}`} title="Comments" onClick={() => setRightPanel('comments')}>
+                  <Icon name="comment" />
+                </button>
+                <button className={`right-panel-tab${rightPanel === 'graveyard' ? ' active' : ''}`} title="Graveyard" onClick={() => setRightPanel('graveyard')}>
+                  <Icon name="graveyard" />
+                </button>
+                <div className="spacer" />
+                <button className="btn btn-ghost btn-sm" onClick={() => setRightPanel(null)} title="Collapse panel">
+                  ›
+                </button>
+              </div>
+              {rightPanel === 'comments' ? (
+                doc && <CommentsPanel doc={doc} essay={essay} essayTitle={essayTitle} view={viewRef.current} onChanged={notifyCommentsChanged} scrollRef={docScrollRef} />
+              ) : (
+                <GraveyardPanel essayId={essay.id} />
+              )}
+            </div>
+          ) : (
+            <button className="panel-edge-tab right" onClick={() => setRightPanel('comments')} title="Show panel">
+              ‹
+            </button>
+          ))}
       </div>
 
       {mobileTreeOpen && (
@@ -370,6 +609,64 @@ export function EssayWorkspace({ essayId, onBack, embedded = false }: { essayId:
         </Modal>
       )}
 
+      {mobilePanel && (
+        <Modal onClose={() => setMobilePanel(null)}>
+          <div className="tab-row">
+            <button className={`btn btn-sm${mobilePanel === 'comments' ? ' btn-primary' : ' btn-ghost'}`} onClick={() => setMobilePanel('comments')}>
+              <Icon name="comment" /> Comments
+            </button>
+            <button className={`btn btn-sm${mobilePanel === 'graveyard' ? ' btn-primary' : ' btn-ghost'}`} onClick={() => setMobilePanel('graveyard')}>
+              <Icon name="graveyard" /> Graveyard
+            </button>
+          </div>
+          {mobilePanel === 'comments' ? (
+            doc && (
+              <CommentsPanel
+                doc={doc}
+                essay={essay}
+                essayTitle={essayTitle}
+                view={viewRef.current}
+                onChanged={notifyCommentsChanged}
+                scrollRef={docScrollRef}
+                mode="list"
+                onJumpTo={(sectionId) => {
+                  setMobilePanel(null)
+                  requestAnimationFrame(() => scrollToNode(sectionId))
+                }}
+              />
+            )
+          ) : (
+            <GraveyardPanel essayId={essay.id} mode="list" />
+          )}
+        </Modal>
+      )}
+
+      {pendingComment && (
+        <div ref={commentWidgetRef} className="comment-widget" style={commentWidgetStyle(pendingComment.anchorRect)}>
+          <p className="comment-widget-quote">{pendingComment.text ? `“${pendingComment.text}”` : 'New inline comment, right here'}</p>
+          <CommentComposer onCancel={cancelPendingComment} onSubmit={submitComment} />
+        </div>
+      )}
+
+      {openInlineComment && openInlineCommentRecord && (
+        <div className="inline-comment-editor inline-comment-popover" style={commentWidgetStyle(openInlineComment.rect)}>
+          <CommentCard
+            essay={essay}
+            comment={openInlineCommentRecord}
+            depth={0}
+            onChanged={notifyCommentsChanged}
+            onDelete={handleDeleteOpenInlineComment}
+            onToggleDisplayMode={handleToggleOpenInlineDisplayMode}
+            onPromote={handlePromoteOpenInlineComment}
+          />
+          <div className="inline-comment-collapse">
+            <button className="btn btn-ghost btn-sm" onClick={() => setOpenInlineComment(null)}>
+              Done
+            </button>
+          </div>
+        </div>
+      )}
+
       {showAuthorNote && <AuthorNoteDialog initialValue={essay.authorNote ?? ''} onSave={saveAuthorNote} onClose={() => setShowAuthorNote(false)} />}
       {showSplitPicker && <SplitPickerDialog essay={essay} onClose={() => setShowSplitPicker(false)} onSelectExisting={handleSelectExistingForSplit} onClone={handleCloneForSplit} />}
       {showCitation && <CitationPickerDialog onClose={() => setShowCitation(false)} onSelect={handleInsertCitation} />}
@@ -377,4 +674,73 @@ export function EssayWorkspace({ essayId, onBack, embedded = false }: { essayId:
       {showLink && <CitationPickerDialog title="Link to a source" requireUrl onClose={() => setShowLink(false)} onSelect={handleInsertSourceLink} />}
     </div>
   )
+}
+
+function CommentComposer({ onCancel, onSubmit }: { onCancel: () => void; onSubmit: (body: string) => void }) {
+  const [body, setBody] = useState('')
+  // The `autoFocus` attribute alone isn't reliable here — this textarea
+  // mounts in response to a click on a toolbar button that itself just
+  // took focus, and the dynamic-autofocus path browsers support for an
+  // element inserted after initial page load doesn't always win that race.
+  // An explicit focus() on mount, the same fix PromptDialog.tsx already
+  // uses for its own input, works regardless.
+  const textareaRef = useRef<HTMLTextAreaElement>(null)
+  useEffect(() => {
+    textareaRef.current?.focus()
+  }, [])
+  return (
+    <>
+      <div className="field">
+        <textarea
+          ref={textareaRef}
+          rows={3}
+          value={body}
+          onInput={(e) => setBody((e.target as HTMLTextAreaElement).value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Escape') onCancel()
+          }}
+        />
+      </div>
+      <div className="comment-widget-actions">
+        <button className="btn btn-ghost" onClick={onCancel}>
+          Cancel
+        </button>
+        <button className="btn btn-primary" disabled={!body.trim()} onClick={() => onSubmit(body.trim())}>
+          Add comment
+        </button>
+      </div>
+    </>
+  )
+}
+
+/**
+ * Positions a comment widget (the pending-comment composer, or an open
+ * inline comment's own popover) just below the anchor it belongs to,
+ * clamped so it never runs off the right or bottom edge of the viewport —
+ * `anchorRect` is already in viewport (not document) coordinates (either
+ * `view.coordsAtPos`'s own return shape, or a plain `getBoundingClientRect()`),
+ * so `position: fixed` is what we want here.
+ */
+function commentWidgetStyle(rect: { top: number; bottom: number; left: number; right: number }) {
+  const margin = 12
+  const width = Math.min(320, window.innerWidth - margin * 2)
+  const maxLeft = Math.max(margin, window.innerWidth - width - margin)
+  const left = Math.min(Math.max(rect.left, margin), maxLeft)
+  const spaceBelow = window.innerHeight - rect.bottom
+  const openUpward = spaceBelow < 220 && rect.top > 220
+  const style: Record<string, string> = {
+    position: 'fixed',
+    left: `${left}px`,
+    width: `${width}px`,
+  }
+  if (openUpward) {
+    style.bottom = `${window.innerHeight - rect.top + 8}px`
+  } else {
+    style.top = `${rect.bottom + 8}px`
+  }
+  return style
+}
+
+function cssEscape(s: string): string {
+  return typeof CSS !== 'undefined' && CSS.escape ? CSS.escape(s) : s.replace(/["\\]/g, '\\$&')
 }
