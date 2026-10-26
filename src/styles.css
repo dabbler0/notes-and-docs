@@ -3284,7 +3284,7 @@ select {
      shifts sideways when a section's rule appears/disappears as the
      cursor moves through the document. */
   border-left: 2px solid transparent;
-  padding-left: 38px;
+  padding-left: 22px;
   padding-right: 28px;
   margin: 18px 0;
 }
@@ -3293,30 +3293,20 @@ select {
   border-left-color: var(--border);
 }
 
-/* Collapse chevron, section number, and demote button (SectionView,
-   pmNodeViews.ts) all sit outside .section-body — ProseMirror's own
-   content — as siblings, absolutely positioned within the section's own
-   left/right padding gutters rather than taking up a line of their own:
-   rule, then chevron, then number, then the title itself (left side);
-   demote alone on the right. The chevron reuses .section-chevron's base
-   look (see the outline sidebar's own copy, above) with just the
-   positioning that's specific to sitting next to a line of real document
-   text instead of a tree row. */
+/* Collapse chevron and demote button (SectionView, pmNodeViews.ts) sit
+   outside .section-body — ProseMirror's own content — as siblings,
+   absolutely positioned within the section's own left/right padding
+   gutters rather than taking up a line of their own: rule, then chevron,
+   then the title itself (left side); demote alone on the right. The
+   chevron reuses .section-chevron's base look (see the outline sidebar's
+   own copy, above) with just the positioning that's specific to sitting
+   next to a line of real document text instead of a tree row. The
+   section *number*, unlike these two, isn't a separate element at all —
+   see h2.section-title's own `::before` rule below for why. */
 .pm-editor-root .ProseMirror section > .section-chevron {
   position: absolute;
   left: 4px;
   top: 1px;
-}
-
-.pm-editor-root .ProseMirror section > .section-number {
-  position: absolute;
-  left: 22px;
-  top: 3px;
-  font-size: 0.8em;
-  font-weight: 600;
-  color: var(--ink-dim);
-  white-space: nowrap;
-  user-select: none;
 }
 
 .pm-editor-root .ProseMirror section > .section-demote {
@@ -3340,6 +3330,27 @@ select {
   font-weight: 700;
   margin: 0 0 6px;
   outline: none;
+}
+
+/* The section number (SectionView's own `syncNumber`, pmNodeViews.ts) as
+   literal leading text inside the title itself, via `::before` reading
+   the `data-number` attribute that method sets — genuinely inline with
+   the title (wraps with it, never overlaps it, scales with its own font
+   size at every nesting depth) rather than a separately-positioned
+   element sitting near it. `attr()` only reads an attribute off the same
+   element the pseudo is on, which is exactly why the number has to live
+   as an attribute on this `<h2>` and not on its `<section>` parent (or
+   anywhere else `::before` could instead be attached to render it). No
+   rule needed for "no data-number" — an absent attribute makes `attr()`
+   resolve to the empty string, so the `::before` box is simply empty.
+   Not selectable/copyable text (same convention as the old per-node
+   model's own CSS-counter-based footnote numbers) — it's a presentation
+   detail of the heading, not real document content. */
+.pm-editor-root .ProseMirror h2.section-title[data-number]::before {
+  content: attr(data-number) '.\00a0 ';
+  font-weight: 600;
+  color: var(--ink-dim);
+  user-select: none;
 }
 
 .pm-editor-root .ProseMirror section section h2.section-title {
