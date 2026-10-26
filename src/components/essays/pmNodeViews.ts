@@ -55,6 +55,33 @@ export function createCitationView(sources: Map<string, Source>): new (node: PMN
       this.getPos = getPos
       this.dom = document.createElement('citation')
       this.dom.className = 'pm-citation'
+      // Everything in this chip except `noteInput` itself needs to be
+      // unambiguously non-editable — `stopEvent` below stops *PM's own*
+      // reaction to the click/mousedown event, but the browser's own
+      // independent "move the selection/caret to wherever was clicked"
+      // default action isn't gated by that at all, and PM separately
+      // syncs its own `view.state.selection` from whatever the *browser's*
+      // selection ends up being (via `selectionchange`, a plain
+      // `document`-level event with no "originating NodeView" of its own
+      // for `stopEvent` to ever see). `contentEditable = 'false'` alone
+      // doesn't prevent this either — confirmed live, it just changes the
+      // browser's default action from "place a caret" to "select this
+      // whole non-editable node," which PM still picks up as a real
+      // `NodeSelection` over the citation atom, and typing while a node is
+      // selected replaces it — so a click landing on `.pm-citation-base`
+      // (not precisely on the thin input) ended up letting a single
+      // keystroke delete the *entire* citation. The `mousedown` listener
+      // below is the actual fix: calling `preventDefault()` stops the
+      // browser from touching the selection at all for a click anywhere
+      // in this chip except the input, and focusing the input directly
+      // instead is exactly the behavior "click this citation" should have
+      // in the first place.
+      this.dom.contentEditable = 'false'
+      this.dom.addEventListener('mousedown', (e) => {
+        if (e.target === this.noteInput) return
+        e.preventDefault()
+        this.noteInput.focus()
+      })
       ;(this.dom as unknown as Record<string, unknown>)[CITATION_VIEW_KEY] = this
 
       this.baseSpan = document.createElement('span')

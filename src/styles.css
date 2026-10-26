@@ -3284,7 +3284,14 @@ select {
      shifts sideways when a section's rule appears/disappears as the
      cursor moves through the document. */
   border-left: 2px solid transparent;
-  padding-left: 22px;
+  /* Small on purpose — body text's own left edge sits right where the
+     chevron does (`section > .section-chevron`'s own `left: 4px`,
+     below), overlapping it rather than being indented clear of it. Only
+     the title needs real clearance from the chevron, which it gets from
+     `.section-number`'s own `margin-left` instead (see that rule's own
+     doc comment) — not from padding here, which would push every other
+     block in the section's body over with it. */
+  padding-left: 4px;
   padding-right: 28px;
   margin: 18px 0;
 }
@@ -3332,6 +3339,16 @@ select {
   color: var(--ink-dim);
   white-space: nowrap;
   user-select: none;
+  /* Clears the chevron sitting at the same `left: 4px` this element's own
+     containing block starts from — body text, by contrast, deliberately
+     has no such margin of its own (see `section`'s own `padding-left`
+     doc comment above), so only the number+title line is actually pushed
+     clear of the chevron; every other line in the section's body starts
+     right under/beside it. Present (and still taking up this same
+     margin) even when this section has no number to show (the root-level
+     "Abstract" exception) — an empty floated box's own margin still
+     holds the title at the same starting position either way. */
+  margin-left: 18px;
   margin-right: 0.35em;
 }
 
