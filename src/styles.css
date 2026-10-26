@@ -3300,9 +3300,7 @@ select {
    then the title itself (left side); demote alone on the right. The
    chevron reuses .section-chevron's base look (see the outline sidebar's
    own copy, above) with just the positioning that's specific to sitting
-   next to a line of real document text instead of a tree row. The
-   section *number*, unlike these two, isn't a separate element at all —
-   see h2.section-title's own `::before` rule below for why. */
+   next to a line of real document text instead of a tree row. */
 .pm-editor-root .ProseMirror section > .section-chevron {
   position: absolute;
   left: 4px;
@@ -3314,6 +3312,27 @@ select {
   right: 0;
   top: 0;
   font-size: 13px;
+}
+
+/* The section number — also a sibling of .section-body, not absolutely
+   positioned like the two above, but *floated*: unlike absolute
+   positioning (out of flow entirely) a float still participates in the
+   following content's own line layout, so the title `<h2>` right after
+   it in the DOM wraps around it exactly as if the number were its own
+   leading text, at any title length or nesting depth. (An earlier
+   version wrote this as literal `::before` content on the title itself
+   for the exact same inline effect — reverted after it caused a real,
+   confirmed-live infinite parse/rebuild loop; see SectionView's own
+   `syncNumber` doc comment, pmNodeViews.ts, for why mutating anything
+   inside ProseMirror's own managed content, even just an attribute, is
+   never safe to do by hand.) */
+.pm-editor-root .ProseMirror section > .section-number {
+  float: left;
+  font-weight: 600;
+  color: var(--ink-dim);
+  white-space: nowrap;
+  user-select: none;
+  margin-right: 0.35em;
 }
 
 /* Collapsed: every child of .section-body but the first (the section's own
@@ -3332,27 +3351,6 @@ select {
   outline: none;
 }
 
-/* The section number (SectionView's own `syncNumber`, pmNodeViews.ts) as
-   literal leading text inside the title itself, via `::before` reading
-   the `data-number` attribute that method sets — genuinely inline with
-   the title (wraps with it, never overlaps it, scales with its own font
-   size at every nesting depth) rather than a separately-positioned
-   element sitting near it. `attr()` only reads an attribute off the same
-   element the pseudo is on, which is exactly why the number has to live
-   as an attribute on this `<h2>` and not on its `<section>` parent (or
-   anywhere else `::before` could instead be attached to render it). No
-   rule needed for "no data-number" — an absent attribute makes `attr()`
-   resolve to the empty string, so the `::before` box is simply empty.
-   Not selectable/copyable text (same convention as the old per-node
-   model's own CSS-counter-based footnote numbers) — it's a presentation
-   detail of the heading, not real document content. */
-.pm-editor-root .ProseMirror h2.section-title[data-number]::before {
-  content: attr(data-number) '.\00a0 ';
-  font-weight: 600;
-  color: var(--ink-dim);
-  user-select: none;
-}
-
 .pm-editor-root .ProseMirror section section h2.section-title {
   font-size: 15px;
 }
@@ -3361,6 +3359,22 @@ select {
   font-size: 13px;
   text-transform: uppercase;
   letter-spacing: 0.04em;
+}
+
+/* Keeps the floated number (just above) the same size as whatever depth's
+   own title font-size it's sitting beside — it has no font-size of its
+   own to inherit that scaling from automatically, since it's a sibling
+   of the title, not part of it. */
+.pm-editor-root .ProseMirror section > .section-number {
+  font-size: 18px;
+}
+
+.pm-editor-root .ProseMirror section section > .section-number {
+  font-size: 15px;
+}
+
+.pm-editor-root .ProseMirror section section section > .section-number {
+  font-size: 13px;
 }
 
 .pm-editor-root .ProseMirror blockquote {

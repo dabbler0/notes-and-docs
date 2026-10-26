@@ -193,6 +193,7 @@ export class SectionView implements NodeView {
   view: EditorView
   getPos: () => number | undefined
   private chevron: HTMLButtonElement | null = null
+  private numberLabel: HTMLElement | null = null
   private demoteBtn: HTMLButtonElement | null = null
 
   constructor(node: PMNode, view: EditorView, getPos: () => number | undefined) {
@@ -217,6 +218,12 @@ export class SectionView implements NodeView {
       this.dom.appendChild(chevron)
       this.chevron = chevron
 
+      const numberLabel = document.createElement('span')
+      numberLabel.className = 'section-number'
+      numberLabel.contentEditable = 'false'
+      this.dom.appendChild(numberLabel)
+      this.numberLabel = numberLabel
+
       const demoteBtn = document.createElement('button')
       demoteBtn.type = 'button'
       demoteBtn.className = 'section-demote icon-btn'
@@ -238,17 +245,7 @@ export class SectionView implements NodeView {
     this.contentDOM.className = 'section-body'
     this.dom.appendChild(this.contentDOM)
     this.syncCollapsed()
-    // `contentDOM`'s own children (the title `<h2>` `syncNumber` needs to
-    // find) don't exist yet at this exact point in construction —
-    // ProseMirror renders a NodeView's content *after* its constructor
-    // returns, as a separate step the outer view-building pass performs.
-    // That whole pass is synchronous start to finish, though (`new
-    // EditorView(...)` doesn't return until every NodeView down to the
-    // leaves is fully built), so a microtask queued from here — which
-    // can't run until the current synchronous call stack unwinds — is
-    // guaranteed to see it, without this NodeView needing to know or care
-    // when exactly "after construction" actually is.
-    queueMicrotask(() => this.syncNumber())
+    this.syncNumber()
   }
 
   private toggle() {
@@ -284,26 +281,34 @@ export class SectionView implements NodeView {
    * neither gets a number nor consumes a numbering slot — the real section
    * right after it still reads "1", not "2".
    *
-   * Written as a `data-number` attribute directly on the real `<h2
-   * class="section-title">` element (styles.css's own `::before` reads it
-   * back via `attr()`) rather than a separate sibling element positioned
-   * next to it — the number needs to flow as part of the title's own
-   * inline content (wrapping with it, never overlapping it at any amount
-   * of nesting), which only something that's *actually inside* the
-   * heading, not just visually near it, can do. A plain attribute on an
-   * otherwise `contentDOM`-rendered element is safe for a NodeView to set
-   * by hand: ProseMirror's own content diffing only ever reconciles a
-   * node's *children*, never attributes it didn't itself put there, so
-   * this survives ordinary typing in the title untouched. `h2` has no
-   * attrs of its own in `pmSchema.ts`, so there's also nothing for a real
-   * attrs change to ever reset it against.
+   * A sibling element, like the chevron — *not* an attribute/child written
+   * directly onto the real title `<h2>` inside `contentDOM`. That was
+   * tried first (a `data-number` attribute, read back via a CSS `attr()`
+   * `::before`) and caused a real, confirmed-live infinite parse/rebuild
+   * loop: `h2` is rendered by ProseMirror's own default node renderer, not
+   * by this NodeView, so it carries its *own* separate, built-in
+   * `ignoreMutation` — one this class has no way to override — which
+   * doesn't know to ignore a `data-number` change, treats it as an
+   * unexpected external edit, and re-parses/rebuilds from the DOM:
+   * destroying and recreating every `SectionView` in the affected range,
+   * each of which (in that version) scheduled a fresh number-sync of its
+   * own on mount, writing the attribute again, triggering the same
+   * "unexpected mutation" response again, forever. Only `chevron`/
+   * `demoteBtn`/this `numberLabel` — elements this NodeView creates and
+   * owns *outside* `contentDOM` entirely — are actually safe to mutate by
+   * hand; `ignoreMutation` below already exempts everything outside
+   * `contentDOM` unconditionally, no special-casing needed.
+   *
+   * Still reads as genuinely inline with the title despite being a
+   * separate element: `styles.css` floats it left of the title, which
+   * (unlike absolute positioning) lets the title's own text wrap around
+   * it exactly as if the number were literal leading text, without this
+   * NodeView ever touching PM-managed DOM to get that effect.
    */
   private syncNumber() {
-    const h2 = this.contentDOM.firstElementChild
-    if (!(h2 instanceof HTMLElement) || !h2.classList.contains('section-title')) return
+    if (!this.numberLabel) return
     const path = this.computeNumberPath()
-    if (path) h2.dataset.number = path.join('.')
-    else delete h2.dataset.number
+    this.numberLabel.textContent = path ? `${path.join('.')}.` : ''
   }
 
   private computeNumberPath(): number[] | null {
@@ -352,29 +357,24 @@ export class SectionView implements NodeView {
     return true
   }
 
-  // The chevron/demote button sit outside `contentDOM` purely for
+  // The chevron/number/demote button sit outside `contentDOM` purely for
   // layout/UI — clicks on them shouldn't be interpreted as a document
-  // selection the way a click inside the real content would be. (The
-  // section number has no click behavior of its own to guard — it's just
-  // a `data-number` attribute on the real title `<h2>`, inside
-  // `contentDOM`, not a separate clickable element.)
+  // selection the way a click inside the real content would be.
   stopEvent(event: Event) {
     const target = event.target
     if (!(target instanceof Node)) return false
     return !!(this.chevron?.contains(target) || this.demoteBtn?.contains(target))
   }
 
-  // Same reasoning in the other direction, for the chevron/demote button's
-  // own attribute changes (title/class/text, set by `syncCollapsed` above)
-  // — DOM mutations outside `contentDOM`, nothing PM needs to reconcile
-  // against the document. `syncNumber`'s own `data-number` attribute *is*
-  // inside `contentDOM` (deliberately — see that method's own doc comment
-  // on why it has to be, for the number to flow inline with the title
-  // text it's attached to), so it needs its own explicit exemption here:
-  // an ordinary attribute mutation on the title `<h2>` never corresponds
-  // to a real content edit PM itself needs to see.
+  // Same reasoning in the other direction: the chevron/number/demote
+  // button's own attribute changes (title/class/text, set by
+  // `syncCollapsed`/`syncNumber` above) are DOM mutations outside
+  // `contentDOM` — nothing PM needs to reconcile against the document.
+  // This is also exactly why `syncNumber` writes to this `numberLabel`
+  // sibling rather than onto the real title `<h2>` inside `contentDOM` —
+  // see that method's own doc comment for the infinite-loop this already
+  // caused once when it didn't.
   ignoreMutation(record: ViewMutationRecord) {
-    if (record.type === 'attributes' && record.attributeName === 'data-number') return true
     return !this.contentDOM.contains(record.target as Node)
   }
 }
