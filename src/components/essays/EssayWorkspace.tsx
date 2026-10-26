@@ -22,6 +22,8 @@ import { CitationPickerDialog } from './CitationPickerDialog'
 import { QuoteInsertDialog } from './QuoteInsertDialog'
 import { CommentsPanel, CommentCard } from './CommentsPanel'
 import { GraveyardPanel } from './GraveyardPanel'
+import { ExportDialog } from './ExportDialog'
+import { WordCountDialog } from './WordCountDialog'
 import {
   insertCitation,
   insertQuoteBlock,
@@ -86,6 +88,11 @@ export function EssayWorkspace({ essayId, onBack, embedded = false }: { essayId:
   const [showCitation, setShowCitation] = useState(false)
   const [showQuoteDialog, setShowQuoteDialog] = useState(false)
   const [showLink, setShowLink] = useState(false)
+  const [showExport, setShowExport] = useState(false)
+  const [showWordCount, setShowWordCount] = useState(false)
+  /** Both captured by the Word Count button's own `onMouseDown` (before its `onClick` would otherwise collapse the live selection, or move focus away from wherever the cursor actually was) — see `WordCountDialog.tsx`'s own doc comment. */
+  const [selectedTextForWordCount, setSelectedTextForWordCount] = useState('')
+  const [activeSectionForWordCount, setActiveSectionForWordCount] = useState<PMNode | null>(null)
   const [commentMode, setCommentMode] = useState(false)
   const [rightPanel, setRightPanel] = useState<'comments' | 'graveyard' | null>('comments')
   const [mobilePanel, setMobilePanel] = useState<'comments' | 'graveyard' | null>(null)
@@ -421,6 +428,9 @@ export function EssayWorkspace({ essayId, onBack, embedded = false }: { essayId:
         >
           <Icon name="comment" /> <span className="btn-label">{commentMode ? 'Commenting…' : 'Comment mode'}</span>
         </button>
+        <button className="btn btn-ghost btn-sm" onClick={() => setShowExport(true)}>
+          <Icon name="export" /> <span className="btn-label">Export</span>
+        </button>
         <button className="btn btn-ghost btn-sm" title="Thanks/acknowledgements/disclosures for your author attribution in print exports" onClick={() => setShowAuthorNote(true)}>
           <Icon name="footnote" /> <span className="btn-label">Author note</span>
         </button>
@@ -548,6 +558,19 @@ export function EssayWorkspace({ essayId, onBack, embedded = false }: { essayId:
               </>
             )}
             <div className="spacer" />
+            <button
+              className="btn btn-sm icon-btn-toolbar"
+              title="Word count"
+              onMouseDown={(e) => {
+                e.preventDefault()
+                const view = viewRef.current
+                setSelectedTextForWordCount(view && !view.state.selection.empty ? view.state.doc.textBetween(view.state.selection.from, view.state.selection.to, ' ') : '')
+                setActiveSectionForWordCount(view ? (findEnclosingSection(view.state.selection.$from)?.node ?? null) : null)
+              }}
+              onClick={() => setShowWordCount(true)}
+            >
+              <Icon name="word-count" />
+            </button>
           </div>
 
           <div className={`editor-scroll doc-scroll${commentMode ? ' comment-mode' : ''}`} ref={docScrollRef} onMouseUp={handleMouseUpForComments}>
@@ -684,6 +707,10 @@ export function EssayWorkspace({ essayId, onBack, embedded = false }: { essayId:
       {showCitation && <CitationPickerDialog onClose={() => setShowCitation(false)} onSelect={handleInsertCitation} />}
       {showQuoteDialog && <QuoteInsertDialog onClose={() => setShowQuoteDialog(false)} onInsertBlock={handleInsertQuoteBlock} onInsertInline={handleInsertQuoteInline} />}
       {showLink && <CitationPickerDialog title="Link to a source" requireUrl onClose={() => setShowLink(false)} onSelect={handleInsertSourceLink} />}
+      {showExport && <ExportDialog essay={essay} doc={doc} onClose={() => setShowExport(false)} />}
+      {showWordCount && doc && (
+        <WordCountDialog doc={doc} activeSection={activeSectionForWordCount} selectedText={selectedTextForWordCount} onClose={() => setShowWordCount(false)} />
+      )}
     </div>
   )
 }

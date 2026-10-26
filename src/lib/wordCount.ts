@@ -9,6 +9,7 @@
  * count, the same way most word processors don't count a typeset formula
  * either.
  */
+import type { Node as PMNode } from 'prosemirror-model'
 import { parseSegments } from './childMarkers'
 import type { EssayNode } from '../models/types'
 
@@ -40,6 +41,17 @@ export function subtreeText(node: EssayNode, nodeMap: Map<string, EssayNode>): s
       if (child) text += subtreeText(child, nodeMap)
     }
   }
+  return text
+}
+
+/** This `section`'s own text, not counting any nested child `section`s — the PM-doc equivalent of `nodeOwnText` above. Whole-essay/whole-subtree counts need no PM-specific counterpart at all: a PM `Node`'s own built-in `textContent` getter already walks every descendant (nested sections included) the same way `subtreeText` above has to hand-walk `nodeMap` for. */
+export function pmSectionOwnText(section: PMNode): string {
+  let text = ''
+  section.forEach((child, _offset, index) => {
+    if (index === 0) return // section_title
+    if (child.type.name === 'section') return
+    text += child.textContent + ' '
+  })
   return text
 }
 

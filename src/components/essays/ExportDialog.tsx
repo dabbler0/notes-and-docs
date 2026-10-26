@@ -1,5 +1,6 @@
 import { useState } from 'preact/hooks'
 import JSZip from 'jszip'
+import type { Node as PMNode } from 'prosemirror-model'
 import { Modal } from '../Modal'
 import { listSources } from '../../models/sourcesRepo'
 import {
@@ -14,6 +15,11 @@ import {
   floatPrintFootnotes,
   markdownToHtml,
   moveFootnoteCitationsPastPeriod,
+  pmCitedSources,
+  pmEssayToLatex,
+  pmEssayToMarkdown,
+  pmReferencesHtml,
+  pmReferencesMarkdown,
   referencesHtml,
   referencesMarkdown,
   sourcesToBibtex,
@@ -24,7 +30,7 @@ import {
 import { downloadBlob, filenameFor } from '../../lib/download'
 import { escapeHtml } from '../../lib/html'
 import { getAuthorName } from '../../lib/authorPreference'
-import type { Essay, EssayNode } from '../../models/types'
+import type { Essay, EssayNode, Source } from '../../models/types'
 // Raw CSS/JS text / a base64 data: URI (Vite's `?raw`/`?inline` query
 // suffixes — forced regardless of the normal multi-file build's own
 // size-based inlining threshold, see vite.config.ts's
@@ -93,7 +99,17 @@ const PRINT_MODE_DEFAULT_CITATIONS: Record<PrintMode, { placement: PrintCitation
   substack: { placement: 'inline', style: 'numbered' },
 }
 
-export function ExportDialog({ essay, nodeMap, onClose }: { essay: Essay; nodeMap: Map<string, EssayNode>; onClose: () => void }) {
+/**
+ * `nodeMap` (the old, pre-migration tree) and `doc` (a migrated essay's
+ * real `Essay.doc`) are both optional, exactly one actually present at a
+ * time — every export function below branches on `doc` to pick which
+ * pipeline to call, same division `EssayHistoryPanel.tsx` already needs
+ * for a historical snapshot that might itself predate the migration.
+ * `EssayWorkspace.tsx`'s own call site only ever has `doc` (every essay it
+ * can open already has `essay.doc` set), but the old `nodeMap` path stays
+ * reachable here for anything that still needs it.
+ */
+export function ExportDialog({ essay, nodeMap, doc, onClose }: { essay: Essay; nodeMap?: Map<string, EssayNode>; doc?: PMNode | null; onClose: () => void }) {
   const [citeCommand, setCiteCommand] = useState<'\\cite' | '\\footcite'>('\\cite')
   const [bibliographyStyle, setBibliographyStyle] = useState<BibliographyStyle>('chicago')
   const [includeUrlWhenDoi, setIncludeUrlWhenDoi] = useState(true)
@@ -114,7 +130,9 @@ export function ExportDialog({ essay, nodeMap, onClose }: { essay: Essay; nodeMa
     setBusy('md')
     try {
       const sources = new Map((await listSources()).map((s) => [s.id, s]))
-      const md = essayToMarkdown(essay, nodeMap) + referencesMarkdown(nodeMap, sources, bibliographyStyle, { includeUrlWhenDoi })
+      const md = doc
+        ? pmEssayToMarkdown(essay.title, doc, sources) + pmReferencesMarkdown(doc, sources, bibliographyStyle, { includeUrlWhenDoi })
+        : essayToMarkdown(essay, nodeMap!) + referencesMarkdown(nodeMap!, sources, bibliographyStyle, { includeUrlWhenDoi })
       downloadBlob(new Blob([md], { type: 'text/markdown' }), `${filenameFor(essay.title)}.md`)
     } finally {
       setBusy(null)
@@ -189,14 +207,16 @@ export function ExportDialog({ essay, nodeMap, onClose }: { essay: Essay; nodeMa
 
       const authorName = getAuthorName()
       const sources = new Map((await listSources()).map((s) => [s.id, s]))
-      const orderedSourceIds = citedSources(nodeMap, sources).map((s) => s.id)
-      const md = essayToMarkdown(essay, nodeMap, { citationOptions: { sources, style: citationStyle, placement: citationPlacement, orderedSourceIds, bibliographyStyle } })
+      const orderedSourceIds = (doc ? pmCitedSources(doc, sources) : citedSources(nodeMap!, sources)).map((s) => s.id)
+      const md = doc
+        ? pmEssayToMarkdown(essay.title, doc, sources, { citationOptions: { style: citationStyle, placement: citationPlacement, orderedSourceIds, bibliographyStyle } })
+        : essayToMarkdown(essay, nodeMap!, { citationOptions: { sources, style: citationStyle, placement: citationPlacement, orderedSourceIds, bibliographyStyle } })
       const numberedReferences = citationPlacement === 'inline' && citationStyle === 'numbered'
       let rawBodyHtml = addPrintChrome(markdownToHtml(md))
       if (citationPlacement === 'footnote') rawBodyHtml = moveFootnoteCitationsPastPeriod(rawBodyHtml)
       rawBodyHtml = ensureCitationSpacing(rawBodyHtml)
       if (!substack && authorName) rawBodyHtml = addAuthorAttribution(rawBodyHtml, authorName, essay.authorNote)
-      rawBodyHtml += referencesHtml(nodeMap, sources, bibliographyStyle, numberedReferences, { includeUrlWhenDoi })
+      rawBodyHtml += doc ? pmReferencesHtml(doc, sources, bibliographyStyle, numberedReferences, { includeUrlWhenDoi }) : referencesHtml(nodeMap!, sources, bibliographyStyle, numberedReferences, { includeUrlWhenDoi })
       if (mathlikeMode) rawBodyHtml = applyMathlikeHeadings(rawBodyHtml)
       const bodyHtml = substack ? rawBodyHtml : floatPrintFootnotes(rawBodyHtml)
 
@@ -374,9 +394,9 @@ export function ExportDialog({ essay, nodeMap, onClose }: { essay: Essay; nodeMa
     try {
       const all = await listSources()
       const sourceMap = new Map(all.map((s) => [s.id, s]))
-      const usedIds = collectUsedSourceIds(nodeMap)
+      const usedIds = doc ? new Set(pmCitedSources(doc, sourceMap).map((s) => s.id)) : collectUsedSourceIds(nodeMap!)
       const usedSources = all.filter((s) => usedIds.has(s.id))
-      const tex = essayToLatex(essay, nodeMap, sourceMap, { citeCommand })
+      const tex = doc ? pmEssayToLatex(essay.title, doc, sourceMap, { citeCommand }) : essayToLatex(essay, nodeMap!, sourceMap, { citeCommand })
       const bib = sourcesToBibtex(usedSources)
       const zip = new JSZip()
       zip.file('main.tex', tex)

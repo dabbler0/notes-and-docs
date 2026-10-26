@@ -7,6 +7,7 @@
  * order — so what's exported matches what's on screen, not some separate
  * frozen/versioned snapshot.
  */
+import type { Node as PMNode } from 'prosemirror-model'
 import { getChildIds, parseSegments } from './childMarkers'
 import { escapeHtml } from './html'
 import { citationLabel, citationLabelAuthorTitle, formatBibtex, formatCitation, trailingCitationFields, type TrailingFieldsOptions } from './bibtex'
@@ -339,6 +340,203 @@ export function essayToMarkdown(essay: Essay, nodeMap: Map<string, EssayNode>, o
     .join('\n')
     .replace(/\n{3,}/g, '\n\n')
     .trim() + '\n'
+}
+
+// ---- Markdown (PM doc -> text) — Stage B5's own counterpart, ported from
+// the standalone prototype (`pm-editor/src/export.ts`) — walks a migrated
+// essay's real `Essay.doc` directly instead of parsing `draftContent` HTML
+// strings via `DOMParser`. Produces the exact same Markdown shape
+// `essayToMarkdown` above does (same heading levels, same `[^fn<n>]`/
+// `[^fnc<n>]` footnote-label convention, same `sup.print-footnote-ref`/
+// `print-citation-footnote-ref` markup), so everything below this —
+// `markdownToHtml`, the bibliography formatters, `addPrintChrome`, all of
+// it — needs no changes at all to serve either document model. ----------
+
+/** Same shape as `PrintCitationOptions` above, minus `sources` — `pmEssayToMarkdown`/`pmEssayToLatex` already take `sources` as their own argument (every citation needs live source lookup, not just the print-styled path), so there's no reason to nest it one level deeper here the way the old, DOM-attribute-reading path's `PrintCitationOptions` needed to. */
+export interface PmPrintCitationOptions {
+  style: PrintCitationStyle
+  placement: PrintCitationPlacement
+  orderedSourceIds: string[]
+  bibliographyStyle?: BibliographyStyle
+}
+
+interface PmMarkdownFootnoteCtx {
+  defs: string[]
+  counter: { next: number }
+  sources: Map<string, Source>
+  citationOptions?: PmPrintCitationOptions
+}
+
+/** The PM-doc equivalent of `renderPrintCitation` above — same logic, applied fresh against `node.attrs` instead of a DOM element's `data-*` attributes. */
+function renderPrintCitationPm(node: PMNode, source: Source, fnCtx: PmMarkdownFootnoteCtx): string {
+  const opts = fnCtx.citationOptions!
+  const note: string | undefined = node.attrs.note ?? undefined
+  if (opts.placement === 'footnote') {
+    const label = `fnc${fnCtx.counter.next++}`
+    const body = formatFootnoteCitation(source.bibtex, opts.bibliographyStyle ?? 'plain', note)
+    fnCtx.defs.push(`[^${label}]: ${body}`)
+    return `[^${label}]`
+  }
+  const refNumber = opts.orderedSourceIds.indexOf(source.id) + 1
+  if (opts.style === 'numbered') return printCitationSpan(mdEscapeText(note ? `[${refNumber}, ${note}]` : `[${refNumber}]`))
+  const rendered = opts.style === 'author-title' ? citationLabelAuthorTitle(source.bibtex, note) : citationLabel(source.bibtex, note)
+  return printCitationSpan(mdEscapeText(rendered))
+}
+
+/** A `citation` node's markdown — fresh from `fnCtx.sources` every time, never a cached label (see `pmSchema.ts`'s own doc comment on `citation`). With no `citationOptions` (the plain .md export path), this always renders a fresh "(Author, Year)" label — there's no baked-in chip text to fall back to the way the old model's own chips had, a deliberate, understood difference, not an oversight. */
+function citationMarkdownPm(node: PMNode, fnCtx: PmMarkdownFootnoteCtx): string {
+  const source = fnCtx.sources.get(node.attrs.sourceId)
+  if (!fnCtx.citationOptions) {
+    return source ? mdEscapeText(citationLabel(source.bibtex, node.attrs.note ?? undefined)) : mdEscapeText(`(unknown source: ${node.attrs.sourceId})`)
+  }
+  if (!source) return printCitationSpan(mdEscapeText(`(unknown source: ${node.attrs.sourceId})`))
+  return renderPrintCitationPm(node, source, fnCtx)
+}
+
+/** A `footnote` node's markdown — its content is real, already-parsed PM inline content (see `pmSchema.ts`'s own doc comment), so unlike `renderMarkdownFootnoteRef` above there's no separate `footnotesById` lookup or `DOMParser` re-parse needed: just walk it the same way any other inline content gets walked. */
+function footnoteMarkdownPm(node: PMNode, fnCtx: PmMarkdownFootnoteCtx): string {
+  const label = `fn${fnCtx.counter.next++}`
+  const contentMd = inlineContentToMarkdownPm(node, fnCtx).replace(/\s+/g, ' ').trim()
+  fnCtx.defs.push(`[^${label}]: ${contentMd}`)
+  return `[^${label}]`
+}
+
+/** One inline leaf's own markdown — a text run (escaped, with its marks applied) or one of the inline atom/content node types. `quote_inline`/`source_link` marks render as plain text for now — the same scope cut the prototype this was ported from already made (neither is wired to a toolbar command producing styled Markdown output yet). */
+function inlineLeafToMarkdownPm(node: PMNode, fnCtx: PmMarkdownFootnoteCtx): string {
+  if (node.isText) {
+    let text = mdEscapeText(node.text ?? '')
+    const linkMark = node.marks.find((m) => m.type.name === 'link')
+    if (node.marks.some((m) => m.type.name === 'underline')) text = `<u>${text}</u>`
+    if (node.marks.some((m) => m.type.name === 'em')) text = `*${text}*`
+    if (node.marks.some((m) => m.type.name === 'strong')) text = `**${text}**`
+    if (linkMark) text = `[${text}](${linkMark.attrs.href})`
+    return text
+  }
+  switch (node.type.name) {
+    case 'citation':
+      return citationMarkdownPm(node, fnCtx)
+    case 'footnote':
+      return footnoteMarkdownPm(node, fnCtx)
+    case 'math_inline':
+      return `$${node.attrs.latex}$`
+    case 'hard_break':
+      return '  \n'
+    default:
+      return ''
+  }
+}
+
+function inlineContentToMarkdownPm(parent: PMNode, fnCtx: PmMarkdownFootnoteCtx): string {
+  let out = ''
+  parent.forEach((child) => {
+    out += inlineLeafToMarkdownPm(child, fnCtx)
+  })
+  return out
+}
+
+/** `bullet_list`/`ordered_list` -> one `- `/`N. ` line per `list_item`, recursing into a nested list right under its own parent item at one deeper indent — same convention as `listToMarkdown` above. */
+function listToMarkdownPm(listNode: PMNode, fnCtx: PmMarkdownFootnoteCtx, depth: number): string {
+  const ordered = listNode.type.name === 'ordered_list'
+  const indent = '  '.repeat(depth)
+  const lines: string[] = []
+  let n = 1
+  listNode.forEach((listItem) => {
+    const nested: PMNode[] = []
+    const inlineParts: string[] = []
+    listItem.forEach((child) => {
+      if (child.type.name === 'bullet_list' || child.type.name === 'ordered_list') nested.push(child)
+      else inlineParts.push(blockToMarkdownPm(child, fnCtx))
+    })
+    const marker = ordered ? `${n++}.` : '-'
+    lines.push(`${indent}${marker} ${inlineParts.join(' ').trim()}`)
+    for (const nestedList of nested) lines.push(listToMarkdownPm(nestedList, fnCtx, depth + 1))
+  })
+  return lines.join('\n')
+}
+
+/** One block node's own markdown — a paragraph, blockquote, list, or display-math block. */
+function blockToMarkdownPm(node: PMNode, fnCtx: PmMarkdownFootnoteCtx): string {
+  switch (node.type.name) {
+    case 'paragraph':
+      return inlineContentToMarkdownPm(node, fnCtx)
+    case 'blockquote': {
+      const lines: string[] = []
+      node.forEach((para) => lines.push(inlineContentToMarkdownPm(para, fnCtx)))
+      return lines.map((l) => `> ${l}`).join('\n> \n')
+    }
+    case 'bullet_list':
+    case 'ordered_list':
+      return listToMarkdownPm(node, fnCtx, 0)
+    case 'math_block':
+      return `$$\n${node.attrs.latex}\n$$`
+    default:
+      return ''
+  }
+}
+
+/** The PM-doc equivalent of `essayToMarkdown` above — see this section's own doc comment for why the output shape has to match exactly. `title` is `Essay.title` (kept as separate essay metadata, same as always); `doc`'s own root `section` is walked at depth 0 (its own `section_title` text is never rendered — same as the old root `EssayNode.title` never was), every nested `section` one level deeper. */
+export function pmEssayToMarkdown(title: string, doc: PMNode, sources: Map<string, Source>, opts: { citationOptions?: PmPrintCitationOptions } = {}): string {
+  const lines: string[] = [`# ${title}`, '']
+  const fnCtx: PmMarkdownFootnoteCtx = { defs: [], counter: { next: 1 }, sources, citationOptions: opts.citationOptions }
+  function renderSection(section: PMNode, depth: number) {
+    if (depth > 0) {
+      const level = '#'.repeat(Math.min(depth + 1, 6))
+      lines.push(`${level} ${section.firstChild?.textContent || 'Untitled section'}`, '')
+    }
+    section.forEach((child, _offset, index) => {
+      if (index === 0) return // section_title — handled above, or (depth 0) deliberately not rendered at all
+      if (child.type.name === 'section') {
+        renderSection(child, depth + 1)
+      } else {
+        const block = blockToMarkdownPm(child, fnCtx)
+        if (block) lines.push(block, '')
+      }
+    })
+  }
+  renderSection(doc.firstChild!, 0)
+  if (fnCtx.defs.length > 0) lines.push('---', '', ...fnCtx.defs.flatMap((d) => [d, '']))
+  return (
+    lines
+      .join('\n')
+      .replace(/\n{3,}/g, '\n\n')
+      .trim() + '\n'
+  )
+}
+
+/** Every source a migrated essay actually cites — the PM-doc equivalent of `citedSources`/`collectUsedSourceIds` below, which walk `EssayNode.draftContent` HTML strings via `DOMParser`; `doc.descendants()` does the same job directly against the real document model. Same sort (by first author/title) for the same stable, conventional reading order — `ExportDialog.tsx` relies on this to derive the same `orderedSourceIds` a `'numbered'` `PrintCitationStyle` needs. */
+export function pmCitedSources(doc: PMNode, sources: Map<string, Source>): Source[] {
+  const ids = new Set<string>()
+  doc.descendants((node) => {
+    if (node.type.name === 'citation') ids.add(node.attrs.sourceId)
+  })
+  return Array.from(ids)
+    .map((id) => sources.get(id))
+    .filter((s): s is Source => !!s)
+    .sort((a, b) => (a.bibtex.fields.author || a.bibtex.fields.title || a.bibtex.key).localeCompare(b.bibtex.fields.author || b.bibtex.fields.title || b.bibtex.key))
+}
+
+/** The `cited` list a `'numbered'` `PrintCitationStyle`'s own References list needs is already computed by `pmReferencesMarkdown`/`pmReferencesHtml` below via `pmCitedSources` — this just exposes the same thing `referencesMarkdown`/`referencesHtml` above build internally from `cited`, factored out so both the old and new document models share one implementation instead of two copies of the same list-rendering logic. */
+function referencesMarkdownFromCited(cited: Source[], style: BibliographyStyle, opts: TrailingFieldsOptions): string {
+  if (cited.length === 0) return ''
+  const items = cited.map((s) => `- ${renderBibliographyEntry(s.bibtex, style, opts)}`)
+  return `\n\n## References\n\n${items.join('\n')}\n`
+}
+
+function referencesHtmlFromCited(cited: Source[], style: BibliographyStyle, numbered: boolean, opts: TrailingFieldsOptions): string {
+  if (cited.length === 0) return ''
+  const items = cited.map((s) => `<li>${inlineMarkdownToHtml(renderBibliographyEntry(s.bibtex, style, opts))}</li>`)
+  const tag = numbered ? 'ol' : 'ul'
+  return `<h2 class="print-references-heading">References</h2><${tag} class="print-references-list">${items.join('')}</${tag}>`
+}
+
+/** The PM-doc equivalent of `referencesMarkdown` above. */
+export function pmReferencesMarkdown(doc: PMNode, sources: Map<string, Source>, style: BibliographyStyle = 'plain', opts: TrailingFieldsOptions = {}): string {
+  return referencesMarkdownFromCited(pmCitedSources(doc, sources), style, opts)
+}
+
+/** The PM-doc equivalent of `referencesHtml` above. */
+export function pmReferencesHtml(doc: PMNode, sources: Map<string, Source>, style: BibliographyStyle = 'plain', numbered: boolean = false, opts: TrailingFieldsOptions = {}): string {
+  return referencesHtmlFromCited(pmCitedSources(doc, sources), style, numbered, opts)
 }
 
 // ---- Markdown -> printable HTML (for "export to PDF") ----------------
@@ -902,24 +1100,42 @@ function sectionCmd(depth: number): string {
   return SECTION_CMDS[Math.min(depth - 1, SECTION_CMDS.length - 1)]
 }
 
+/**
+ * Same whitespace-collapse/zero-width-space-stripping reasoning as
+ * `mdEscapeText`'s own doc comment — see that function for the fuller
+ * story.
+ *
+ * The actual character-escaping is one combined regex with a replacer
+ * function, not several chained `.replace()` calls each escaping one more
+ * character class (which this function used to be, and which the
+ * standalone prototype's own port of this function — `pm-editor/src/
+ * export.ts` — found and fixed first, confirmed live two different ways:
+ * escaping `\` first corrupts a literal backslash into
+ * `\textbackslash\{\}`, because the following `{}` step re-escapes the
+ * braces `\textbackslash{}` itself just inserted; escaping `\` last
+ * instead corrupts *every other* escaped character, because by then the
+ * string is already full of the backslashes earlier steps inserted as
+ * part of `\%`, `\$`, etc.). `String.replace` only ever matches against
+ * the *original* string, never re-scanning text a replacement just
+ * produced, so a single combined pass has no "later step sees an earlier
+ * step's own output" case left to get wrong.
+ */
 function texEscape(s: string): string {
-  // Same reasoning as mdEscapeText's own whitespace collapse (its own doc
-  // comment has the fuller story): a run of whitespace, including a
-  // literal `\n` a pasted/inserted quote often has sitting in its text,
-  // reads in the live editor exactly like a single space (the browser
-  // collapses it) — collapsed here the same way before anything else
-  // touches it, so a `\n\n` from the original text doesn't compile as an
-  // unintended LaTeX paragraph break, and the generated .tex source
-  // doesn't carry a confusing mid-sentence line break either. Zero-width
-  // spaces are stripped outright for the same reason mdEscapeText strips
-  // them — see that function's own doc comment.
   return s
     .replace(/​/g, '')
     .replace(/\s+/g, ' ')
-    .replace(/\\/g, '\\textbackslash{}')
-    .replace(/([%$#_{}&])/g, '\\$1')
-    .replace(/~/g, '\\textasciitilde{}')
-    .replace(/\^/g, '\\textasciicircum{}')
+    .replace(/[\\%$#_{}&~^]/g, (ch) => {
+      switch (ch) {
+        case '\\':
+          return '\\textbackslash{}'
+        case '~':
+          return '\\textasciitilde{}'
+        case '^':
+          return '\\textasciicircum{}'
+        default:
+          return `\\${ch}`
+      }
+    })
 }
 
 interface LatexCtx {
@@ -1135,6 +1351,158 @@ export function essayToLatex(essay: Essay, nodeMap: Map<string, EssayNode>, sour
       .join('\n')
       .replace(/\n{3,}/g, '\n\n')
   )
+}
+
+// ---- LaTeX (PM doc -> text) — Stage B5's own counterpart, ported from the
+// standalone prototype the same way the Markdown section above was. -----
+
+interface PmLatexCtx {
+  sources: Map<string, Source>
+  citeCmd: string
+}
+
+/** A citation node's own LaTeX — unlike `citationMarkdownPm`'s plain-.md fallback, there's no equivalent "no citationOptions" case for LaTeX (`\cite{key}` is just as valid read directly off the source as any styled rendering); a missing source falls back to the raw `sourceId` as the BibTeX key, the same degrade-gracefully choice `inlineHtmlToLatex` above makes. */
+function citationLatexPm(node: PMNode, ctx: PmLatexCtx): string {
+  const source = ctx.sources.get(node.attrs.sourceId)
+  const key = source?.bibtex.key ?? node.attrs.sourceId
+  const note: string | undefined = node.attrs.note ?? undefined
+  return note ? `${ctx.citeCmd}[${texEscape(note)}]{${key}}` : `${ctx.citeCmd}{${key}}`
+}
+
+/** A footnote node's own LaTeX — `\footnote{}` is genuinely inline and self-numbering, so (unlike the Markdown path's `[^label]` + a separate definition list) this is the one export format where a footnote round-trips back to exactly the single LaTeX construct it most likely came from. Its content is real PM inline content, walked directly — no separate lookup needed, unlike the old model's own `footnotesById`. */
+function footnoteLatexPm(node: PMNode, ctx: PmLatexCtx): string {
+  return `\\footnote{${inlineContentToLatexPm(node, ctx).trim()}}`
+}
+
+function inlineLeafToLatexPm(node: PMNode, ctx: PmLatexCtx): string {
+  if (node.isText) {
+    let text = texEscape(node.text ?? '')
+    const linkMark = node.marks.find((m) => m.type.name === 'link')
+    if (node.marks.some((m) => m.type.name === 'underline')) text = `\\underline{${text}}`
+    if (node.marks.some((m) => m.type.name === 'em')) text = `\\textit{${text}}`
+    if (node.marks.some((m) => m.type.name === 'strong')) text = `\\textbf{${text}}`
+    if (linkMark) text = `\\href{${linkMark.attrs.href}}{${text}}`
+    return text
+  }
+  switch (node.type.name) {
+    case 'citation':
+      return citationLatexPm(node, ctx)
+    case 'footnote':
+      return footnoteLatexPm(node, ctx)
+    case 'math_inline':
+      return `$${node.attrs.latex}$`
+    case 'hard_break':
+      return '\\\\\n'
+    default:
+      return ''
+  }
+}
+
+function inlineContentToLatexPm(parent: PMNode, ctx: PmLatexCtx): string {
+  let out = ''
+  parent.forEach((child) => {
+    out += inlineLeafToLatexPm(child, ctx)
+  })
+  return out
+}
+
+/** `bullet_list`/`ordered_list` -> `itemize`/`enumerate`, one `\item` per `list_item` — see `listToMarkdownPm`'s own doc comment for the nested-list handling, which applies identically here. */
+function listToLatexPm(listNode: PMNode, ctx: PmLatexCtx): string {
+  const env = listNode.type.name === 'ordered_list' ? 'enumerate' : 'itemize'
+  const items: string[] = []
+  listNode.forEach((listItem) => {
+    const nested: PMNode[] = []
+    const inlineParts: string[] = []
+    listItem.forEach((child) => {
+      if (child.type.name === 'bullet_list' || child.type.name === 'ordered_list') nested.push(child)
+      else inlineParts.push(blockToLatexPm(child, ctx))
+    })
+    let item = `\\item ${inlineParts.join(' ').trim()}`
+    for (const nestedList of nested) item += `\n${listToLatexPm(nestedList, ctx)}`
+    items.push(item)
+  })
+  return `\\begin{${env}}\n${items.join('\n')}\n\\end{${env}}`
+}
+
+function blockToLatexPm(node: PMNode, ctx: PmLatexCtx): string {
+  switch (node.type.name) {
+    case 'paragraph':
+      return inlineContentToLatexPm(node, ctx)
+    case 'blockquote': {
+      const lines: string[] = []
+      node.forEach((para) => lines.push(inlineContentToLatexPm(para, ctx)))
+      return `\\begin{quote}\n${lines.join('\n\n')}\n\\end{quote}`
+    }
+    case 'bullet_list':
+    case 'ordered_list':
+      return listToLatexPm(node, ctx)
+    case 'math_block':
+      return `\\[\n${node.attrs.latex}\n\\]`
+    default:
+      return ''
+  }
+}
+
+/** The PM-doc equivalent of `essayToLatex` above — same document shape (`\documentclass{article}` + `natbib`/`biblatex` depending on `citeCommand`), same abstract special-case: the root section's own *first* `section`-type child, if its title is exactly "Abstract" (`isAbstractTitle`), becomes a plain `\abstract{}` macro argument (its own text content only, not the block-level structure a normal section's subsections could produce) rather than a numbered `\section{}`, the same structural exception `addPrintChrome`/`pmEssayToMarkdown` both make for it. */
+export function pmEssayToLatex(title: string, doc: PMNode, sources: Map<string, Source>, opts: { citeCommand?: '\\cite' | '\\footcite' } = {}): string {
+  const citeCmd = opts.citeCommand ?? '\\cite'
+  const ctx: PmLatexCtx = { sources, citeCmd }
+  const body: string[] = []
+  const root = doc.firstChild!
+  let abstractIndex = -1
+  root.forEach((child, _offset, index) => {
+    if (abstractIndex === -1 && child.type.name === 'section') abstractIndex = index
+  })
+
+  function renderSection(section: PMNode, depth: number, isAbstract: boolean) {
+    if (depth > 0 && !isAbstract) {
+      body.push(`\\${sectionCmd(depth)}{${texEscape(section.firstChild?.textContent || 'Untitled section')}}`, '')
+    }
+    if (isAbstract) {
+      const ownBlocks: string[] = []
+      section.forEach((child, _offset, index) => {
+        if (index === 0 || child.type.name === 'section') return
+        const block = blockToLatexPm(child, ctx)
+        if (block) ownBlocks.push(block)
+      })
+      body.push(`\\abstract{${ownBlocks.join('\n\n')}}`, '')
+      section.forEach((child) => {
+        if (child.type.name === 'section') renderSection(child, depth + 1, false)
+      })
+      return
+    }
+    section.forEach((child, _offset, index) => {
+      if (index === 0) return
+      if (child.type.name === 'section') {
+        const childIsAbstract = depth === 0 && index === abstractIndex && isAbstractTitle(child.firstChild?.textContent)
+        renderSection(child, depth + 1, childIsAbstract)
+      } else {
+        const block = blockToLatexPm(child, ctx)
+        if (block) body.push(block, '')
+      }
+    })
+  }
+  renderSection(root, 0, false)
+
+  const usesBiblatex = citeCmd === '\\footcite'
+  return [
+    '\\documentclass{article}',
+    '\\usepackage[utf8]{inputenc}',
+    '\\usepackage{hyperref}',
+    usesBiblatex ? '\\usepackage{biblatex}' : '\\usepackage{natbib}',
+    usesBiblatex ? '\\addbibresource{references.bib}' : '',
+    `\\title{${texEscape(title)}}`,
+    '\\begin{document}',
+    '\\maketitle',
+    '',
+    ...body,
+    usesBiblatex ? '\\printbibliography' : '\\bibliographystyle{plain}\n\\bibliography{references}',
+    '\\end{document}',
+    '',
+  ]
+    .filter((l) => l !== '')
+    .join('\n')
+    .replace(/\n{3,}/g, '\n\n')
 }
 
 // ---- Shared: which sources does this essay actually cite? -------------
@@ -1457,10 +1825,7 @@ export function citedSources(nodeMap: Map<string, EssayNode>, sources: Map<strin
 
 /** A "## References" section — one list item per cited source — appended to `essayToMarkdown`'s own output for the plain .md export. Empty string (nothing appended at all) when the essay cites no sources. `renderBibliographyEntry`'s own result is already safe, escaped Markdown — not re-escaped here, which would double-escape a style's own `*italic*` markers into literal asterisks. */
 export function referencesMarkdown(nodeMap: Map<string, EssayNode>, sources: Map<string, Source>, style: BibliographyStyle = 'plain', opts: TrailingFieldsOptions = {}): string {
-  const cited = citedSources(nodeMap, sources)
-  if (cited.length === 0) return ''
-  const items = cited.map((s) => `- ${renderBibliographyEntry(s.bibtex, style, opts)}`)
-  return `\n\n## References\n\n${items.join('\n')}\n`
+  return referencesMarkdownFromCited(citedSources(nodeMap, sources), style, opts)
 }
 
 /**
@@ -1487,9 +1852,5 @@ export function referencesMarkdown(nodeMap: Map<string, EssayNode>, sources: Map
  * everything else exactly the way `escapeHtml` alone used to.
  */
 export function referencesHtml(nodeMap: Map<string, EssayNode>, sources: Map<string, Source>, style: BibliographyStyle = 'plain', numbered: boolean = false, opts: TrailingFieldsOptions = {}): string {
-  const cited = citedSources(nodeMap, sources)
-  if (cited.length === 0) return ''
-  const items = cited.map((s) => `<li>${inlineMarkdownToHtml(renderBibliographyEntry(s.bibtex, style, opts))}</li>`)
-  const tag = numbered ? 'ol' : 'ul'
-  return `<h2 class="print-references-heading">References</h2><${tag} class="print-references-list">${items.join('')}</${tag}>`
+  return referencesHtmlFromCited(citedSources(nodeMap, sources), style, numbered, opts)
 }

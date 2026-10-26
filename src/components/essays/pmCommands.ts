@@ -8,12 +8,12 @@ import { pageNote } from '../../lib/bibtex'
 import { id } from '../../lib/id'
 import type { Source } from '../../models/types'
 
-/** Walks up from `$pos` to the nearest enclosing `section` — shared by "Send to graveyard" (`sendSelectionToGraveyard`, EssayWorkspace.tsx) and comment-anchor insertion below, both of which need "which section does this position belong to" as a best-effort reference (never dereferenced structurally — a section can be renamed/moved/deleted without anything here needing to follow it). */
-export function findEnclosingSection($pos: ResolvedPos): { id: string; title: string } | null {
+/** Walks up from `$pos` to the nearest enclosing `section` — shared by "Send to graveyard" (`sendSelectionToGraveyard`, EssayWorkspace.tsx), comment-anchor insertion below, and the Word Count dialog's own "this section" row, each of which needs "which section does this position belong to" as a best-effort reference (`id`/`title`; never dereferenced structurally — a section can be renamed/moved/deleted without anything here needing to follow it) or, for word count specifically, the actual live `node` to pull text out of. */
+export function findEnclosingSection($pos: ResolvedPos): { id: string; title: string; node: PMNode } | null {
   for (let d = $pos.depth; d >= 0; d--) {
     const node = $pos.node(d)
     if (node.type.name === 'section') {
-      return { id: node.attrs.id, title: node.firstChild?.textContent || 'Untitled section' }
+      return { id: node.attrs.id, title: node.firstChild?.textContent || 'Untitled section', node }
     }
   }
   return null
