@@ -8,7 +8,8 @@ import { splitListItem } from 'prosemirror-schema-list'
 import { Node as PMNode } from 'prosemirror-model'
 import { essaySchema } from '../../lib/pmSchema'
 import { saveEssay } from '../../models/essaysRepo'
-import type { Essay } from '../../models/types'
+import { createCitationView } from './pmNodeViews'
+import type { Essay, Source } from '../../models/types'
 
 /**
  * The real ProseMirror editing surface for a migrated essay (`Essay.doc`) —
@@ -44,12 +45,15 @@ import type { Essay } from '../../models/types'
  */
 export function PMEssayEditor({
   essay,
+  sources,
   editable = true,
   onViewReady,
   onViewDestroyed,
   onDocChanged,
 }: {
   essay: Essay
+  /** Live source map (`listSources()`, loaded once by `EssayWorkspace.tsx`) — closed over by the `citation` NodeView so every citation always renders fresh from current bibtex, never a cached label (see `pmSchema.ts`'s own doc comment). */
+  sources: Map<string, Source>
   editable?: boolean
   onViewReady?: (view: EditorView) => void
   onViewDestroyed?: () => void
@@ -91,6 +95,9 @@ export function PMEssayEditor({
     const view = new EditorView(containerRef.current, {
       state,
       editable: () => editable,
+      nodeViews: {
+        citation: (node, v, getPos) => new (createCitationView(sources))(node, v, getPos as () => number | undefined),
+      },
       dispatchTransaction(tr) {
         const newState = view.state.apply(tr)
         view.updateState(newState)

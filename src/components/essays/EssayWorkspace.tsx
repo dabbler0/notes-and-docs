@@ -5,13 +5,19 @@ import { toggleMark, lift } from 'prosemirror-commands'
 import { wrapInList, liftListItem } from 'prosemirror-schema-list'
 import type { EditorState, Transaction } from 'prosemirror-state'
 import { getEssay, saveEssay } from '../../models/essaysRepo'
+import { listSources } from '../../models/sourcesRepo'
+import { addToGraveyard } from '../../models/graveyardRepo'
 import { essaySchema } from '../../lib/pmSchema'
-import type { Essay } from '../../models/types'
+import { displayTitle } from '../../lib/bibtex'
+import type { Essay, Source } from '../../models/types'
 import { Icon } from '../Icon'
 import { PMEssayEditor } from './PMEssayEditor'
 import { NodeTree } from './NodeTree'
 import { AuthorNoteDialog } from './AuthorNoteDialog'
 import { SplitPickerDialog } from './SplitPickerDialog'
+import { CitationPickerDialog } from './CitationPickerDialog'
+import { QuoteInsertDialog } from './QuoteInsertDialog'
+import { insertCitation, insertQuoteBlock, insertQuoteInline, insertSourceLink, splitIntoSection, demoteSection, sliceToHtml } from './pmCommands'
 import { Modal } from '../Modal'
 import { useIsMobile } from '../../lib/useIsMobile'
 
@@ -19,18 +25,14 @@ import { useIsMobile } from '../../lib/useIsMobile'
  * The whole essay as one continuous, real ProseMirror document — see
  * `PMEssayEditor.tsx`'s own doc comment for the editing surface itself.
  *
- * **Stage B1 of the ProseMirror migration's UI swap**: this is a
- * deliberately trimmed-down version of the old, full-featured
- * `EssayWorkspace`. Everything the old per-node `contentEditable` UI
- * offered beyond basic text formatting and navigation — citations,
- * quotes, source links, footnotes, comments (margin and inline), split/
- * demote structural editing, "send to graveyard," export, word count,
- * commit/history — comes back in later stages of the same migration (see
- * the `claude/prosemirror-migration` branch's own plan), each restoring
- * one slice via PM's own idiomatic mechanisms (transactions, commands,
- * NodeViews) rather than the old DOM-surgery those features used to need.
- * Nothing here is a permanent regression; it's staged work on this branch,
- * not something shipped to production in this intermediate state.
+ * **Stage B2 of the ProseMirror migration's UI swap**: citations, quotes,
+ * source links, and structural editing (split into subsection / demote)
+ * are back, via `pmCommands.ts`'s own PM-native transactions rather than
+ * the old DOM-surgery those used to need. Still deliberately missing:
+ * footnotes, comments (margin and inline), export, word count, commit/
+ * history — later stages of the same migration (see the
+ * `claude/prosemirror-migration` branch's own plan). Nothing here is a
+ * permanent regression; it's staged work on this branch.
  *
  * Split-screen works the same way it always has: nesting this same
  * component inside itself (see `splitEssayId`) rather than a separate
@@ -40,6 +42,14 @@ export function EssayWorkspace({ essayId, onBack, embedded = false }: { essayId:
   const [essay, setEssay] = useState<Essay | null>(null)
   const [essayTitle, setEssayTitle] = useState('')
   const [doc, setDoc] = useState<PMNode | null>(null)
+  // A stable Map *instance*, never replaced — `PMEssayEditor`'s `citation`
+  // NodeView (`pmNodeViews.ts`'s `createCitationView`) closes over this
+  // exact object once, when its `EditorView` mounts (keyed only on
+  // `essay.id`, not on this prop), so a fresh `new Map(...)` here would
+  // leave every citation's NodeView looking at a stale, often-empty
+  // snapshot forever after. `reload()` and the insert-citation/quote/link
+  // handlers below all mutate it in place for exactly this reason.
+  const sources = useRef<Map<string, Source>>(new Map()).current
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set())
   const [splitEssayId, setSplitEssayId] = useState<string | null>(null)
   const [showSplitPicker, setShowSplitPicker] = useState(false)
@@ -47,6 +57,9 @@ export function EssayWorkspace({ essayId, onBack, embedded = false }: { essayId:
   const isMobile = useIsMobile()
   const [mobileTreeOpen, setMobileTreeOpen] = useState(false)
   const [showAuthorNote, setShowAuthorNote] = useState(false)
+  const [showCitation, setShowCitation] = useState(false)
+  const [showQuoteDialog, setShowQuoteDialog] = useState(false)
+  const [showLink, setShowLink] = useState(false)
 
   const viewRef = useRef<EditorView | null>(null)
   const docScrollRef = useRef<HTMLDivElement>(null)
@@ -56,6 +69,9 @@ export function EssayWorkspace({ essayId, onBack, embedded = false }: { essayId:
     if (!e) return
     setEssay(e)
     setEssayTitle(e.title)
+    const list = await listSources()
+    sources.clear()
+    for (const s of list) sources.set(s.id, s)
   }
 
   useEffect(() => {
@@ -108,6 +124,76 @@ export function EssayWorkspace({ essayId, onBack, embedded = false }: { essayId:
     essay.authorNote = note || undefined
     await saveEssay(essay)
     setEssay({ ...essay })
+  }
+
+  function handleInsertCitation(source: Source, note?: string) {
+    setShowCitation(false)
+    sources.set(source.id, source)
+    const view = viewRef.current
+    if (view) insertCitation(view, source, note)
+  }
+
+  function handleInsertQuoteBlock(source: Source, quote: string, page: number) {
+    setShowQuoteDialog(false)
+    sources.set(source.id, source)
+    const view = viewRef.current
+    if (view) insertQuoteBlock(view, source, quote, page)
+  }
+
+  function handleInsertQuoteInline(source: Source, quote: string, page: number) {
+    setShowQuoteDialog(false)
+    sources.set(source.id, source)
+    const view = viewRef.current
+    if (view) insertQuoteInline(view, source, quote, page)
+  }
+
+  function handleInsertSourceLink(source: Source) {
+    setShowLink(false)
+    const view = viewRef.current
+    if (!view) return
+    if (!source.bibtex.fields.url) {
+      alert('This source has no URL — add one from the Sources tab, or pick a different source.')
+      return
+    }
+    sources.set(source.id, source)
+    const { selection } = view.state
+    const linkText = selection.empty ? displayTitle(source.bibtex) : view.state.doc.textBetween(selection.from, selection.to)
+    insertSourceLink(view, source, linkText)
+  }
+
+  /**
+   * "Send to graveyard": cuts the current selection out of the document —
+   * same as a delete — but keeps it, serialized to HTML via the schema's
+   * own `toDOM` (`sliceToHtml`), in a fragment attached to this essay
+   * instead of discarding it. `GraveyardFragment`'s own `nodeId`/
+   * `nodeTitle` are a best-effort "where this came from" reference (never
+   * dereferenced structurally — see that type's own doc comment) — the
+   * enclosing `section`'s own id/title stand in for the old per-node
+   * reference now that there's no node tree to point into.
+   */
+  async function sendSelectionToGraveyard() {
+    const view = viewRef.current
+    if (!view || !essay) return
+    const { from, to, empty, $from } = view.state.selection
+    if (empty) {
+      alert('Select some text in the document first.')
+      return
+    }
+    const slice = view.state.doc.slice(from, to)
+    const html = sliceToHtml(slice)
+    if (!html.trim()) return
+    let sectionId = essay.rootNodeId
+    let sectionTitle = essayTitle
+    for (let d = $from.depth; d >= 0; d--) {
+      const node = $from.node(d)
+      if (node.type.name === 'section') {
+        sectionId = node.attrs.id
+        sectionTitle = node.firstChild?.textContent || 'Untitled section'
+        break
+      }
+    }
+    view.dispatch(view.state.tr.deleteSelection())
+    await addToGraveyard(essay.id, sectionId, sectionTitle, html)
   }
 
   /** "Split view" → `SplitPickerDialog`'s "pick an existing project-mate" option: just opens it side by side, no data touched at all. */
@@ -226,12 +312,34 @@ export function EssayWorkspace({ essayId, onBack, embedded = false }: { essayId:
             >
               Outdent
             </button>
+            <span className="toolbar-divider" />
+            <button className="btn btn-sm icon-btn-toolbar" title="Cite a source" onMouseDown={(e) => e.preventDefault()} onClick={() => setShowCitation(true)}>
+              <Icon name="cite" />
+            </button>
+            <button className="btn btn-sm icon-btn-toolbar" title="Insert a quote from a source" onMouseDown={(e) => e.preventDefault()} onClick={() => setShowQuoteDialog(true)}>
+              <Icon name="quote" />
+            </button>
+            <button className="btn btn-sm icon-btn-toolbar" title="Link to a source" onMouseDown={(e) => e.preventDefault()} onClick={() => setShowLink(true)}>
+              <Icon name="link" />
+            </button>
+            <span className="toolbar-divider" />
+            <button className="btn btn-sm icon-btn-toolbar" title="Split selection into subsection" onMouseDown={(e) => e.preventDefault()} onClick={() => run(splitIntoSection)}>
+              <Icon name="subsection" />
+            </button>
+            <button className="btn btn-sm" title="Demote: fold the current section back into its parent" onMouseDown={(e) => e.preventDefault()} onClick={() => run(demoteSection)}>
+              Demote
+            </button>
+            <span className="toolbar-divider" />
+            <button className="btn btn-sm icon-btn-toolbar" title="Send selection to the graveyard" onMouseDown={(e) => e.preventDefault()} onClick={sendSelectionToGraveyard}>
+              <Icon name="graveyard" />
+            </button>
             <div className="spacer" />
           </div>
 
           <div className="editor-scroll doc-scroll" ref={docScrollRef}>
             <PMEssayEditor
               essay={essay}
+              sources={sources}
               onViewReady={(view) => {
                 viewRef.current = view
               }}
@@ -270,6 +378,9 @@ export function EssayWorkspace({ essayId, onBack, embedded = false }: { essayId:
 
       {showAuthorNote && <AuthorNoteDialog initialValue={essay.authorNote ?? ''} onSave={saveAuthorNote} onClose={() => setShowAuthorNote(false)} />}
       {showSplitPicker && <SplitPickerDialog essay={essay} onClose={() => setShowSplitPicker(false)} onSelectExisting={handleSelectExistingForSplit} onClone={handleCloneForSplit} />}
+      {showCitation && <CitationPickerDialog onClose={() => setShowCitation(false)} onSelect={handleInsertCitation} />}
+      {showQuoteDialog && <QuoteInsertDialog onClose={() => setShowQuoteDialog(false)} onInsertBlock={handleInsertQuoteBlock} onInsertInline={handleInsertQuoteInline} />}
+      {showLink && <CitationPickerDialog title="Link to a source" requireUrl onClose={() => setShowLink(false)} onSelect={handleInsertSourceLink} />}
     </div>
   )
 }

@@ -3308,3 +3308,22 @@ select {
   padding-left: 1em;
   color: var(--ink-dim);
 }
+
+.pm-editor-root .ProseMirror citation.pm-citation {
+  font-style: normal;
+  background: var(--blue);
+  padding: 1px 6px;
+  border-radius: 6px;
+  font-size: 0.85em;
+  color: #2b4a63;
+  cursor: pointer;
+  display: inline;
+}
+
+.pm-editor-root .ProseMirror a[data-source-id] {
+  color: var(--accent);
+}
+
+.pm-editor-root .ProseMirror quote-inline {
+  color: var(--ink-dim);
+}
