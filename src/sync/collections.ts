@@ -98,5 +98,15 @@ export type SyncedCollection = (typeof SYNCED_COLLECTIONS)[number]
  *     same transform as local migration version 5. `essayHistory` syncs as
  *     its own collection, same reasoning as `sourceContent`'s own entry
  *     above.
+ * 8 — the old per-node `EssayNode` tree (`draftContent`/`rootNodeId`)
+ *     converted into a single ProseMirror document (`Essay.doc`/
+ *     `Essay.comments` — see their own doc comments in `models/types.ts`),
+ *     its entire `essayHistory` commit chain converted along with it, same
+ *     transform as local migration version 6 (`models/essaysMigrations.ts`'s
+ *     `migratePMDocuments`, built on `lib/pmMigration.ts`). `doc`/`comments`
+ *     are new fields on the existing `essays` collection, not a new
+ *     collection of their own, so this needed no new entry in
+ *     `SYNCED_COLLECTIONS` — just the two field names added to `essays`' own
+ *     `SENSITIVE_FIELDS` entry (`sync/syncEngine.ts`).
  */
-export const CURRENT_REMOTE_SCHEMA_VERSION = 7
+export const CURRENT_REMOTE_SCHEMA_VERSION = 8

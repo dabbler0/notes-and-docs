@@ -8,7 +8,7 @@
  * sync does.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { newDevice, newDeviceSignedIn, type Device } from '../../test/deviceHarness'
+import { createEssayWithRootNode, newDevice, newDeviceSignedIn, type Device } from '../../test/deviceHarness'
 import { __failNextWriteTo, __getFakeCloud, __resetFakeCloud } from '../../test/fakeFirestore'
 import { generateKeyBundle, isKeyBundle } from '../../lib/crypto'
 
@@ -30,10 +30,9 @@ async function pairedDevices(email = 'alice@example.com'): Promise<{ a: Device; 
 describe('basic push/pull round trip', () => {
   it('propagates a new essay + node from one device to another', async () => {
     const { a, b } = await pairedDevices()
-    const essay = await a.createEssay('My essay')
-    const root = await a.getNode(essay.rootNodeId)
-    root!.draftContent = 'Hello from device A'
-    await a.saveNode(root!)
+    const { essay, root } = await createEssayWithRootNode(a, 'My essay')
+    root.draftContent = 'Hello from device A'
+    await a.saveNode(root)
     await a.sync()
 
     const result = await b.sync()
@@ -103,17 +102,16 @@ describe('basic push/pull round trip', () => {
     // itself doesn't fit in one field" path without needing to reproduce a
     // specific gzip ratio to get there.
     const { a, b } = await pairedDevices()
-    const essay = await a.createEssay('Long essay')
-    const root = await a.getNode(essay.rootNodeId)
-    root!.draftContent = 'x'.repeat(2_000_000)
-    await a.saveNode(root!)
+    const { essay, root } = await createEssayWithRootNode(a, 'Long essay')
+    root.draftContent = 'x'.repeat(2_000_000)
+    await a.saveNode(root)
     const pushResult = await a.sync()
     expect(pushResult.pushed.nodes).toBe(1)
 
     const pullResult = await b.sync()
     expect(pullResult.pulled.nodes).toBe(1)
     const pulledRoot = await b.getNode(essay.rootNodeId)
-    expect(pulledRoot?.draftContent).toBe(root!.draftContent)
+    expect(pulledRoot?.draftContent).toBe(root.draftContent)
   })
 
   it('pushes a source whose pdfBlobId was cleared back to undefined without Firestore rejecting it', async () => {
@@ -178,7 +176,7 @@ describe('last-write-wins races', () => {
     // real incident this was found from: restoring an old local backup
     // (which preserves each record's original updatedAt) and syncing it.
     const { a, b } = await pairedDevices()
-    const essay = await a.createEssay('Shared doc')
+    const { essay, root: nodeOnA } = await createEssayWithRootNode(a, 'Shared doc')
     // Explicit, "real-clock-relative" timestamps rather than small literal
     // numbers: cursors elsewhere in this pass are already real Date.now()
     // values (from pairedDevices()' own bootstrap sync), so a hardcoded
@@ -188,10 +186,9 @@ describe('last-write-wins races', () => {
     // relative to each other and to "now."
     const NEWER = Date.now() + 100_000
     const OLDER = Date.now() + 50_000
-    const nodeOnA = await a.getNode(essay.rootNodeId)
-    nodeOnA!.draftContent = "A's genuinely newer edit"
-    nodeOnA!.updatedAt = NEWER
-    await a.putNodeRaw(nodeOnA!)
+    nodeOnA.draftContent = "A's genuinely newer edit"
+    nodeOnA.updatedAt = NEWER
+    await a.putNodeRaw(nodeOnA)
     await a.putEssayRaw({ ...essay, updatedAt: NEWER })
     await a.sync() // pushes essay + node, node's remote updatedAt is now NEWER
 
@@ -216,13 +213,12 @@ describe('last-write-wins races', () => {
 
   it('a genuinely newer edit does win, even from the device that synced second', async () => {
     const { a, b } = await pairedDevices()
-    const essay = await a.createEssay('Race doc')
+    const { essay, root: nodeOnA } = await createEssayWithRootNode(a, 'Race doc')
     const EARLIER = Date.now() + 50_000
     const LATER = Date.now() + 100_000
-    const nodeOnA = await a.getNode(essay.rootNodeId)
-    nodeOnA!.draftContent = 'earlier edit'
-    nodeOnA!.updatedAt = EARLIER
-    await a.putNodeRaw(nodeOnA!)
+    nodeOnA.draftContent = 'earlier edit'
+    nodeOnA.updatedAt = EARLIER
+    await a.putNodeRaw(nodeOnA)
     await a.sync()
 
     // B pulls A's edit, then makes its OWN, strictly later edit on top of it.
@@ -241,14 +237,13 @@ describe('last-write-wins races', () => {
 
   it('two devices editing two different nodes of the same essay both survive (no false conflict)', async () => {
     const { a, b } = await pairedDevices()
-    const essay = await a.createEssay('Parallel edits')
+    const { essay, root: rootOnA } = await createEssayWithRootNode(a, 'Parallel edits')
     const child = await a.createChildNode(essay.id, 'Section 1')
     await a.sync()
     await b.sync()
 
-    const rootOnA = await a.getNode(essay.rootNodeId)
-    rootOnA!.draftContent = 'root edited on A'
-    await a.saveNode(rootOnA!)
+    rootOnA.draftContent = 'root edited on A'
+    await a.saveNode(rootOnA)
 
     const childOnB = await b.getNode(child.id)
     childOnB!.draftContent = 'child edited on B'
@@ -359,13 +354,12 @@ describe('the pull-cursor fix (an empty pass must not skip an older doc pushed l
     // Device A now pushes something with a deliberately OLD updatedAt, as
     // a real backup restore would (preserving the record's original
     // timestamp rather than bumping it to "now").
-    const essay = await a.createEssay('Restored from an old backup')
-    const node = await a.getNode(essay.rootNodeId)
+    const { essay, root: node } = await createEssayWithRootNode(a, 'Restored from an old backup')
     const OLD_TIMESTAMP = Date.now() - 10_000_000
     essay.updatedAt = OLD_TIMESTAMP
-    node!.updatedAt = OLD_TIMESTAMP
+    node.updatedAt = OLD_TIMESTAMP
     await a.saveEssay(essay)
-    await a.saveNode(node!)
+    await a.saveNode(node)
     await a.sync()
 
     // B's perfectly ordinary next sync — no special "force" action needed
@@ -379,13 +373,12 @@ describe('the pull-cursor fix (an empty pass must not skip an older doc pushed l
   it('Force full resync remains available as a manual re-check, for the narrower race the cursor fix does not close (concurrent pushes crossing paths within the same pass)', async () => {
     const { a, b } = await pairedDevices()
 
-    const essay = await a.createEssay('Restored from an old backup')
-    const node = await a.getNode(essay.rootNodeId)
+    const { essay, root: node } = await createEssayWithRootNode(a, 'Restored from an old backup')
     const OLD_TIMESTAMP = Date.now() - 10_000_000
     essay.updatedAt = OLD_TIMESTAMP
-    node!.updatedAt = OLD_TIMESTAMP
+    node.updatedAt = OLD_TIMESTAMP
     await a.saveEssay(essay)
-    await a.saveNode(node!)
+    await a.saveNode(node)
     await a.sync()
 
     // Even with no prior sync at all, Force full resync still recovers it
@@ -399,7 +392,7 @@ describe('the pull-cursor fix (an empty pass must not skip an older doc pushed l
 
   it('Force full resync is safe: it never regresses content that is already newer locally than what is remote', async () => {
     const { a, b } = await pairedDevices()
-    const essay = await a.createEssay('Doc')
+    const { essay } = await createEssayWithRootNode(a, 'Doc')
     await a.sync()
     await b.sync()
 
@@ -472,12 +465,11 @@ describe('key bundle plumbing', () => {
 describe('footnote sync and backward compatibility', () => {
   it('a node with no footnotes field at all (as if from before footnotes existed) syncs cleanly, then a footnote added later propagates normally', async () => {
     const { a, b } = await pairedDevices()
-    const essay = await a.createEssay('Essay with an old-format node')
-    const root = await a.getNode(essay.rootNodeId)
+    const { essay, root } = await createEssayWithRootNode(a, 'Essay with an old-format node')
     // Deliberately no `footnotes` key at all — putNodeRaw writes the object
     // exactly as given, the same shape a node saved before this feature
     // existed would have.
-    await a.putNodeRaw({ ...root!, draftContent: 'Some old text.' })
+    await a.putNodeRaw({ ...root, draftContent: 'Some old text.' })
     await a.sync()
 
     const pulled = await b.sync()

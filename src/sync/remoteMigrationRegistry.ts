@@ -32,7 +32,7 @@
 import type { Migration } from '../storage/migrations'
 import { migrateCompressPageHtml, migratePageTextsToPageHtml, migrateSplitSourceContent } from '../models/sourcesMigrations'
 import { migrateDefaultQuoteKind } from '../models/quoteBankMigrations'
-import { migrateVersionsToEssayHistory } from '../models/essaysMigrations'
+import { migratePMDocuments, migrateVersionsToEssayHistory } from '../models/essaysMigrations'
 import { SYNCED_COLLECTIONS } from './collections'
 
 /**
@@ -64,4 +64,5 @@ export const remoteMigrations: Migration[] = [
   { ...migrateSplitSourceContent, version: 5 },
   { ...migrateDefaultQuoteKind, version: 6 },
   { ...migrateVersionsToEssayHistory, version: 7 },
+  { ...migratePMDocuments, version: 8 },
 ]

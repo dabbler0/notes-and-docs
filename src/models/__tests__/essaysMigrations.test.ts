@@ -2,7 +2,9 @@ import { describe, expect, it } from 'vitest'
 import { createFakeBackend } from '../../test/fakeBackend'
 import { markerHtml } from '../../lib/childMarkers'
 import { reconstructSnapshot, reconstructSnapshotText } from '../../lib/essayHistory'
-import { migrateVersionsToEssayHistory } from '../essaysMigrations'
+import { Node as PMNode } from 'prosemirror-model'
+import { migratePMDocuments, migrateVersionsToEssayHistory } from '../essaysMigrations'
+import { essaySchema } from '../../lib/pmSchema'
 import type { Essay, EssayCommitEntry, EssayNode } from '../types'
 
 function essay(overrides: Partial<Essay> & { id: string; rootNodeId: string }): Essay {
@@ -209,5 +211,66 @@ describe('migrateVersionsToEssayHistory', () => {
   it('is a no-op on an empty database', async () => {
     const { docs } = createFakeBackend()
     await expect(migrateVersionsToEssayHistory.run(docs)).resolves.toBeUndefined()
+  })
+})
+
+describe('migratePMDocuments', () => {
+  it('sets essay.doc/essay.comments from the live node tree, leaving old data untouched', async () => {
+    const { docs } = createFakeBackend()
+    const root = node({ id: 'root', essayId: 'e1', draftContent: '<p>Body text.</p>', versions: [] })
+    await docs.put('essays', essay({ id: 'e1', title: 'My Essay', rootNodeId: 'root' }))
+    await docs.put('nodes', root)
+
+    await migratePMDocuments.run(docs)
+
+    const migratedEssay = (await docs.list<Essay>('essays')).find((e) => e.id === 'e1')!
+    expect(migratedEssay.doc).toBeDefined()
+    const pm = PMNode.fromJSON(essaySchema, migratedEssay.doc)
+    expect(pm.firstChild!.type.name).toBe('section')
+    expect(pm.textContent).toContain('Body text.')
+    expect(migratedEssay.comments).toEqual([])
+    // Old data untouched.
+    const stillThere = (await docs.list<EssayNode>('nodes')).find((n) => n.id === 'root')!
+    expect(stillThere.draftContent).toBe('<p>Body text.</p>')
+    expect(migratedEssay.rootNodeId).toBe('root')
+  })
+
+  it("converts an essay's entire existing commit history to the new format in the same pass", async () => {
+    const { docs } = createFakeBackend()
+    const root = node({ id: 'root', essayId: 'e1', draftContent: '<p>v1</p>', versions: [] })
+    await docs.put('essays', essay({ id: 'e1', title: 'My Essay', rootNodeId: 'root' }))
+    await docs.put('nodes', root)
+    const c0: EssayCommitEntry = { id: 'c0', essayId: 'e1', seq: 0, createdAt: 1, kind: 'commit', patch: '' }
+    // Build a real patch the same way commitEssay would — snapshot text diffed from ''.
+    const snapshot = { title: 'My Essay', rootNodeId: 'root', nodes: [{ id: 'root', title: 'Untitled', draftContent: '<p>v1</p>', footnotes: [], comments: [] }] }
+    const Diff = await import('diff')
+    c0.patch = Diff.createPatch('snapshot.json', '', JSON.stringify(snapshot, null, 2))
+    await docs.put('essayHistory', c0)
+
+    await migratePMDocuments.run(docs)
+
+    const commits = await historyFor(docs, 'e1')
+    expect(commits).toHaveLength(1)
+    expect(commits[0].id).toBe('c0')
+    expect(commits[0].seq).toBe(0)
+    expect(commits[0].kind).toBe('commit')
+    const text = reconstructSnapshotText(commits, 0)
+    const migratedSnapshot = JSON.parse(text)
+    expect(migratedSnapshot.doc).toBeDefined()
+    PMNode.fromJSON(essaySchema, migratedSnapshot.doc) // throws if invalid
+  })
+
+  it('skips an essay that already has doc set (idempotent)', async () => {
+    const { docs } = createFakeBackend()
+    const alreadyMigrated = { type: 'doc', content: [{ type: 'section', attrs: { id: 'root' }, content: [{ type: 'section_title' }, { type: 'paragraph' }] }] }
+    await docs.put('essays', essay({ id: 'e1', title: 'My Essay', rootNodeId: 'root', doc: alreadyMigrated }))
+    await migratePMDocuments.run(docs)
+    const result = (await docs.list<Essay>('essays')).find((e) => e.id === 'e1')!
+    expect(result.doc).toEqual(alreadyMigrated)
+  })
+
+  it('is a no-op on an empty database', async () => {
+    const { docs } = createFakeBackend()
+    await expect(migratePMDocuments.run(docs)).resolves.toBeUndefined()
   })
 })

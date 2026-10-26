@@ -4,6 +4,7 @@ import { buildSnapshot, commitEssay, getCommitSnapshot, listEssayHistory, mergeE
 import { groupEssays, getProject } from '../projectsRepo'
 import { reconstructSnapshotText } from '../../lib/essayHistory'
 import { markerHtml } from '../../lib/childMarkers'
+import type { Essay, EssayNode } from '../types'
 
 interface FakeStorageModule {
   createFakeBackend(): unknown
@@ -14,6 +15,24 @@ beforeEach(async () => {
   const storageMod = (await import('../../storage')) as unknown as FakeStorageModule
   storageMod.__setActiveBackend(storageMod.createFakeBackend())
 })
+
+/**
+ * `createEssay` now creates a modern, `doc`-based essay with no `EssayNode`
+ * tree at all (see its own doc comment in `essaysRepo.ts`). The functions
+ * this file tests (`buildSnapshot`/`commitEssay`/`revertEssayTo`/
+ * `mergeEssays`) still only know how to walk that old tree — their
+ * `doc`-based counterparts are deferred to a later phase (see
+ * `essayHistoryRepo.ts`'s own doc comment) — so every test here builds
+ * that same old shape directly: an essay plus one real root `EssayNode`,
+ * exactly what `createEssay` itself used to produce.
+ */
+async function createEssayWithRootNode(title: string): Promise<{ essay: Essay; root: EssayNode }> {
+  const essay = await createEssay(title)
+  const now = Date.now()
+  const root: EssayNode = { id: essay.rootNodeId, essayId: essay.id, title: title || 'Untitled essay', versions: [], headVersionId: '', draftContent: '', createdAt: now, updatedAt: now }
+  await saveNode(root)
+  return { essay, root }
+}
 
 describe('commitEssay', () => {
   it('appends a commit capturing the current live state, and is a no-op when nothing has changed since the last one', async () => {
@@ -33,9 +52,8 @@ describe('commitEssay', () => {
   })
 
   it('captures real edits across a two-commit history, each reconstructable on its own', async () => {
-    const essay = await createEssay('My Essay')
+    const { essay, root } = await createEssayWithRootNode('My Essay')
     let nodeMap = await loadNodeMap(essay)
-    const root = nodeMap.get(essay.rootNodeId)!
     root.draftContent = '<p>First version of the text.</p>'
     await saveNode(root)
     nodeMap = await loadNodeMap(essay)
@@ -57,12 +75,11 @@ describe('commitEssay', () => {
   })
 
   it('a child node added between commits shows up in the later snapshot but not the earlier one', async () => {
-    const essay = await createEssay('My Essay')
+    const { essay, root } = await createEssayWithRootNode('My Essay')
     let nodeMap = await loadNodeMap(essay)
     const beforeChild = await commitEssay(essay, nodeMap, 'Before child')
     expect(beforeChild).toBeDefined()
 
-    const root = nodeMap.get(essay.rootNodeId)!
     const child = await createChildNode(essay.id, 'A Section', '<p>Child text.</p>')
     root.draftContent += markerHtml(child.id)
     await saveNode(root)
@@ -80,9 +97,8 @@ describe('commitEssay', () => {
 
 describe('revertEssayTo', () => {
   it('restores the live tree to an earlier commit and appends a new revert commit rather than rewriting history', async () => {
-    const essay = await createEssay('My Essay')
+    const { essay, root } = await createEssayWithRootNode('My Essay')
     let nodeMap = await loadNodeMap(essay)
-    const root = nodeMap.get(essay.rootNodeId)!
 
     root.draftContent = '<p>Version A.</p>'
     await saveNode(root)
@@ -110,9 +126,8 @@ describe('revertEssayTo', () => {
   })
 
   it('a revert is itself revertible — reverting back to the pre-revert state restores it and appends yet another commit', async () => {
-    const essay = await createEssay('My Essay')
+    const { essay, root } = await createEssayWithRootNode('My Essay')
     let nodeMap = await loadNodeMap(essay)
-    const root = nodeMap.get(essay.rootNodeId)!
 
     root.draftContent = '<p>Version A.</p>'
     await saveNode(root)
@@ -140,9 +155,8 @@ describe('revertEssayTo', () => {
 
 describe('mergeEssays', () => {
   it('appends the base essay with the content of the appended one, preserving both histories', async () => {
-    const base = await createEssay('Base Essay')
+    const { essay: base, root: baseRoot } = await createEssayWithRootNode('Base Essay')
     let baseNodeMap = await loadNodeMap(base)
-    const baseRoot = baseNodeMap.get(base.rootNodeId)!
     baseRoot.draftContent = '<p>Base v1.</p>'
     await saveNode(baseRoot)
     baseNodeMap = await loadNodeMap(base)
@@ -152,9 +166,8 @@ describe('mergeEssays', () => {
     baseNodeMap = await loadNodeMap(base)
     await commitEssay(base, baseNodeMap, 'Base v2')
 
-    const appended = await createEssay('Appended Essay')
+    const { essay: appended, root: appendedRoot } = await createEssayWithRootNode('Appended Essay')
     let appendedNodeMap = await loadNodeMap(appended)
-    const appendedRoot = appendedNodeMap.get(appended.rootNodeId)!
     appendedRoot.draftContent = '<p>Appended v1.</p>'
     await saveNode(appendedRoot)
     appendedNodeMap = await loadNodeMap(appended)
@@ -208,9 +221,7 @@ describe('mergeEssays', () => {
 
   it('synthesizes a commit for an essay with zero prior history rather than failing', async () => {
     const base = await createEssay('Base')
-    const appended = await createEssay('Appended')
-    let appendedNodeMap = await loadNodeMap(appended)
-    const appendedRoot = appendedNodeMap.get(appended.rootNodeId)!
+    const { essay: appended, root: appendedRoot } = await createEssayWithRootNode('Appended')
     appendedRoot.draftContent = '<p>Never committed.</p>'
     await saveNode(appendedRoot)
 
@@ -233,9 +244,7 @@ describe('mergeEssays', () => {
 
 describe('buildSnapshot', () => {
   it('walks the live tree in document order, including footnotes and comments', async () => {
-    const essay = await createEssay('My Essay')
-    const nodeMap = await loadNodeMap(essay)
-    const root = nodeMap.get(essay.rootNodeId)!
+    const { essay, root } = await createEssayWithRootNode('My Essay')
     root.title = 'Root Title'
     root.draftContent = '<p>Some text.</p>'
     await saveNode(root)

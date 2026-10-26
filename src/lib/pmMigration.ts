@@ -149,7 +149,8 @@ export function migrateGraveyardFragment(fragment: GraveyardFragment, allNodes: 
   return { title, doc: { type: 'doc', content: [{ type: 'section', attrs: { id: fragment.id }, content }] }, comments: [], warnings }
 }
 
-function sectionTitleJson(title: string): PMJson {
+/** Exported for `essaysRepo.ts`'s own `createEssay` — a brand-new essay created after this phase ships needs the exact same `section_title` shape a migrated one gets, with no `EssayNode` tree to migrate at all. */
+export function sectionTitleJson(title: string): PMJson {
   const text = title.trim()
   return text ? { type: 'section_title', content: [{ type: 'text', text }] } : { type: 'section_title' }
 }

@@ -6,7 +6,7 @@
  * migration of an account whose remote data predates that policy.
  */
 import { beforeEach, describe, expect, it } from 'vitest'
-import { newDeviceSignedIn, type Device } from '../../test/deviceHarness'
+import { createEssayWithRootNode, newDeviceSignedIn, type Device } from '../../test/deviceHarness'
 import { __getFakeCloud, __resetFakeCloud } from '../../test/fakeFirestore'
 import { CURRENT_REMOTE_SCHEMA_VERSION } from '../collections'
 import { decryptJson, encryptJson, generateKeyBundle, type EncryptedField } from '../../lib/crypto'
@@ -35,10 +35,9 @@ function rawRemoteDoc(uid: string, collectionName: string, id: string): Record<s
 describe('every user-editable field is encrypted on a fresh push', () => {
   it('never leaves an essay title, a node title, or a source bibtex/comment/filename in plaintext', async () => {
     const { a } = await pairedDevices()
-    const essay = await a.createEssay('A Secret Working Title')
-    const root = await a.getNode(essay.rootNodeId)
-    root!.title = 'Also Secret'
-    await a.saveNode(root!)
+    const { essay, root } = await createEssayWithRootNode(a, 'A Secret Working Title')
+    root.title = 'Also Secret'
+    await a.saveNode(root)
     const source = await a.createSource({ type: 'article', key: 'x2020', fields: { title: 'Secret Paper Title', author: 'Secret Author' } }, { comment: 'a private note' })
     await a.sync()
 

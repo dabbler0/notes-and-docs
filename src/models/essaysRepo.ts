@@ -2,6 +2,7 @@ import { backend } from '../storage'
 import { id } from '../lib/id'
 import { getChildIds, insertMarkerInContent, removeMarkerFromContent, type MarkerPlacement } from '../lib/childMarkers'
 import { citationHtml, citationLabelOpen, extractLegacyCitationNote } from '../lib/bibtex'
+import { sectionTitleJson } from '../lib/pmMigration'
 import { listSources } from './sourcesRepo'
 import type { Comment, Essay, EssayNode, Footnote, Source } from './types'
 
@@ -244,26 +245,23 @@ export async function unarchiveEssay(essay: Essay): Promise<void> {
   await saveEssay(essay)
 }
 
+/**
+ * A brand-new essay is created directly in the new ProseMirror-document
+ * shape (`Essay.doc`/`Essay.comments`) — no `EssayNode` tree at all, since
+ * the live UI reads/writes `doc` exclusively now (see `pmMigration.ts`'s
+ * own doc comment on why the one-time conversion for *existing* essays
+ * runs as its own migration rather than here). `rootNodeId` stays a real,
+ * meaningful field even though nothing dereferences it as a node id
+ * anymore — it's set to the same id as the document's own single root
+ * `section`, purely as a stable label (matches `NodeTree`'s own `rootId`
+ * concept), so the field never has to go optional just for this.
+ */
 export async function createEssay(title: string): Promise<Essay> {
   const now = Date.now()
-  const root: EssayNode = {
-    id: id(),
-    essayId: '', // filled below
-    title: title || 'Untitled essay',
-    // Deprecated (see NodeVersion's own doc comment) — nothing writes a new
-    // one anymore; history now lives in the essayHistory collection (see
-    // essayHistoryRepo.ts), populated the first time this essay is
-    // committed, not seeded eagerly at creation the way a version used to
-    // be.
-    versions: [],
-    headVersionId: '',
-    draftContent: '',
-    createdAt: now,
-    updatedAt: now,
-  }
-  const essay: Essay = { id: id(), title: title || 'Untitled essay', rootNodeId: root.id, createdAt: now, updatedAt: now }
-  root.essayId = essay.id
-  await backend.docs.put(NODES, root)
+  const essayTitle = title || 'Untitled essay'
+  const rootId = id()
+  const doc = { type: 'doc', content: [{ type: 'section', attrs: { id: rootId }, content: [sectionTitleJson(essayTitle), { type: 'paragraph' }] }] }
+  const essay: Essay = { id: id(), title: essayTitle, rootNodeId: rootId, doc, comments: [], createdAt: now, updatedAt: now }
   await backend.docs.put(ESSAYS, essay)
   return essay
 }

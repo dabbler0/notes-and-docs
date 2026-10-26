@@ -211,3 +211,32 @@ export async function newDeviceSignedIn(email: string, config?: typeof DEFAULT_C
   await device.signIn(email)
   return device
 }
+
+/**
+ * `device.createEssay` now creates a modern, `doc`-based essay directly —
+ * no `EssayNode` tree at all (see `essaysRepo.ts`'s own `createEssay` doc
+ * comment). A real `EssayNode` record only ever exists today for an
+ * already-migrated essay (old data `migratePMDocuments` left untouched) or
+ * a not-yet-migrated one — both still real, still-synced/still-encrypted
+ * shapes this app has to keep handling correctly. Tests that specifically
+ * exercise node-level sync/encryption/clone/citation-sync behavior (as
+ * opposed to anything about the new PM-doc model) use this instead of
+ * `device.createEssay` to get that same old shape back: an essay plus one
+ * real root `EssayNode`, exactly what `createEssay` itself used to build.
+ */
+export async function createEssayWithRootNode(device: Device, title: string): Promise<{ essay: Essay; root: EssayNode }> {
+  const essay = await device.createEssay(title)
+  const now = Date.now()
+  const root: EssayNode = {
+    id: essay.rootNodeId,
+    essayId: essay.id,
+    title: title || 'Untitled essay',
+    versions: [],
+    headVersionId: '',
+    draftContent: '',
+    createdAt: now,
+    updatedAt: now,
+  }
+  await device.saveNode(root)
+  return { essay, root }
+}

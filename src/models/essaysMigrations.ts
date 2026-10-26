@@ -65,11 +65,13 @@ import type { DocStore } from '../storage/types'
 import { getChildIds } from '../lib/childMarkers'
 import { diffSnapshots, snapshotText } from '../lib/essayHistory'
 import { id } from '../lib/id'
-import type { Essay, EssayCommitEntry, EssayNode, LegacyEssaySnapshot } from './types'
+import { migrateEssay, migrateEssayHistory } from '../lib/pmMigration'
+import type { Essay, EssayCommitEntry, EssayNode, LegacyEssaySnapshot, Source } from './types'
 
 const ESSAYS = 'essays'
 const NODES = 'nodes'
 const ESSAY_HISTORY = 'essayHistory'
+const SOURCES = 'sources'
 
 /** Builds one `LegacyEssaySnapshot` by walking `essay`'s tree from `rootNodeId`, taking each node's `draftContent` from `contentFor(node)` (the running map mid-migration, or the node's own live `draftContent` for the final catch-up commit) and everything else from the node's current live values. Guards against a malformed/cyclic marker graph the same defensive way any tree walk over user-editable HTML in this codebase does. */
 function walkSnapshot(essay: Essay, nodeMap: Map<string, EssayNode>, contentFor: (node: EssayNode) => string): LegacyEssaySnapshot {
@@ -147,4 +149,61 @@ export const migrateVersionsToEssayHistory: Migration = {
   },
 }
 
-export const essaysMigrations: Migration[] = [migrateVersionsToEssayHistory]
+/**
+ * The real, one-time conversion from the old `EssayNode` tree
+ * (`draftContent`/`rootNodeId`) to the new single-ProseMirror-document
+ * model (`Essay.doc`/`Essay.comments`) — see `lib/pmMigration.ts`'s own
+ * doc comment for why this was deliberately left unregistered until now:
+ * it has to land in the same change as the UI that actually reads
+ * `Essay.doc`, never before it (which would just produce a doc the
+ * still-unswapped old UI immediately made stale again).
+ *
+ * For each essay without `doc` set yet: `migrateEssay` converts its live
+ * content, `migrateEssayHistory` converts its *entire* existing commit
+ * chain (not just the live content — see that function's own doc comment
+ * on why reverting into pre-migration history still needs to land on
+ * something the new doc-based UI can read) in the same pass, so an essay
+ * is never left with a live doc in the new format but a commit history
+ * still in the old one. Both are written together. Old `EssayNode`/
+ * `rootNodeId` data is left in place, untouched, never deleted — same
+ * non-destructive convention `migrateVersionsToEssayHistory` above (and
+ * every other migration in this codebase) already follows; nothing reads
+ * it once this ships, but nothing needs to for it to stay safely
+ * recoverable.
+ */
+async function migratePMDocumentsRun(ctx: DocStore): Promise<void> {
+  const essays = await ctx.list<Essay>(ESSAYS)
+  const allNodes = await ctx.list<EssayNode>(NODES)
+  const sourcesList = await ctx.list<Source>(SOURCES)
+  const sources = new Map(sourcesList.map((s) => [s.id, s]))
+
+  const nodesByEssay = new Map<string, EssayNode[]>()
+  for (const n of allNodes) {
+    if (n.deleted) continue
+    if (!nodesByEssay.has(n.essayId)) nodesByEssay.set(n.essayId, [])
+    nodesByEssay.get(n.essayId)!.push(n)
+  }
+
+  for (const essay of essays) {
+    if (essay.deleted || essay.doc) continue
+    const nodes = nodesByEssay.get(essay.id) ?? []
+    const migrated = migrateEssay(essay, nodes, sources)
+    essay.doc = migrated.doc
+    essay.comments = migrated.comments
+    await ctx.put(ESSAYS, essay)
+
+    const oldCommits = (await ctx.list<EssayCommitEntry>(ESSAY_HISTORY)).filter((c) => c.essayId === essay.id)
+    if (oldCommits.length > 0) {
+      const { commits } = migrateEssayHistory(essay.title, oldCommits, sources)
+      for (const commit of commits) await ctx.put(ESSAY_HISTORY, commit)
+    }
+  }
+}
+
+export const migratePMDocuments: Migration = {
+  version: 6,
+  description: 'essays: convert the old per-node tree into a single ProseMirror document (Essay.doc/comments)',
+  run: migratePMDocumentsRun,
+}
+
+export const essaysMigrations: Migration[] = [migrateVersionsToEssayHistory, migratePMDocuments]

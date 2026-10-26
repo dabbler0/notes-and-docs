@@ -61,6 +61,23 @@ function oldFormatManifest(): Omit<BackupManifest, 'quotes' | 'graveyard'> {
   return { version: 1, exportedAt: now, essays: [essay], nodes: [node], sources: [source], blobs: [] }
 }
 
+/**
+ * `createEssay` now creates a modern, `doc`-based essay with no `EssayNode`
+ * tree at all (see its own doc comment in `essaysRepo.ts`). The one test
+ * below exercising `commitEssay` still only knows how to walk that old
+ * tree (its `doc`-based counterpart is deferred — see
+ * `essayHistoryRepo.ts`'s own doc comment), so this builds that same old
+ * shape directly: an essay plus one real root `EssayNode`, exactly what
+ * `createEssay` itself used to produce.
+ */
+async function createEssayWithRootNode(title: string): Promise<{ essay: Essay; root: EssayNode }> {
+  const essay = await createEssay(title)
+  const now = Date.now()
+  const root: EssayNode = { id: essay.rootNodeId, essayId: essay.id, title: title || 'Untitled essay', versions: [], headVersionId: '', draftContent: '', createdAt: now, updatedAt: now }
+  await saveNode(root)
+  return { essay, root }
+}
+
 /** Builds a real .zip Blob with the given manifest object as its data.json — bypassing exportBackup() entirely, since the whole point is to construct a manifest shape exportBackup itself would never produce anymore. */
 async function zipWithManifest(manifest: object): Promise<Blob> {
   const zip = new JSZip()
@@ -171,9 +188,8 @@ describe("exportBackup includes a source's own extracted-text content (the sourc
 
 describe("exportBackup includes an essay's own commit history (the essayHistory collection, split out the same way sourceContent is — see collections.ts's own doc comment)", () => {
   it('round-trips a two-commit essay history through export + restore', async () => {
-    const essay = await createEssay('Has a commit history')
+    const { essay, root } = await createEssayWithRootNode('Has a commit history')
     let nodeMap = await loadNodeMap(essay)
-    const root = nodeMap.get(essay.rootNodeId)!
     root.draftContent = '<p>First draft.</p>'
     await saveNode(root)
     nodeMap = await loadNodeMap(essay)

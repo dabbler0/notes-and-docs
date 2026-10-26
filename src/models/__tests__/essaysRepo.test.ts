@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it } from 'vitest'
 import { archiveEssay, cloneEssay, createChildNode, createEssay, getEssay, getNode, loadNodeMap, saveEssay, saveNode, unarchiveEssay } from '../essaysRepo'
 import { createSource, deleteSource, updateSource } from '../sourcesRepo'
 import { markerHtml } from '../../lib/childMarkers'
+import type { Essay, EssayNode } from '../types'
 
 interface FakeStorageModule {
   createFakeBackend(): unknown
@@ -14,6 +15,23 @@ beforeEach(async () => {
   const storageMod = (await import('../../storage')) as unknown as FakeStorageModule
   storageMod.__setActiveBackend(storageMod.createFakeBackend())
 })
+
+/**
+ * `createEssay` now creates a modern, `doc`-based essay with no `EssayNode`
+ * tree at all (see its own doc comment in `essaysRepo.ts`). Every test
+ * below this point is specifically exercising the old per-node machinery
+ * (`saveNode`'s bubble-up, `syncCitations`'s legacy-chip migration,
+ * `cloneEssay`'s tree copy) — all still-real, still-synced behavior for an
+ * essay that has one, so this builds that same old shape directly rather
+ * than relying on `createEssay`'s own now-removed side effect.
+ */
+async function createEssayWithRootNode(title: string): Promise<{ essay: Essay; root: EssayNode }> {
+  const essay = await createEssay(title)
+  const now = Date.now()
+  const root: EssayNode = { id: essay.rootNodeId, essayId: essay.id, title: title || 'Untitled essay', versions: [], headVersionId: '', draftContent: '', createdAt: now, updatedAt: now }
+  await saveNode(root)
+  return { essay, root }
+}
 
 describe('archiveEssay / unarchiveEssay', () => {
   it('sets and clears the archived flag, persisting across a reload', async () => {
@@ -49,11 +67,10 @@ describe('archiveEssay / unarchiveEssay', () => {
  */
 describe("saveNode bubbling up to its essay's updatedAt", () => {
   it('bumps the owning essay updatedAt when the root node is saved, with no version commit involved', async () => {
-    const essay = await createEssay('Living draft')
+    const { essay, root } = await createEssayWithRootNode('Living draft')
     const before = essay.updatedAt
     await new Promise((r) => setTimeout(r, 2))
 
-    const root = (await getNode(essay.rootNodeId))!
     root.draftContent = '<p>Some new text, just typed — no "make a new version" involved.</p>'
     await saveNode(root)
 
@@ -73,8 +90,7 @@ describe("saveNode bubbling up to its essay's updatedAt", () => {
   })
 
   it('does not throw when saving a node whose essay has since been deleted, and leaves the essay deleted', async () => {
-    const essay = await createEssay('Soon gone')
-    const root = (await getNode(essay.rootNodeId))!
+    const { essay, root } = await createEssayWithRootNode('Soon gone')
     // Simulate the essay having been tombstoned without going through
     // deleteEssay (which would also tombstone this same node) — the
     // defensive case saveNode's own "essay missing/deleted" skip exists for.
@@ -97,9 +113,8 @@ describe("saveNode bubbling up to its essay's updatedAt", () => {
  */
 describe('syncCitations: legacy citation migration (via getNode)', () => {
   it('upgrades a legacy citation chip into the current structured format, recovering the page from the old label text', async () => {
-    const essay = await createEssay('Has an old citation')
+    const { essay, root } = await createEssayWithRootNode('Has an old citation')
     const source = await createSource({ type: 'article', key: 'smith2020', fields: { author: 'Smith', year: '2020' } })
-    const root = (await getNode(essay.rootNodeId))!
     root.draftContent = `<p>As argued by <cite class="citation" data-source-id="${source.id}">(Smith, 2020, p. 5)</cite>, the sky is blue.</p>`
     await saveNode(root)
 
@@ -117,9 +132,8 @@ describe('syncCitations: legacy citation migration (via getNode)', () => {
   })
 
   it('recovers a page range, not just a single page', async () => {
-    const essay = await createEssay('Has an old citation with a range')
+    const { essay, root } = await createEssayWithRootNode('Has an old citation with a range')
     const source = await createSource({ type: 'article', key: 'smith2020', fields: { author: 'Smith', year: '2020' } })
-    const root = (await getNode(essay.rootNodeId))!
     root.draftContent = `<p><cite class="citation" data-source-id="${source.id}">(Smith, 2020, pp. 12 - 15)</cite></p>`
     await saveNode(root)
 
@@ -128,9 +142,8 @@ describe('syncCitations: legacy citation migration (via getNode)', () => {
   })
 
   it('omits the note when the old label\'s year was itself written as a range ("N-N") now fixed to a plain year, rather than misreading it as a page range', async () => {
-    const essay = await createEssay('Has an old citation whose year used to be a range')
+    const { essay, root } = await createEssayWithRootNode('Has an old citation whose year used to be a range')
     const source = await createSource({ type: 'article', key: 'smith2020', fields: { author: 'Smith', year: '2020' } })
-    const root = (await getNode(essay.rootNodeId))!
     root.draftContent = `<p><cite class="citation" data-source-id="${source.id}">(Smith, 2020-2020)</cite></p>`
     await saveNode(root)
 
@@ -144,9 +157,8 @@ describe('syncCitations: legacy citation migration (via getNode)', () => {
   })
 
   it('omits the note when the old label only ever mentioned the publication year', async () => {
-    const essay = await createEssay('Has an old citation with no real page')
+    const { essay, root } = await createEssayWithRootNode('Has an old citation with no real page')
     const source = await createSource({ type: 'article', key: 'smith2020', fields: { author: 'Smith', year: '2020' } })
-    const root = (await getNode(essay.rootNodeId))!
     root.draftContent = `<p><cite class="citation" data-source-id="${source.id}">(Smith, 2020)</cite></p>`
     await saveNode(root)
 
@@ -157,8 +169,7 @@ describe('syncCitations: legacy citation migration (via getNode)', () => {
   })
 
   it('falls back to flattening to plain text when the chip has no data-source-id at all', async () => {
-    const essay = await createEssay('Has a sourceless old citation')
-    const root = (await getNode(essay.rootNodeId))!
+    const { essay, root } = await createEssayWithRootNode('Has a sourceless old citation')
     root.draftContent = '<p>As argued by <cite class="citation">(Smith, 2020)</cite>, the sky is blue.</p>'
     await saveNode(root)
 
@@ -169,8 +180,7 @@ describe('syncCitations: legacy citation migration (via getNode)', () => {
   })
 
   it('falls back to flattening to plain text when the referenced source has since been deleted', async () => {
-    const essay = await createEssay('Has a citation to a deleted source')
-    const root = (await getNode(essay.rootNodeId))!
+    const { essay, root } = await createEssayWithRootNode('Has a citation to a deleted source')
     root.draftContent = '<p>As argued by <cite class="citation" data-source-id="never-existed">(Smith, 2020)</cite>, the sky is blue.</p>'
     await saveNode(root)
 
@@ -180,8 +190,7 @@ describe('syncCitations: legacy citation migration (via getNode)', () => {
   })
 
   it('leaves a current-format citation chip (data-cite-v) untouched when its source no longer exists to refresh from', async () => {
-    const essay = await createEssay('Has a new citation')
-    const root = (await getNode(essay.rootNodeId))!
+    const { essay, root } = await createEssayWithRootNode('Has a new citation')
     const chip = '<cite class="citation" data-source-id="s1" data-cite-v="2" data-note="p. 5">(Smith, 2020), p. 5</cite>'
     root.draftContent = `<p>${chip}</p>`
     await saveNode(root)
@@ -191,9 +200,8 @@ describe('syncCitations: legacy citation migration (via getNode)', () => {
   })
 
   it('upgrades a legacy chip in an older, pinned version, not just the live draft', async () => {
-    const essay = await createEssay('Has an old citation in an old version')
+    const { essay, root } = await createEssayWithRootNode('Has an old citation in an old version')
     const source = await createSource({ type: 'article', key: 'smith2020', fields: { author: 'Smith', year: '2020' } })
-    const root = (await getNode(essay.rootNodeId))!
     // `versions`/`headVersionId` are deprecated (see NodeVersion's own doc
     // comment) and nothing writes a new one anymore — but old stored data
     // keeps them, and syncCitations still has to refresh old pinned version
@@ -210,8 +218,7 @@ describe('syncCitations: legacy citation migration (via getNode)', () => {
   })
 
   it('leaves a node with no citation markup at all completely unchanged', async () => {
-    const essay = await createEssay('No citations here')
-    const root = (await getNode(essay.rootNodeId))!
+    const { essay, root } = await createEssayWithRootNode('No citations here')
     root.draftContent = '<p>Just ordinary prose, nothing to migrate.</p>'
     await saveNode(root)
 
@@ -229,9 +236,8 @@ describe('syncCitations: legacy citation migration (via getNode)', () => {
  */
 describe('syncCitations: refreshing an already-structured chip\'s label (via getNode)', () => {
   it('re-renders the label from the source\'s current bibtex after the source is edited, keeping the chip\'s own note untouched', async () => {
-    const essay = await createEssay('Cites a source whose year gets fixed later')
+    const { essay, root } = await createEssayWithRootNode('Cites a source whose year gets fixed later')
     const source = await createSource({ type: 'article', key: 'smith2020', fields: { author: 'Smith', year: '2020-2020' } })
-    const root = (await getNode(essay.rootNodeId))!
     root.draftContent = `<p>As argued<cite class="citation" data-source-id="${source.id}" data-cite-v="2" data-note="p. 5">(Smith, 2020-2020), p. 5</cite>.</p>`
     await saveNode(root)
 
@@ -245,9 +251,8 @@ describe('syncCitations: refreshing an already-structured chip\'s label (via get
   })
 
   it('does nothing — and leaves the markup byte-for-byte the same — when the label is already accurate', async () => {
-    const essay = await createEssay('Cites an already-accurate source')
+    const { essay, root } = await createEssayWithRootNode('Cites an already-accurate source')
     const source = await createSource({ type: 'article', key: 'smith2020', fields: { author: 'Smith', year: '2020' } })
-    const root = (await getNode(essay.rootNodeId))!
     root.draftContent = `<p>As argued <cite class="citation" data-source-id="${source.id}" data-cite-v="2">(Smith, 2020)​</cite>.</p>`
     await saveNode(root)
 
@@ -257,9 +262,8 @@ describe('syncCitations: refreshing an already-structured chip\'s label (via get
   })
 
   it('leaves an already-structured chip exactly as is when its source has since been deleted', async () => {
-    const essay = await createEssay('Cites a source that gets deleted')
+    const { essay, root } = await createEssayWithRootNode('Cites a source that gets deleted')
     const source = await createSource({ type: 'article', key: 'smith2020', fields: { author: 'Smith', year: '2020' } })
-    const root = (await getNode(essay.rootNodeId))!
     const chip = `<cite class="citation" data-source-id="${source.id}" data-cite-v="2">(Smith, 2020)​</cite>`
     root.draftContent = `<p>${chip}</p>`
     await saveNode(root)
@@ -271,9 +275,8 @@ describe('syncCitations: refreshing an already-structured chip\'s label (via get
   })
 
   it('refreshes a chip in an older, pinned version too, not just the live draft', async () => {
-    const essay = await createEssay('Has a structured citation in an old version')
+    const { root } = await createEssayWithRootNode('Has a structured citation in an old version')
     const source = await createSource({ type: 'article', key: 'smith2020', fields: { author: 'Smith', year: '2020-2020' } })
-    const root = (await getNode(essay.rootNodeId))!
     root.versions.push({ id: 'v-old', content: `<p>Old text with <cite class="citation" data-source-id="${source.id}" data-cite-v="2">(Smith, 2020-2020)​</cite>.</p>`, createdAt: Date.now() })
     root.draftContent = '<p>Completely different text now.</p>'
     await saveNode(root)
@@ -281,7 +284,7 @@ describe('syncCitations: refreshing an already-structured chip\'s label (via get
     source.bibtex.fields.year = '2020'
     await updateSource(source)
 
-    const reloaded = (await getNode(essay.rootNodeId))!
+    const reloaded = (await getNode(root.id))!
     const oldVersion = reloaded.versions.find((v) => v.content.includes('Old text'))!
     expect(oldVersion.content).toContain('class="citation-base" contenteditable="false">(Smith, 2020</span>')
     expect(oldVersion.content).toContain('<span class="citation-close" contenteditable="false">)</span>')
@@ -291,8 +294,7 @@ describe('syncCitations: refreshing an already-structured chip\'s label (via get
 
 describe('cloneEssay', () => {
   it('copies the title (prefixed), content, and tree structure under entirely fresh ids', async () => {
-    const essay = await createEssay('Original Essay')
-    const root = (await getNode(essay.rootNodeId))!
+    const { essay, root } = await createEssayWithRootNode('Original Essay')
     const child = await createChildNode(essay.id, 'A Section', '<p>Child text.</p>')
     root.draftContent = `<p>Root text.</p>${markerHtml(child.id)}`
     await saveNode(root)
@@ -314,7 +316,7 @@ describe('cloneEssay', () => {
   })
 
   it('editing the clone never touches the original, and vice versa', async () => {
-    const essay = await createEssay('Original Essay')
+    const { essay } = await createEssayWithRootNode('Original Essay')
     const clone = (await cloneEssay(essay.id))!
 
     const cloneRoot = (await getNode(clone.rootNodeId))!
