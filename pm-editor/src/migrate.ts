@@ -1,0 +1,425 @@
+/**
+ * One-way, read-only conversion from the old app's per-node HTML model
+ * (`LegacyEssay`/`LegacyEssayNode`, see `types.ts`'s own doc comment) into
+ * the new "maximal" single-ProseMirror-document model (`schema.ts`). This
+ * is the single most consequential piece of the whole migration — every
+ * essay the real app ever produced has to survive it with nothing lost
+ * that the new schema can actually represent, and an honest, visible
+ * warning for anything it can't.
+ *
+ * Structure mirrors `export.ts`'s own Markdown walk closely on purpose
+ * (same segment-by-segment, text-vs-child handling, same inline-mark
+ * recognition) — reading that file first makes this one easier to follow,
+ * since both are solving "walk this HTML and reinterpret it structurally,"
+ * just in opposite directions.
+ */
+import { getChildIds, parseSegments } from './childMarkers'
+import { extractLegacyCitationNote } from './bibtex'
+import { id } from './id'
+import type { Comment, LegacyComment, LegacyEssay, LegacyEssayNode, Source } from './types'
+
+/** Loose on purpose — this file only ever builds plain JSON objects matching `schema.ts`'s own shape, checked for real by round-tripping through `Node.fromJSON(essaySchema, ...)` in `migrate.test.ts`, not by a parallel hand-maintained TypeScript type here. */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+type PMJson = any
+
+export interface MigratedEssay {
+  title: string
+  /** A `doc` node's own JSON — `Node.fromJSON(essaySchema, doc)` in the real migration/the demo app. */
+  doc: PMJson
+  /** Every comment this essay's nodes carried, flattened into one array — see `Comment`'s own doc comment in `types.ts` for why `sectionId` exists. */
+  comments: Comment[]
+  /** Human-readable, non-fatal notes about anything degraded or dropped along the way (a missing source, a cycle, block structure a footnote can't hold, …) — never thrown; a migration always produces *something*, with every compromise it made written down instead of hidden. */
+  warnings: string[]
+}
+
+/** Walks from `essay.rootNodeId` the same way the real app's own `loadNodeMap` does — skipping a missing or `deleted` node (and everything only reachable through it) entirely, same as live use already does. */
+export function buildLegacyNodeMap(essay: LegacyEssay, nodes: LegacyEssayNode[]): Map<string, LegacyEssayNode> {
+  const byId = new Map(nodes.map((n) => [n.id, n]))
+  const map = new Map<string, LegacyEssayNode>()
+  const stack = [essay.rootNodeId]
+  while (stack.length) {
+    const nid = stack.pop()!
+    if (map.has(nid)) continue
+    const node = byId.get(nid)
+    if (!node || node.deleted) continue
+    map.set(nid, node)
+    stack.push(...getChildIds(node.draftContent))
+  }
+  return map
+}
+
+interface MigrateCtx {
+  nodeMap: Map<string, LegacyEssayNode>
+  sources: Map<string, Source>
+  warnings: string[]
+  comments: Comment[]
+  /** Nodes currently being converted, root-to-here — a real cycle (a child marker pointing back at one of its own ancestors, which should never happen from the live editor but is cheap to guard against in data this migration doesn't otherwise control) stops recursing into itself rather than hanging. */
+  seenNodeIds: Set<string>
+  /** Whichever `LegacyEssayNode` is currently being walked — footnote refs resolve against *this* node's own `footnotes` array (never any other node's, matching the real app's own per-node footnote scoping), kept here rather than threaded as a parameter through every inline-walking function. */
+  currentNode: LegacyEssayNode
+}
+
+export function migrateEssay(essay: LegacyEssay, allNodes: LegacyEssayNode[], sources: Map<string, Source>): MigratedEssay {
+  const nodeMap = buildLegacyNodeMap(essay, allNodes)
+  const warnings: string[] = []
+  const comments: Comment[] = []
+  const root = nodeMap.get(essay.rootNodeId)
+  if (!root) {
+    warnings.push(`This essay's own root section (${essay.rootNodeId}) is missing or was deleted — produced an empty document instead of losing the essay entirely.`)
+    return { title: essay.title, doc: { type: 'doc', content: [emptySection(id())] }, comments, warnings }
+  }
+  const ctx: MigrateCtx = { nodeMap, sources, warnings, comments, seenNodeIds: new Set(), currentNode: root }
+  const rootSection = convertNode(root, ctx)
+  return { title: essay.title, doc: { type: 'doc', content: [rootSection] }, comments, warnings }
+}
+
+function emptySection(sectionId: string): PMJson {
+  return { type: 'section', attrs: { id: sectionId }, content: [{ type: 'section_title' }, { type: 'paragraph' }] }
+}
+
+function sectionTitleJson(title: string): PMJson {
+  const text = title.trim()
+  return text ? { type: 'section_title', content: [{ type: 'text', text }] } : { type: 'section_title' }
+}
+
+/**
+ * One `LegacyEssayNode` -> one `section` node. Walks its own
+ * `parseSegments()` output in order — text segment, child segment, text
+ * segment, … — converting each in place (see `schema.ts`'s own doc
+ * comment on why `section`'s content expression allows exactly this
+ * interleaving, not just "all text then all children"). A node with no
+ * real content at all still gets one empty paragraph appended (`section`
+ * requires `block+` after its title — never zero blocks).
+ */
+function convertNode(node: LegacyEssayNode, ctx: MigrateCtx): PMJson {
+  if (ctx.seenNodeIds.has(node.id)) {
+    ctx.warnings.push(`A cycle was found at "${node.title || 'Untitled section'}" (${node.id}) — a subsection pointed back at one of its own ancestors. Stopped recursing there rather than looping forever.`)
+    return emptySection(node.id)
+  }
+  ctx.seenNodeIds.add(node.id)
+  ctx.currentNode = node
+  for (const c of node.comments ?? []) ctx.comments.push(migrateComment(c, node.id))
+
+  const content: PMJson[] = [sectionTitleJson(node.title)]
+  for (const seg of parseSegments(node.draftContent)) {
+    if (seg.kind === 'text') {
+      content.push(...htmlToBlocks(seg.html, ctx))
+    } else {
+      const child = ctx.nodeMap.get(seg.childId)
+      if (child) {
+        content.push(convertNode(child, ctx))
+        ctx.currentNode = node // restore — the recursive call above just overwrote this for its own footnote lookups
+      } else {
+        ctx.warnings.push(`"${node.title || 'Untitled section'}" references a subsection (${seg.childId}) that's missing or was deleted — skipped.`)
+      }
+    }
+  }
+  if (content.length === 1) content.push({ type: 'paragraph' })
+  return { type: 'section', attrs: { id: node.id }, content }
+}
+
+/**
+ * A comment's own metadata, copied over field-for-field — `body` stays
+ * exactly as it was, a plain rich-HTML string, never converted into PM
+ * content: a comment's body was never part of the document tree even in
+ * the old model (it's edited through its own small, separate
+ * contentEditable surface, same as a footnote's body used to be *before*
+ * `schema.ts` promoted footnotes into real document content) and there's
+ * no reason the migration needs to change that now. `sectionId` is the one
+ * genuinely new field — see `Comment`'s own doc comment in `types.ts`.
+ */
+function migrateComment(c: LegacyComment, sectionId: string): Comment {
+  return {
+    id: c.id,
+    parentId: c.parentId,
+    sectionId: c.parentId === null ? sectionId : null,
+    anchorKind: c.anchorKind,
+    anchorText: c.anchorText,
+    body: c.body,
+    displayMode: c.displayMode,
+    resolved: c.resolved,
+    createdAt: c.createdAt,
+    updatedAt: c.updatedAt,
+  }
+}
+
+/** Splits one text segment's HTML into PM block nodes — the structural mirror of `export.ts`'s own `htmlToMarkdownBlocks`. */
+function htmlToBlocks(html: string, ctx: MigrateCtx): PMJson[] {
+  const doc = new DOMParser().parseFromString(html || '', 'text/html')
+  const blocks: PMJson[] = []
+  let current: PMJson[] = []
+  const flush = () => {
+    if (current.length > 0) {
+      blocks.push({ type: 'paragraph', content: current })
+      current = []
+    }
+  }
+  for (const node of Array.from(doc.body.childNodes)) {
+    if (node.nodeType === Node.TEXT_NODE) {
+      walkInline(node, [], ctx, current)
+      continue
+    }
+    if (node.nodeType !== Node.ELEMENT_NODE) continue
+    const el = node as HTMLElement
+    const tag = el.tagName.toLowerCase()
+    if (tag === 'blockquote') {
+      flush()
+      blocks.push(blockquoteToPM(el, ctx))
+      continue
+    }
+    if (tag === 'span' && el.classList.contains('math-block')) {
+      flush()
+      blocks.push({ type: 'math_block', attrs: { latex: el.getAttribute('data-latex') ?? '' } })
+      continue
+    }
+    if (tag === 'ul' || tag === 'ol') {
+      flush()
+      blocks.push(listToPM(el, ctx))
+      continue
+    }
+    if (tag === 'div' || tag === 'p') {
+      flush()
+      const inline: PMJson[] = []
+      for (const child of Array.from(el.childNodes)) walkInline(child, [], ctx, inline)
+      blocks.push({ type: 'paragraph', content: inline.length ? inline : undefined })
+      continue
+    }
+    walkInline(el, [], ctx, current)
+  }
+  flush()
+  return blocks
+}
+
+/**
+ * A blockquote's own content — real, separate `paragraph`s when the old
+ * HTML actually had `<p>` children (an improvement in fidelity over the
+ * old app's own Markdown export, which flattened a multi-paragraph
+ * blockquote's text together with no separator at all — nothing stops the
+ * new schema's `blockquote: { content: "paragraph+" }` from keeping them
+ * genuinely separate, so this does), or one paragraph of plain inline
+ * content for the much more common single-paragraph case.
+ */
+function blockquoteToPM(el: HTMLElement, ctx: MigrateCtx): PMJson {
+  const paraEls = Array.from(el.children).filter((c) => c.tagName.toLowerCase() === 'p')
+  if (paraEls.length > 0) {
+    const paragraphs = paraEls.map((p) => {
+      const inline: PMJson[] = []
+      for (const child of Array.from(p.childNodes)) walkInline(child, [], ctx, inline)
+      return { type: 'paragraph', content: inline.length ? inline : undefined }
+    })
+    return { type: 'blockquote', content: paragraphs }
+  }
+  const inline: PMJson[] = []
+  for (const child of Array.from(el.childNodes)) walkInline(child, [], ctx, inline)
+  return { type: 'blockquote', content: [{ type: 'paragraph', content: inline.length ? inline : undefined }] }
+}
+
+/** `<ul>`/`<ol>` -> `bullet_list`/`ordered_list` — same nested-list handling as `export.ts`'s own `listToMarkdown`: a `list_item`'s own text becomes its leading paragraph, any nested `<ul>`/`<ol>` becomes a further block right after it. */
+function listToPM(listEl: HTMLElement, ctx: MigrateCtx): PMJson {
+  const ordered = listEl.tagName.toLowerCase() === 'ol'
+  const items: PMJson[] = []
+  for (const li of Array.from(listEl.children)) {
+    if (li.tagName.toLowerCase() !== 'li') continue
+    const nested: Element[] = []
+    const inline: PMJson[] = []
+    for (const child of Array.from(li.childNodes)) {
+      const childTag = child.nodeType === Node.ELEMENT_NODE ? (child as HTMLElement).tagName.toLowerCase() : ''
+      if (childTag === 'ul' || childTag === 'ol') nested.push(child as Element)
+      else walkInline(child, [], ctx, inline)
+    }
+    const content: PMJson[] = [{ type: 'paragraph', content: inline.length ? inline : undefined }]
+    for (const n of nested) content.push(listToPM(n as HTMLElement, ctx))
+    items.push({ type: 'list_item', content })
+  }
+  return { type: ordered ? 'ordered_list' : 'bullet_list', content: items }
+}
+
+function addMark(marks: PMJson[], mark: PMJson): PMJson[] {
+  return [...marks, mark]
+}
+
+/**
+ * Walks one DOM node (and everything inside it) into PM inline JSON,
+ * appending to `out` — the structural mirror of `export.ts`'s own
+ * `inlineHtmlToMarkdown`, just building typed nodes/marks instead of
+ * Markdown syntax. `marks` is whichever marks are already active from an
+ * ancestor (`<strong>`, a comment anchor, …); a new mark-producing element
+ * adds to that list for its own children, never replaces it, so nested
+ * marks (bold *and* italic, a citation inside a comment highlight) combine
+ * correctly.
+ */
+function walkInline(node: Node, marks: PMJson[], ctx: MigrateCtx, out: PMJson[]): void {
+  if (node.nodeType === Node.TEXT_NODE) {
+    const text = node.textContent ?? ''
+    if (text) out.push(marks.length ? { type: 'text', text, marks } : { type: 'text', text })
+    return
+  }
+  if (node.nodeType !== Node.ELEMENT_NODE) return
+  const el = node as HTMLElement
+  const tag = el.tagName.toLowerCase()
+
+  if (el.classList.contains('citation')) {
+    const converted = convertCitation(el, marks, ctx)
+    if (converted) out.push(converted)
+    return
+  }
+  if (tag === 'sup' && el.classList.contains('footnote-ref')) {
+    const converted = convertFootnoteRef(el, marks, ctx)
+    if (converted) out.push(converted)
+    return
+  }
+  if (tag === 'span' && el.classList.contains('math-inline')) {
+    out.push(withMarks({ type: 'math_inline', attrs: { latex: el.getAttribute('data-latex') ?? '' } }, marks))
+    return
+  }
+  if (tag === 'br') {
+    out.push({ type: 'hard_break' })
+    return
+  }
+  // Always empty in stored HTML (its rendered content is a live, portal-mounted component, not real document data — see the real app's own `inlineCommentMarkerHtml` doc comment) — nothing to convert; the comment it's a placeholder for is already migrated via `migrateComment` regardless of whether this marker is present.
+  if (tag === 'span' && el.classList.contains('inline-comment-marker')) return
+
+  let childMarks = marks
+  if (tag === 'b' || tag === 'strong') childMarks = addMark(childMarks, { type: 'strong' })
+  else if (tag === 'i' || tag === 'em') childMarks = addMark(childMarks, { type: 'em' })
+  else if (tag === 'u') childMarks = addMark(childMarks, { type: 'underline' })
+  else if (tag === 'a') {
+    const sourceId = el.getAttribute('data-source-id')
+    const href = el.getAttribute('href')
+    if (sourceId) childMarks = addMark(childMarks, { type: 'source_link', attrs: { sourceId } })
+    else if (href) childMarks = addMark(childMarks, { type: 'link', attrs: { href } })
+  } else if (tag === 'mark' && el.classList.contains('comment-anchor')) {
+    const commentId = el.getAttribute('data-comment-id')
+    if (commentId) {
+      const withAnchor = addMark(childMarks, { type: 'comment_anchor', attrs: { commentId } })
+      if (!el.textContent) {
+        // An empty anchor (nothing selected when the comment was made) —
+        // a mark can't exist on zero content, so a single zero-width
+        // space stands in as the real, minimal "anchor point" character
+        // to carry it, the same trick a caret-landing placeholder
+        // elsewhere in the old app already used for the same reason.
+        out.push({ type: 'text', text: '​', marks: withAnchor })
+        return
+      }
+      childMarks = withAnchor
+    }
+  } else if (tag === 'span' && el.classList.contains('quote-inline')) {
+    const sourceId = el.getAttribute('data-source-id')
+    const page = el.getAttribute('data-page')
+    if (sourceId) childMarks = addMark(childMarks, { type: 'quote_inline', attrs: { sourceId, page: page ? Number(page) : null } })
+  }
+  for (const child of Array.from(el.childNodes)) walkInline(child, childMarks, ctx, out)
+}
+
+function withMarks(node: PMJson, marks: PMJson[]): PMJson {
+  return marks.length ? { ...node, marks } : node
+}
+
+/**
+ * A citation chip -> a `citation` atom — `sourceId`/`note` only (see
+ * `schema.ts`'s own doc comment: no cached label ever stored). A legacy
+ * chip (no `data-cite-v` — see the real app's own `syncCitations` doc
+ * comment) has its page/note recovered from its own old label text via
+ * `extractLegacyCitationNote`, same as a live-edited node already gets
+ * the first time it's opened; one with no real source to rebuild from at
+ * all (deleted since, or never structured in the first place) degrades
+ * to its own plain visible text, the same fallback the real app's export
+ * pipeline already uses for exactly this case.
+ */
+function convertCitation(el: HTMLElement, marks: PMJson[], ctx: MigrateCtx): PMJson | null {
+  const sourceId = el.getAttribute('data-source-id')
+  const source = sourceId ? ctx.sources.get(sourceId) : undefined
+  if (!source) {
+    if (sourceId) ctx.warnings.push(`A citation to a missing source (${sourceId}) in "${ctx.currentNode.title || 'Untitled section'}" was flattened to plain text.`)
+    const text = el.textContent || '[citation]'
+    return withMarks({ type: 'text', text }, marks)
+  }
+  const hasCiteV = el.hasAttribute('data-cite-v')
+  const note = hasCiteV ? el.getAttribute('data-note') : extractLegacyCitationNote(el.textContent ?? '', source.bibtex.fields.year) || null
+  return withMarks({ type: 'citation', attrs: { sourceId, note: note || null } }, marks)
+}
+
+/**
+ * A footnote-ref marker -> a real `footnote` node, its own body converted
+ * and embedded directly as that node's content — see `schema.ts`'s own
+ * doc comment on why a footnote's content is real document content now,
+ * not a side record. `footnoteBodyToInline` below handles the one real
+ * fidelity gap this creates: a footnote's own content can only be
+ * *inline* in the new model (never block-level — the same `inline: true`
+ * constraint `nodeViews.ts`'s own `FootnoteView` doc comment explains),
+ * where the old model's footnote body was ordinary, unconstrained
+ * editable HTML.
+ */
+function convertFootnoteRef(el: HTMLElement, marks: PMJson[], ctx: MigrateCtx): PMJson | null {
+  const footnoteId = el.getAttribute('data-footnote-id')
+  const footnote = (ctx.currentNode.footnotes ?? []).find((f) => f.id === footnoteId)
+  if (!footnote) {
+    ctx.warnings.push(`A footnote reference in "${ctx.currentNode.title || 'Untitled section'}" has no matching footnote body — dropped.`)
+    return null
+  }
+  const content = footnoteBodyToInline(footnote.content, ctx)
+  return withMarks({ type: 'footnote', content: content.length ? content : undefined }, marks)
+}
+
+/**
+ * Flattens a footnote body's own HTML into pure inline content — real
+ * paragraph breaks become a `hard_break` (no visual loss for the common
+ * case, a footnote that's just one or two sentences, possibly split
+ * across a couple of short paragraphs); a list or blockquote inside a
+ * footnote degrades to its own plain text, one item/line per
+ * `hard_break`-separated run, with a prefix (`"1. "`/`"• "`) standing in
+ * for real list markup; a display-math block becomes inline math (`$...$`
+ * instead of its own standalone line). Rare in practice (a footnote
+ * holding a whole blockquote or list is unusual), but every one of these
+ * degradations gets a warning rather than happening silently.
+ */
+function footnoteBodyToInline(html: string, ctx: MigrateCtx): PMJson[] {
+  const doc = new DOMParser().parseFromString(html || '', 'text/html')
+  const out: PMJson[] = []
+  let sawComplexStructure = false
+  const appendBreakIfNeeded = () => {
+    if (out.length > 0) out.push({ type: 'hard_break' })
+  }
+  for (const node of Array.from(doc.body.childNodes)) {
+    if (node.nodeType === Node.TEXT_NODE) {
+      walkInline(node, [], ctx, out)
+      continue
+    }
+    if (node.nodeType !== Node.ELEMENT_NODE) continue
+    const el = node as HTMLElement
+    const tag = el.tagName.toLowerCase()
+    if (tag === 'p' || tag === 'div') {
+      appendBreakIfNeeded()
+      for (const child of Array.from(el.childNodes)) walkInline(child, [], ctx, out)
+      continue
+    }
+    if (tag === 'blockquote') {
+      sawComplexStructure = true
+      appendBreakIfNeeded()
+      for (const child of Array.from(el.childNodes)) walkInline(child, [], ctx, out)
+      continue
+    }
+    if (tag === 'ul' || tag === 'ol') {
+      sawComplexStructure = true
+      let n = 1
+      for (const li of Array.from(el.children)) {
+        if (li.tagName.toLowerCase() !== 'li') continue
+        appendBreakIfNeeded()
+        out.push({ type: 'text', text: tag === 'ol' ? `${n++}. ` : '• ' })
+        for (const child of Array.from(li.childNodes)) walkInline(child, [], ctx, out)
+      }
+      continue
+    }
+    if (tag === 'span' && el.classList.contains('math-block')) {
+      sawComplexStructure = true
+      appendBreakIfNeeded()
+      out.push({ type: 'math_inline', attrs: { latex: el.getAttribute('data-latex') ?? '' } })
+      continue
+    }
+    walkInline(el, [], ctx, out)
+  }
+  if (sawComplexStructure) {
+    ctx.warnings.push(`A footnote in "${ctx.currentNode.title || 'Untitled section'}" had block-level structure (a list, blockquote, or display equation) that a footnote can't hold in the new model — flattened to plain inline text.`)
+  }
+  return out
+}

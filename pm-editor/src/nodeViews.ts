@@ -1,10 +1,10 @@
 import type { Node as PMNode } from 'prosemirror-model'
 import type { EditorView, NodeView } from 'prosemirror-view'
 import { citationLabel } from './bibtex'
-import { fakeSources } from './sources'
+import { activeSources } from './activeSources'
 
 /**
- * Renders a `citation` atom fresh from `fakeSources` on every call, via
+ * Renders a `citation` atom fresh from `activeSources` on every call, via
  * the real `citationLabel` formatter (`bibtex.ts`, copied in unmodified)
  * — the actual thing this prototype exists to demonstrate (see
  * `schema.ts`'s own doc comment: no cached label, live editing included).
@@ -31,7 +31,7 @@ export class CitationView implements NodeView {
   }
 
   private render(node: PMNode) {
-    const source = fakeSources[node.attrs.sourceId]
+    const source = activeSources.get(node.attrs.sourceId)
     this.dom.textContent = source ? citationLabel(source.bibtex, node.attrs.note ?? undefined) : `(unknown source: ${node.attrs.sourceId})`
     this.dom.title = 'Click to edit page/note — re-renders live from the source record, never a stale cached label'
   }

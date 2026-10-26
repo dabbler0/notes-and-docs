@@ -61,15 +61,27 @@ const nodes: Record<string, NodeSpec> = {
    * section carries a stable `id` (generated once, kept across edits —
    * `sectionId()`/history/comments/footnotes all need a durable handle
    * that survives a section being moved or its title rephrased, same
-   * reason `EssayNode.id` was durable before). `section_title+body+
-   * children*` mirrors exactly what `childMarkers.ts`'s own doc comment
-   * described as "a subsection is a literal child element sitting wherever
-   * the text it was carved out of used to be" — except the "literal child
-   * element" is now a real schema-enforced node instead of markup that
-   * merely *looks* like one.
+   * reason `EssayNode.id` was durable before).
+   *
+   * `content: "section_title block+"` — not `"section_title block+
+   * section*"` — is deliberate, not a simplification: `section` itself
+   * already declares `group: "block"` below, so a plain `block+` content
+   * expression *already* allows any number of nested `section`s, freely
+   * interleaved with ordinary paragraphs/lists/etc. in any order, with no
+   * second `section*` clause needed. This matters for fidelity, not just
+   * economy of expression: the old app's own `childMarkers.ts` let a
+   * node's content be an arbitrary (text, child, text, child, …, text)
+   * sequence — prose *before* a subsection, a transition paragraph
+   * *between* two subsections, closing remarks *after* the last one, all
+   * genuinely supported — and an earlier, stricter version of this schema
+   * (blocks-only, then sections-only) couldn't represent any of that
+   * without reordering or merging real user content during migration.
+   * `migrate.ts` relies on this directly, converting each of a node's own
+   * `parseSegments()` segments (text or child) into this section's content
+   * in the exact order they already appear.
    */
   section: {
-    content: 'section_title block+ section*',
+    content: 'section_title block+',
     group: 'block',
     defining: true,
     attrs: { id: { default: null } },
@@ -145,6 +157,17 @@ const nodes: Record<string, NodeSpec> = {
   },
 
   text: { group: 'inline' },
+
+  /** A literal line break mid-paragraph — the standard ProseMirror node for what the old app's own `<br>` meant in both its inline (`inlineHtmlToMarkdown`'s own `  \n`) and same-segment block-separator (`htmlToMarkdownBlocks`'s own bare `\n`) uses; added specifically for `migrate.ts` to have something to convert either one into, since neither reading represents a real ProseMirror node-level break. */
+  hard_break: {
+    inline: true,
+    group: 'inline',
+    selectable: false,
+    parseDOM: [{ tag: 'br' }],
+    toDOM() {
+      return ['br']
+    },
+  },
 
   /**
    * A footnote's own body as real document content — see this file's own

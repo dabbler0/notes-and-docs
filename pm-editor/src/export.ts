@@ -139,6 +139,8 @@ function inlineLeafToMarkdown(node: PMNode, fnCtx: MarkdownFootnoteCtx): string 
       return footnoteMarkdown(node, fnCtx)
     case 'math_inline':
       return `$${node.attrs.latex}$`
+    case 'hard_break':
+      return '  \n'
     default:
       return ''
   }
@@ -882,6 +884,8 @@ function inlineLeafToLatex(node: PMNode, ctx: LatexCtx): string {
       return footnoteLatex(node, ctx)
     case 'math_inline':
       return `$${node.attrs.latex}$`
+    case 'hard_break':
+      return '\\\\\n'
     default:
       return ''
   }

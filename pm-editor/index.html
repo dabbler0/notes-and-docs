@@ -7,7 +7,30 @@
     <style>
       :root { color-scheme: light; }
       body { margin: 0; font-family: Georgia, 'Times New Roman', serif; background: #f6f5f2; color: #1a1a1a; }
-      .app-shell { max-width: 820px; margin: 0 auto; padding: 24px 24px 120px; }
+      .app-shell { max-width: 820px; margin: 0 auto; padding: 24px 24px 120px; transition: max-width 0.15s; }
+      .app-shell.with-sidebar { max-width: 1120px; }
+      .landing { background: #fff; border: 1px solid #ddd; border-radius: 8px; padding: 20px; font-family: -apple-system, system-ui, sans-serif; font-size: 13px; }
+      .landing input[type='file'] { margin-top: 8px; }
+      .landing .error { color: #b3272e; margin-top: 10px; }
+      .landing button.secondary { font-family: inherit; font-size: 13px; padding: 6px 12px; border: 1px solid #ccc; border-radius: 6px; background: #fafafa; cursor: pointer; }
+      .landing button.secondary:hover { background: #eee; }
+      .workspace { display: flex; gap: 16px; align-items: flex-start; }
+      .essay-sidebar { width: 260px; flex: 0 0 260px; background: #fff; border: 1px solid #ddd; border-radius: 8px; padding: 12px; font-family: -apple-system, system-ui, sans-serif; font-size: 13px; max-height: calc(100vh - 32px); overflow: auto; position: sticky; top: 16px; }
+      .essay-sidebar h3 { margin: 0 0 8px; font-size: 13px; }
+      .essay-sidebar .essay-item { padding: 6px 8px; border-radius: 6px; cursor: pointer; margin-bottom: 2px; display: flex; justify-content: space-between; gap: 6px; }
+      .essay-sidebar .essay-item:hover { background: #f1f0ec; }
+      .essay-sidebar .essay-item.active { background: #eef3ff; }
+      .essay-sidebar .warn-badge { color: #b3552e; font-size: 11px; white-space: nowrap; }
+      .essay-sidebar button.secondary { font-family: inherit; font-size: 12px; padding: 5px 8px; border: 1px solid #ccc; border-radius: 6px; background: #fafafa; cursor: pointer; width: 100%; }
+      .essay-sidebar button.secondary:hover { background: #eee; }
+      .main-col { flex: 1; min-width: 0; }
+      .meta-panel { margin-top: 16px; background: #fff; border: 1px solid #ddd; border-radius: 8px; padding: 12px 16px; font-family: -apple-system, system-ui, sans-serif; font-size: 13px; }
+      .meta-panel h3 { margin: 14px 0 8px; font-size: 13px; }
+      .meta-panel h3:first-child { margin-top: 0; }
+      .meta-panel ul { margin: 0; padding-left: 18px; }
+      .meta-panel li.warning { color: #9a5a00; margin-bottom: 4px; }
+      .meta-panel .comment { border-top: 1px solid #eee; padding: 8px 0; }
+      .meta-panel .comment:first-of-type { border-top: none; }
       h1.page-title { font-family: -apple-system, system-ui, sans-serif; font-size: 20px; margin: 0 0 4px; }
       p.page-subtitle { font-family: -apple-system, system-ui, sans-serif; font-size: 13px; color: #666; margin: 0 0 20px; }
       .toolbar { position: sticky; top: 0; z-index: 10; display: flex; flex-wrap: wrap; gap: 6px; background: #fff; border: 1px solid #ddd; border-radius: 8px; padding: 8px; margin-bottom: 16px; font-family: -apple-system, system-ui, sans-serif; }

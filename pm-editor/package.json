@@ -9,6 +9,8 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@types/jszip": "^3.4.0",
+    "jszip": "^3.10.2",
     "prosemirror-commands": "^1.6.2",
     "prosemirror-history": "^1.4.1",
     "prosemirror-keymap": "^1.2.2",

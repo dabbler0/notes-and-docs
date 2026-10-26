@@ -68,13 +68,52 @@ in place:
   replacement just produced. Worth porting back to the real app's own
   `lib/export.ts` separately.
 
+## Migration script (`src/migrate.ts`)
+
+The one-way, read-only conversion from the old app's per-node HTML model
+(`LegacyEssay`/`LegacyEssayNode`, see `src/types.ts`) into the new
+single-document model. `migrateEssay(essay, allNodes, sources)` walks the
+node tree from `essay.rootNodeId` (via `buildLegacyNodeMap`, which mirrors
+the real app's own `loadNodeMap`: a missing or `deleted` node, and anything
+only reachable through it, is skipped exactly like live use already does)
+and returns `{ title, doc, comments, warnings }` — a schema-valid PM `doc`
+JSON, the essay's comments flattened into one array (see `Comment`'s own
+doc comment in `types.ts` for why `sectionId` exists), and a list of
+human-readable warnings for anything degraded or dropped (a missing
+source, a cycle, footnote content that can't hold block structure, …).
+**Never throws** — a migration always produces *something*, with every
+compromise it made written down instead of hidden.
+
+32 tests in `src/__tests__/migrate.test.ts` cover structure, every inline
+mark, citations (modern and legacy chips), footnotes (including the
+block-structure-degrades-to-inline case), comments (top-level, nested,
+empty-anchor), and lists/blockquotes/math — each one round-tripped through
+`Node.fromJSON(essaySchema, doc)` as the core safety net (`assertValidDoc`),
+on top of semantic assertions.
+
+## Backup-zip demo
+
+The app's landing screen takes the real app's own backup `.zip` (its
+"Export backup" feature, `src/lib/backup.ts` in the main repo) directly —
+`src/backupLoader.ts` reads just `essays`/`nodes`/`sources` out of its
+`data.json` (everything else a real backup carries — quotes, graveyard,
+bookmarks, todos, source content, essay history, projects, blobs — isn't
+anything this migration touches). Every live essay in the zip is run
+through `migrateEssay` up front; the sidebar lists them all (title plus a
+warning-count badge), and clicking one loads its migrated document into
+the live editor, with its comments and warnings shown in the panel below.
+The uploaded backup's own real `sources` replace the hard-coded fake ones
+everywhere at once (`src/activeSources.ts` — citations in both the editor
+and the Export panel re-render against whichever map is active). Nothing
+is written back anywhere; this only ever reads the zip.
+
 ## Running it
 
 ```sh
 npm install
 npm run dev    # local dev server
 npm run build  # outputs dist/index.html — one single, self-contained file
-npm run test   # vitest — covers src/export.ts's own PM-doc-dependent half
+npm run test   # vitest — covers src/export.ts's own PM-doc-dependent half and all of src/migrate.ts
 ```
 
 ## Known rough edges (expected at this stage)
@@ -87,4 +126,6 @@ npm run test   # vitest — covers src/export.ts's own PM-doc-dependent half
   to two fake in-memory sources (`src/sources.ts`).
 - Section drag-and-drop reordering isn't implemented — only "add sibling"/
   "add child" via the toolbar.
-- No persistence at all — refreshing the page resets to the sample doc.
+- No persistence at all — refreshing the page resets to the sample doc, and
+  re-loads of a backup zip need the file picked again; edits made while
+  clicking around a migrated essay are never written back anywhere.
