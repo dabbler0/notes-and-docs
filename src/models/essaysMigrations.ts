@@ -65,15 +65,15 @@ import type { DocStore } from '../storage/types'
 import { getChildIds } from '../lib/childMarkers'
 import { diffSnapshots, snapshotText } from '../lib/essayHistory'
 import { id } from '../lib/id'
-import type { Essay, EssayCommitEntry, EssayNode, EssaySnapshot } from './types'
+import type { Essay, EssayCommitEntry, EssayNode, LegacyEssaySnapshot } from './types'
 
 const ESSAYS = 'essays'
 const NODES = 'nodes'
 const ESSAY_HISTORY = 'essayHistory'
 
-/** Builds one `EssaySnapshot` by walking `essay`'s tree from `rootNodeId`, taking each node's `draftContent` from `contentFor(node)` (the running map mid-migration, or the node's own live `draftContent` for the final catch-up commit) and everything else from the node's current live values. Guards against a malformed/cyclic marker graph the same defensive way any tree walk over user-editable HTML in this codebase does. */
-function walkSnapshot(essay: Essay, nodeMap: Map<string, EssayNode>, contentFor: (node: EssayNode) => string): EssaySnapshot {
-  const nodes: EssaySnapshot['nodes'] = []
+/** Builds one `LegacyEssaySnapshot` by walking `essay`'s tree from `rootNodeId`, taking each node's `draftContent` from `contentFor(node)` (the running map mid-migration, or the node's own live `draftContent` for the final catch-up commit) and everything else from the node's current live values. Guards against a malformed/cyclic marker graph the same defensive way any tree walk over user-editable HTML in this codebase does. */
+function walkSnapshot(essay: Essay, nodeMap: Map<string, EssayNode>, contentFor: (node: EssayNode) => string): LegacyEssaySnapshot {
+  const nodes: LegacyEssaySnapshot['nodes'] = []
   const seen = new Set<string>()
   function walk(nodeId: string) {
     if (seen.has(nodeId)) return

@@ -16,7 +16,7 @@ import { addQuoteToBank, listQuoteBank } from '../../models/quoteBankRepo'
 import { addToGraveyard, listGraveyard } from '../../models/graveyardRepo'
 import { addBookmark, listBookmarksForSource } from '../../models/bookmarkRepo'
 import { createSource, getSource, getSourceContent, updateSourceContent } from '../../models/sourcesRepo'
-import { createEssay, getEssay, getNode, loadNodeMap, saveNode } from '../../models/essaysRepo'
+import { createEssay, getEssay, getNode, loadNodeMap, saveEssay, saveNode } from '../../models/essaysRepo'
 import { commitEssay, listEssayHistory } from '../../models/essayHistoryRepo'
 import { getProject, groupEssays } from '../../models/projectsRepo'
 import type { Essay, EssayNode, Source } from '../../models/types'
@@ -239,6 +239,27 @@ describe('exportBackup includes projects (the essay-grouping collection — see 
     const result = await restoreBackup(oldBackup, { mode: 'merge' })
     expect(result.projects).toBe(0)
     expect(result.essays).toBe(1)
+  })
+})
+
+describe("exportBackup includes a migrated essay's own doc/comments fields (Essay.doc/Essay.comments — see Essay's own doc comment in models/types.ts)", () => {
+  it('round-trips a migrated essay (doc + comments set) through export + restore — no separate collection needed, they ride along on the essay record itself', async () => {
+    const essay = await createEssay('Migrated Essay')
+    essay.doc = { type: 'doc', content: [{ type: 'section', attrs: { id: essay.rootNodeId }, content: [{ type: 'section_title', content: [{ type: 'text', text: 'Migrated Essay' }] }, { type: 'paragraph', content: [{ type: 'text', text: 'Real PM content.' }] }] }] }
+    essay.comments = [{ id: 'c1', parentId: null, sectionId: essay.rootNodeId, anchorKind: 'node', anchorText: '', body: '<p>A comment.</p>', resolved: false, createdAt: now, updatedAt: now }]
+    await saveEssay(essay)
+
+    const zipBlob = await exportBackup()
+
+    const storageMod = (await import('../../storage')) as unknown as FakeStorageModule
+    storageMod.__setActiveBackend(storageMod.createFakeBackend())
+
+    const result = await restoreBackup(zipBlob, { mode: 'replace' })
+    expect(result.essays).toBe(1)
+
+    const restored = (await getEssay(essay.id))!
+    expect(restored.doc).toEqual(essay.doc)
+    expect(restored.comments).toEqual(essay.comments)
   })
 })
 

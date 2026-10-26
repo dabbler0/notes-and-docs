@@ -17,7 +17,7 @@ import { getEssay, loadNodeMap, saveNode, saveEssay, nodeComments, nodeFootnotes
 // this one-directional edge doesn't create a cycle (essaysRepo.ts <-
 // essayHistoryRepo.ts -> projectsRepo.ts -> essaysRepo.ts, not a loop).
 import { removeEssayFromProject } from './projectsRepo'
-import type { Essay, EssayCommitEntry, EssayNode, EssaySnapshot } from './types'
+import type { Essay, EssayCommitEntry, EssayNode, LegacyEssaySnapshot } from './types'
 
 const ESSAY_HISTORY = 'essayHistory'
 
@@ -29,8 +29,8 @@ const ESSAY_HISTORY = 'essayHistory'
  * (deleted, or not loaded) is simply skipped, same as every other tree walk
  * in this codebase; its own children are unreachable along with it.
  */
-export function buildSnapshot(essay: Essay, nodeMap: Map<string, EssayNode>): EssaySnapshot {
-  const nodes: EssaySnapshot['nodes'] = []
+export function buildSnapshot(essay: Essay, nodeMap: Map<string, EssayNode>): LegacyEssaySnapshot {
+  const nodes: LegacyEssaySnapshot['nodes'] = []
   function walk(node: EssayNode) {
     nodes.push({ id: node.id, title: node.title, draftContent: node.draftContent, footnotes: nodeFootnotes(node), comments: nodeComments(node) })
     for (const childId of getChildIds(node.draftContent)) {
@@ -49,8 +49,8 @@ export async function listEssayHistory(essayId: string): Promise<EssayCommitEntr
   return all.filter((c) => c.essayId === essayId).sort((a, b) => a.seq - b.seq)
 }
 
-/** The reconstructed `EssaySnapshot` for one specific commit — for the history panel's "View" action. */
-export async function getCommitSnapshot(essayId: string, commitId: string): Promise<EssaySnapshot | undefined> {
+/** The reconstructed `LegacyEssaySnapshot` for one specific commit — for the history panel's "View" action. */
+export async function getCommitSnapshot(essayId: string, commitId: string): Promise<LegacyEssaySnapshot | undefined> {
   const commits = await listEssayHistory(essayId)
   const commit = commits.find((c) => c.id === commitId)
   if (!commit) return undefined
@@ -85,7 +85,7 @@ export async function commitEssay(essay: Essay, nodeMap: Map<string, EssayNode>,
  * and the write to `nodes`/`essays` below are guaranteed to describe
  * *exactly* the same resulting state, since one is derived from the other.
  */
-export async function revertEssayTo(essay: Essay, nodeMap: Map<string, EssayNode>, commitId: string): Promise<EssaySnapshot | undefined> {
+export async function revertEssayTo(essay: Essay, nodeMap: Map<string, EssayNode>, commitId: string): Promise<LegacyEssaySnapshot | undefined> {
   const commits = await listEssayHistory(essay.id)
   const target = commits.find((c) => c.id === commitId)
   if (!target) return undefined
@@ -94,7 +94,7 @@ export async function revertEssayTo(essay: Essay, nodeMap: Map<string, EssayNode
   if (targetText === currentText) return undefined // already exactly there — nothing to revert
   const patch = diffSnapshots(currentText, targetText)
   const resultText = applyPatch(currentText, patch)
-  const snapshot: EssaySnapshot = JSON.parse(resultText)
+  const snapshot: LegacyEssaySnapshot = JSON.parse(resultText)
   await applySnapshotToLiveTree(essay, nodeMap, snapshot)
   await appendCommit(essay.id, commits, 'revert', patch, target.label ? `Reverted to "${target.label}"` : `Reverted to ${new Date(target.createdAt).toLocaleString()}`)
   return snapshot
@@ -114,7 +114,7 @@ export async function revertEssayTo(essay: Essay, nodeMap: Map<string, EssayNode
  * future structural change could in principle move it) case where it
  * differs from what's already there.
  */
-async function applySnapshotToLiveTree(essay: Essay, nodeMap: Map<string, EssayNode>, snapshot: EssaySnapshot): Promise<void> {
+async function applySnapshotToLiveTree(essay: Essay, nodeMap: Map<string, EssayNode>, snapshot: LegacyEssaySnapshot): Promise<void> {
   const now = Date.now()
   const keepIds = new Set(snapshot.nodes.map((n) => n.id))
   for (const existing of nodeMap.values()) {

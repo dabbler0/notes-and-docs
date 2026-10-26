@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import { applyPatch, diffSnapshots, reconstructSnapshot, reconstructSnapshotText, snapshotText } from '../essayHistory'
-import type { EssayCommitEntry, EssaySnapshot } from '../../models/types'
+import type { EssayCommitEntry, LegacyEssaySnapshot } from '../../models/types'
 
-function snap(overrides: Partial<EssaySnapshot> = {}): EssaySnapshot {
+function snap(overrides: Partial<LegacyEssaySnapshot> = {}): LegacyEssaySnapshot {
   return { title: 'Essay', rootNodeId: 'root', nodes: [{ id: 'root', title: 'Root', draftContent: '<p>text</p>', footnotes: [], comments: [] }], ...overrides }
 }
 
@@ -59,7 +59,7 @@ describe('reconstructSnapshotText / reconstructSnapshot', () => {
     expect(JSON.parse(reconstructSnapshotText(shuffled, 1)).nodes[0].draftContent).toBe('v1')
   })
 
-  it('reconstructSnapshot parses the text back into a real EssaySnapshot', () => {
+  it('reconstructSnapshot parses the text back into a real LegacyEssaySnapshot', () => {
     const commits = chain()
     const snapshot = reconstructSnapshot(commits, 2)
     expect(snapshot.nodes[0].draftContent).toBe('v2')

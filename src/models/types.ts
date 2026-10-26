@@ -239,6 +239,20 @@ export interface Comment {
   id: string
   /** Id of the comment this one is nested under, or null for a top-level comment. */
   parentId: string | null
+  /**
+   * The owning `section` node's own stable id, for a top-level comment
+   * (`parentId === null`) on an essay that's been migrated to the
+   * ProseMirror document model (`Essay.doc` — see its own doc comment).
+   * Null/absent for a nested reply (whose `parentId` already identifies
+   * its owner unambiguously) and for any comment still living in the old
+   * per-`EssayNode` model (`EssayNode.comments`), which doesn't need
+   * this — it's already scoped by whichever node's own array it sits in.
+   * A migrated essay's comments move off `EssayNode.comments` entirely
+   * onto one flat `Essay.comments` array, which is what makes this field
+   * necessary: nothing else records which section a `'node'`/`'text'`
+   * comment belongs to once there's no more per-node array to imply it.
+   */
+  sectionId?: string | null
   anchorKind: 'node' | 'text' | 'inline'
   /** Plain-text snippet the comment is anchored to (best-effort, for display) — empty for a 'node' comment, a comment with nothing selected, or a plain reply (an 'inline' comment anchored to an empty mark). */
   anchorText: string
@@ -357,6 +371,44 @@ export interface Essay {
    * name (if any) renders with no footnote marker.
    */
   authorNote?: string
+  /**
+   * This essay's own content as a single, real ProseMirror document — the
+   * "maximal" single-document model that replaces the old `EssayNode` tree
+   * glued together by `childMarkers.ts`'s HTML marker divs (`rootNodeId`,
+   * above, and everything reachable from it). Nested sections, footnotes,
+   * and citations are all structural PM content now, not HTML-string
+   * conventions — see `lib/pmSchema.ts` for the schema this validates
+   * against, and `lib/pmMigration.ts`'s `migrateEssay` for how an old
+   * `rootNodeId` tree becomes one of these.
+   *
+   * Absent means this essay hasn't been migrated yet — the old
+   * `EssayWorkspace`/`SectionBlock` UI reads/writes `rootNodeId`/`nodes`
+   * exactly as it always has, and nothing here is in play. Presence of
+   * this field is literally what "this essay has been migrated" means;
+   * nothing currently sets it (the real one-time conversion is deferred to
+   * the UI-swap phase that actually reads it — see `lib/pmMigration.ts`'s
+   * own doc comment for why running it any earlier would just produce a
+   * stale doc the still-unswapped old UI would silently invalidate on its
+   * very next edit).
+   *
+   * Untyped (`unknown`) here rather than a real PM `Node`/`PMJson` type —
+   * this is a plain JSON value serialized straight to/from Firestore and
+   * IndexedDB, never a live ProseMirror `Node` instance; `lib/pmSchema.ts`
+   * and anything that actually edits or walks it does the real typing
+   * (`Node.fromJSON(essaySchema, essay.doc)`) at the point of use.
+   */
+  doc?: unknown
+  /**
+   * This essay's own comment threads, once migrated (see `doc`, above) —
+   * every comment anchored to a span of text, to a section as a whole, and
+   * every reply nested under any of those (see `Comment`'s own doc
+   * comment, including `sectionId`). Replaces `EssayNode.comments` for a
+   * migrated essay: comments move off the old per-node arrays onto one
+   * flat array here, the same way `doc` replaces the old per-node content
+   * tree with one flat document. Absent/undefined for an essay that
+   * hasn't been migrated yet, exactly like `doc`.
+   */
+  comments?: Comment[]
   /** Tombstone — see the note on Source.deleted. */
   deleted?: boolean
 }
@@ -448,9 +500,10 @@ export interface TodoItem {
  * per-node `versions`/`headVersionId` scheme (see `NodeVersion`'s own doc
  * comment). Unlike the old system, history lives on the *essay* ("document")
  * as a whole, not on any one node/section: a commit is a deliberate,
- * explicit, user-triggered snapshot of the entire document (every node
- * reachable from `Essay.rootNodeId` — see `EssaySnapshot`), not something
- * created implicitly by ordinary editing.
+ * explicit, user-triggered snapshot of the entire document — either every
+ * node reachable from `Essay.rootNodeId` (`LegacyEssaySnapshot`) or, once
+ * migrated, the PM `doc` itself (`EssaySnapshot`) — not something created
+ * implicitly by ordinary editing.
  *
  * A commit never stores its own snapshot directly — only `patch`, a unified
  * diff (`lib/essayHistory.ts`'s `diffSnapshots`, built on the `diff`
@@ -500,25 +553,52 @@ export interface EssayCommitEntry {
 
 /**
  * The "structured serialization" an `EssayCommitEntry`'s own `patch` is a
- * diff of — a deterministic JSON snapshot of an essay's entire document:
- * every node reachable from `rootNodeId`, in the same document order
- * `lib/export.ts`'s `essayToMarkdown` already walks the tree in (see
- * `buildSnapshot` in `lib/essayHistory.ts`). Comments travel with the
- * snapshot (unlike the old per-version system, which deliberately kept them
- * off `NodeVersion` — see `Comment`'s own doc comment) specifically because
- * a commit is now a deliberate, infrequent action rather than something
- * every edit implicitly created: reverting to an old commit should bring
- * back the comments that existed on it too, and nothing about a node's
- * content should ever become *only* reachable by replaying patches with no
- * way to recover its comments from them.
+ * diff of, for an essay that hasn't been migrated to the ProseMirror
+ * document model yet (`Essay.doc` absent) — a deterministic JSON snapshot
+ * of the old per-node tree: every node reachable from `rootNodeId`, in the
+ * same document order `lib/export.ts`'s `essayToMarkdown` already walks the
+ * tree in (see `buildSnapshot` in `models/essayHistoryRepo.ts`). Comments
+ * travel with the snapshot (unlike the old per-version system, which
+ * deliberately kept them off `NodeVersion` — see `Comment`'s own doc
+ * comment) specifically because a commit is now a deliberate, infrequent
+ * action rather than something every edit implicitly created: reverting to
+ * an old commit should bring back the comments that existed on it too, and
+ * nothing about a node's content should ever become *only* reachable by
+ * replaying patches with no way to recover its comments from them.
  *
  * Tree *shape* (which nodes nest under which, via the markers embedded in
  * each node's own `draftContent` — see `childMarkers.ts`) is implicitly part
  * of each node's own `draftContent` here, same as it always is; it was never
  * a thing stored separately even by the old per-node system.
+ *
+ * **Legacy** — kept under this name (rather than `EssaySnapshot`, now the
+ * PM-doc-based shape below) specifically so every existing call site that
+ * reads `.nodes`/`.rootNodeId` keeps compiling unchanged: this is still the
+ * real, live shape for any essay that hasn't been migrated, which is every
+ * essay until a later phase actually runs the conversion (see
+ * `lib/pmMigration.ts`'s own doc comment on why that's deferred). Once an
+ * essay has `Essay.doc` set, its own commit chain is reconstructed via the
+ * new `EssaySnapshot` below instead — see that type's own doc comment.
  */
-export interface EssaySnapshot {
+export interface LegacyEssaySnapshot {
   title: string
   rootNodeId: string
   nodes: { id: string; title: string; draftContent: string; footnotes: Footnote[]; comments: Comment[] }[]
+}
+
+/**
+ * The "structured serialization" an `EssayCommitEntry`'s own `patch` is a
+ * diff of, for an essay that *has* been migrated to the ProseMirror
+ * document model (`Essay.doc` set) — see `LegacyEssaySnapshot`'s own doc
+ * comment for the pre-migration shape this replaces. Trivial by comparison:
+ * the document already *is* the whole tree (nested `section`s, footnotes,
+ * and citations are real PM content now, not markers scattered across
+ * separate node records — see `lib/pmSchema.ts`), so there's no tree to
+ * walk and reassemble here the way `LegacyEssaySnapshot.nodes` needs; this
+ * is just `Essay.doc`/`Essay.comments` as they stand, copied straight in.
+ */
+export interface EssaySnapshot {
+  title: string
+  doc: unknown
+  comments: Comment[]
 }

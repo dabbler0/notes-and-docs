@@ -2,7 +2,7 @@ import { useEffect, useState } from 'preact/hooks'
 import { getCommitSnapshot, listEssayHistory, revertEssayTo } from '../../models/essayHistoryRepo'
 import { confirmDialog } from '../../lib/confirm'
 import { FrozenPreview } from './FrozenPreview'
-import type { Essay, EssayCommitEntry, EssayNode, EssaySnapshot } from '../../models/types'
+import type { Essay, EssayCommitEntry, EssayNode, LegacyEssaySnapshot } from '../../models/types'
 
 /**
  * The essay-level replacement for SectionBlock's old per-section "Version
@@ -30,7 +30,7 @@ export function EssayHistoryPanel({
 }) {
   const [commits, setCommits] = useState<EssayCommitEntry[] | null>(null)
   const [viewingId, setViewingId] = useState<string | null>(null)
-  const [viewingSnapshot, setViewingSnapshot] = useState<EssaySnapshot | null>(null)
+  const [viewingSnapshot, setViewingSnapshot] = useState<LegacyEssaySnapshot | null>(null)
   const [busy, setBusy] = useState(false)
 
   useEffect(() => {

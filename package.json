@@ -22,6 +22,7 @@
     "pdf-lib": "^1.17.1",
     "pdfjs-dist": "^4.9.155",
     "preact": "^10.29.8",
+    "prosemirror-model": "^1.25.12",
     "qrcode": "^1.5.4",
     "tesseract.js": "^7.0.0"
   },

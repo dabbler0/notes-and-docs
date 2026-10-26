@@ -1,5 +1,5 @@
 /**
- * The pure commit-history mechanics behind `EssayCommitEntry`/`EssaySnapshot`
+ * The pure commit-history mechanics behind `EssayCommitEntry`/`LegacyEssaySnapshot`
  * (see those types' own doc comments in `models/types.ts`) — serializing a
  * snapshot, diffing/patching snapshot text via the `diff` package (jsdiff),
  * and reconstructing any past commit by replaying patches from the very
@@ -9,10 +9,10 @@
  * this module avoids a `lib/` -> `models/` -> `lib/` import cycle).
  */
 import * as Diff from 'diff'
-import type { EssayCommitEntry, EssaySnapshot } from '../models/types'
+import type { EssayCommitEntry, LegacyEssaySnapshot } from '../models/types'
 
 /** Stable, deterministic serialization — the literal text an `EssayCommitEntry.patch` is ever a diff of. */
-export function snapshotText(snapshot: EssaySnapshot): string {
+export function snapshotText(snapshot: LegacyEssaySnapshot): string {
   return JSON.stringify(snapshot, null, 2)
 }
 
@@ -46,8 +46,8 @@ export function reconstructSnapshotText(commits: EssayCommitEntry[], uptoSeq: nu
   return text
 }
 
-/** `reconstructSnapshotText`, parsed back into an `EssaySnapshot`. */
-export function reconstructSnapshot(commits: EssayCommitEntry[], uptoSeq: number): EssaySnapshot {
+/** `reconstructSnapshotText`, parsed back into a `LegacyEssaySnapshot`. */
+export function reconstructSnapshot(commits: EssayCommitEntry[], uptoSeq: number): LegacyEssaySnapshot {
   const text = reconstructSnapshotText(commits, uptoSeq)
   return text ? JSON.parse(text) : { title: '', rootNodeId: '', nodes: [] }
 }
