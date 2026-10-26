@@ -65,10 +65,21 @@ const backupErrorEl = document.querySelector<HTMLDivElement>('#backupError')!
 const backupStatusEl = document.querySelector<HTMLDivElement>('#backupStatus')!
 const useSampleBtn = document.querySelector<HTMLButtonElement>('#useSampleBtn')!
 
-/** Either a live essay or a graveyard fragment, migrated up front — the sidebar and `mountEditor` treat both the same way, since `migrateGraveyardFragment` returns the same `MigratedEssay` shape `migrateEssay` does. */
+/**
+ * Either a live essay or a graveyard fragment, migrated up front — the
+ * sidebar and `mountEditor` treat both the same way, since
+ * `migrateGraveyardFragment` returns the same `MigratedEssay` shape
+ * `migrateEssay` does. `essayId` is always set (an essay's own id for an
+ * `'essay'` entry, `LegacyGraveyardFragment.essayId` for a `'graveyard'`
+ * one) so a fragment can still be matched back to the essay it was cut
+ * from — this demo only ever lists the two kinds in one flat sidebar, but
+ * nothing about the matching itself is lost; a future right-hand
+ * "graveyard for this essay" panel just needs to filter entries by it.
+ */
 interface WorkspaceEntry {
   kind: 'essay' | 'graveyard'
   id: string
+  essayId: string
   migrated: MigratedEssay
 }
 
@@ -86,10 +97,10 @@ backupFileInput.addEventListener('change', async () => {
     backupStatusEl.textContent = `Loaded ${backup.essays.length} essay(s), ${backup.nodes.length} node(s), ${backup.sources.size} source(s), ${backup.graveyard.length} graveyard fragment(s). Migrating…`
     const liveEssays = backup.essays.filter((e) => !e.deleted)
     const essayList: WorkspaceEntry[] = liveEssays
-      .map((essay) => ({ kind: 'essay' as const, id: essay.id, migrated: migrateEssay(essay, backup.nodes, backup.sources) }))
+      .map((essay) => ({ kind: 'essay' as const, id: essay.id, essayId: essay.id, migrated: migrateEssay(essay, backup.nodes, backup.sources) }))
       .sort((a, b) => a.migrated.title.localeCompare(b.migrated.title))
     const graveyardList: WorkspaceEntry[] = backup.graveyard
-      .map((fragment) => ({ kind: 'graveyard' as const, id: fragment.id, migrated: migrateGraveyardFragment(fragment, backup.nodes, backup.sources) }))
+      .map((fragment) => ({ kind: 'graveyard' as const, id: fragment.id, essayId: fragment.essayId, migrated: migrateGraveyardFragment(fragment, backup.nodes, backup.sources) }))
       .sort((a, b) => a.migrated.title.localeCompare(b.migrated.title))
     entries = [...essayList, ...graveyardList]
     setActiveSources(backup.sources)
