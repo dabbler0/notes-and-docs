@@ -3296,6 +3296,35 @@ select {
   margin: 18px 0;
 }
 
+/* Each actual subsection (anything with at least one section ancestor —
+   the root's own single top-level section is excluded) gets a small
+   extra left margin of its own. Ordinary block nesting makes this
+   compound automatically with depth — a depth-2 section sits inside a
+   depth-1 section that already carries its own copy of this margin, so
+   no separate per-depth rule is needed the way the right-edge fix below
+   needs one. margin-left (not padding-left) so the whole box — the rule
+   (border-left), the chevron/number sitting in the padding gutter, and
+   the body text — shifts right together, still lining up with each
+   other at every depth. */
+.pm-editor-root .ProseMirror section section {
+  margin-left: 6px;
+}
+
+/* Undoes one level of the *right* padding every section reserves for its
+   own demote button (`section`'s own `padding-right`, above) for any
+   section nested two or more levels deep. Without this, each level's
+   padding-right stacks on top of its ancestors' — a depth-3 section's
+   body text would sit 3x as far from the right edge as a depth-1
+   section's, when the user wants every depth's body text ending at the
+   same absolute right edge. The cancellation only needs to start one
+   level in (depth-1 sections keep their own single reservation) and then
+   holds at every deeper level too, since this same rule matches a
+   depth-2 section nested inside a depth-2-or-deeper one just as much as
+   a depth-2 section nested directly inside a depth-1 one. */
+.pm-editor-root .ProseMirror section section section {
+  margin-right: -28px;
+}
+
 .pm-editor-root .ProseMirror section.section-rule-active {
   border-left-color: var(--border);
 }
@@ -3339,6 +3368,13 @@ select {
   color: var(--ink-dim);
   white-space: nowrap;
   user-select: none;
+  /* A float with no text content collapses to zero height, not just zero
+     width — so with no number to show (the "Abstract" exception) it
+     reserved no vertical space at all and the title's first line fell
+     back to flush left, overlapping the chevron. min-height keeps an
+     empty instance exactly as tall as one text line, so it still holds
+     the title clear of the chevron even with nothing to display. */
+  min-height: 1.2em;
   /* Clears the chevron sitting at the same `left: 4px` this element's own
      containing block starts from — body text, by contrast, deliberately
      has no such margin of its own (see `section`'s own `padding-left`
@@ -3368,30 +3404,22 @@ select {
   outline: none;
 }
 
-.pm-editor-root .ProseMirror section section h2.section-title {
-  font-size: 15px;
+/* The essay's own root-level title (the one section with no chevron/
+   number of its own — `getPos() === 0`, pmNodeViews.ts) isn't shown in
+   the editor pane at all; the outline/essay-list already show the
+   essay's title elsewhere. Scoped to the root's own title specifically —
+   `.ProseMirror`'s direct child `<section>` is always the root one, so
+   its own first-child title is the only match; a nested section's own
+   title is never a direct child of `.ProseMirror` itself. */
+.pm-editor-root .ProseMirror > section > .section-body > h2.section-title {
+  display: none;
 }
 
-.pm-editor-root .ProseMirror section section section h2.section-title {
-  font-size: 13px;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-}
-
-/* Keeps the floated number (just above) the same size as whatever depth's
-   own title font-size it's sitting beside — it has no font-size of its
-   own to inherit that scaling from automatically, since it's a sibling
-   of the title, not part of it. */
+/* Keeps the floated number (just above) the same size as the title it
+   sits beside — it has no font-size of its own to inherit that from
+   automatically, since it's a sibling of the title, not part of it. */
 .pm-editor-root .ProseMirror section > .section-number {
   font-size: 18px;
-}
-
-.pm-editor-root .ProseMirror section section > .section-number {
-  font-size: 15px;
-}
-
-.pm-editor-root .ProseMirror section section section > .section-number {
-  font-size: 13px;
 }
 
 .pm-editor-root .ProseMirror blockquote {
