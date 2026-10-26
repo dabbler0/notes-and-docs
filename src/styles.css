@@ -3297,19 +3297,15 @@ select {
   margin: 18px 0;
 }
 
-/* Each actual subsection (anything with at least one section ancestor —
-   the root's own single top-level section is excluded) gets a small
-   extra left margin of its own. Ordinary block nesting makes this
-   compound automatically with depth — a depth-2 section sits inside a
-   depth-1 section that already carries its own copy of this margin, so
-   no separate per-depth rule is needed the way the right-edge fix below
-   needs one. margin-left (not padding-left) so the whole box — the rule
-   (border-left), the chevron/number sitting in the padding gutter, and
-   the body text — shifts right together, still lining up with each
-   other at every depth. */
-.pm-editor-root .ProseMirror section section {
-  margin-left: 6px;
-}
+/* A nested section gets no left margin of its own (the default for a
+   block element, left as-is here rather than overridden) — `section`'s
+   own `padding-left` above is the entire per-depth left increment. A
+   nested section is an ordinary normal-flow child of its parent's
+   `.section-body`, so it (and its own rule/chevron, both measured from
+   its own border edge) already starts exactly where the parent's own
+   body text does: a section's immediate text and its children's own
+   rules land at the same x, with no extra offset needed to make that
+   true. */
 
 /* Undoes one level of the *right* padding every section reserves for its
    own demote button (`section`'s own `padding-right`, above) for any
