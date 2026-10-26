@@ -93,10 +93,14 @@ const nodes: Record<string, NodeSpec> = {
     // `collapsed` is UI-only state (the in-document fold toggle and the
     // outline sidebar read/write this same attr, via `pmCommands.ts`'s
     // `toggleSectionCollapsed` — see `pmNodeViews.ts`'s `SectionView`) —
-    // deliberately a real node attr rather than component-local state, so
-    // a section stays folded across a reload/essay-switch the same way
-    // any other edit would, and the sidebar and in-document chevrons can
-    // never disagree about which sections are open.
+    // a real node attr rather than component-local state so the sidebar
+    // and in-document chevrons can never disagree about which sections
+    // are open, without a second state-sync channel alongside the
+    // document itself. Deliberately *session* state though, same as
+    // scroll position or cursor placement: `PMEssayEditor.tsx`'s own
+    // `stripCollapsedAttrs` resets every `collapsed` to `false` on the
+    // way into persisted storage, so it's live within one mounted
+    // editor but never outlives a reload (or syncs to another device).
     attrs: { id: { default: null }, collapsed: { default: false } },
     parseDOM: [{ tag: 'section', getAttrs: (dom) => ({ id: (dom as HTMLElement).getAttribute('data-section-id') }) }],
     toDOM(node) {

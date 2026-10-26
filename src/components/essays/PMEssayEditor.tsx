@@ -43,6 +43,39 @@ import type { Essay, Source } from '../../models/types'
  * word count), since ProseMirror owns its state internally and Preact
  * never sees it otherwise.
  */
+/**
+ * A section's own `collapsed` attr (`pmSchema.ts`) is deliberately
+ * *session* state, not document state — it should reset to "all expanded"
+ * on reload the same way scroll position or cursor placement would, never
+ * synced to another device or left folded in a backup. Rather than a
+ * second, separate state-sync channel alongside the document (which really
+ * would add real complexity — an imperative registry of mounted
+ * `SectionView`s to push toggles into, a second re-render trigger for the
+ * sidebar, all duplicating what `setNodeMarkup`/`onDocChanged` already give
+ * the *document* case for free), toggling collapse stays an ordinary
+ * transaction against the live, in-memory document — the sidebar and the
+ * in-document chevron (`pmCommands.ts`'s `toggleSectionCollapsed`,
+ * `pmNodeViews.ts`'s `SectionView`) both read/write it exactly as before,
+ * fully live within this one mounted session. Only the persistence
+ * boundary right here is different: every `collapsed` is reset to `false`
+ * on the way into `essay.doc`, so whatever lands in storage (and syncs to
+ * other devices) never remembers it — the next fresh load of this essay
+ * (a real reload, or just switching away and back, which remounts this
+ * same `EditorView` from `essay.doc`) always starts fully expanded.
+ */
+function stripCollapsedAttrs(node: unknown): unknown {
+  if (node === null || typeof node !== 'object') return node
+  const obj = node as Record<string, unknown>
+  const next: Record<string, unknown> = { ...obj }
+  if (next.type === 'section' && next.attrs && typeof next.attrs === 'object') {
+    next.attrs = { ...(next.attrs as Record<string, unknown>), collapsed: false }
+  }
+  if (Array.isArray(next.content)) {
+    next.content = next.content.map(stripCollapsedAttrs)
+  }
+  return next
+}
+
 export function PMEssayEditor({
   essay,
   sources,
@@ -69,7 +102,7 @@ export function PMEssayEditor({
     function scheduleSave(newDoc: PMNode) {
       window.clearTimeout(saveTimer)
       saveTimer = window.setTimeout(() => {
-        essay.doc = newDoc.toJSON()
+        essay.doc = stripCollapsedAttrs(newDoc.toJSON())
         essay.updatedAt = Date.now()
         saveEssay(essay)
       }, 500)
