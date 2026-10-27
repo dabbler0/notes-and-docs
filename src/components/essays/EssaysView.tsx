@@ -261,6 +261,10 @@ export function EssaysView() {
           setOpenId(null)
           reload()
         }}
+        onOpenSlideshow={(slideshowId) => {
+          setOpenId(null)
+          setOpenSlideshowId(slideshowId)
+        }}
       />
     )
   }
@@ -295,7 +299,7 @@ export function EssaysView() {
           <Icon name="import" /> Import LaTeX project
         </button>
         <div style={{ position: 'relative' }}>
-          <button className="btn btn-primary" onClick={() => setShowNewMenu((v) => !v)}>
+          <button className="btn btn-primary" style={{ whiteSpace: 'nowrap' }} onClick={() => setShowNewMenu((v) => !v)}>
             + New ▾
           </button>
           {showNewMenu && (

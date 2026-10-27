@@ -382,8 +382,21 @@ export async function cloneEssay(essayId: string): Promise<Essay | undefined> {
   return clonedEssay
 }
 
-/** Assigns every `section` node in a PM doc JSON tree a fresh id, recording old->new in `sectionIdMap` as a side effect — the structural half of cloning a migrated essay. Pure JSON-tree recursion (same technique `PMEssayEditor.tsx`'s own `stripCollapsedAttrs` already uses) rather than going through `essaySchema`/real `PMNode` instances — there's no live `EditorView` to validate against here, just plain data to reshape. */
-function cloneDocWithFreshSectionIds(node: unknown, sectionIdMap: Map<string, string>): unknown {
+/**
+ * Assigns every `section` node in a PM doc JSON tree a fresh id, recording
+ * old->new in `sectionIdMap` as a side effect — the structural half of
+ * cloning a migrated essay. Pure JSON-tree recursion (same technique
+ * `PMEssayEditor.tsx`'s own `stripCollapsedAttrs` already uses) rather than
+ * going through `essaySchema`/real `PMNode` instances — there's no live
+ * `EditorView` to validate against here, just plain data to reshape.
+ *
+ * Exported for `slideshowsRepo.ts`'s own `createSlideshowFromEssay` — a
+ * slideshow's doc is `essaySchema`-shaped too (`pmSchema.ts`'s own doc
+ * comment on `slide_break`/`fragment_break`), so turning an essay's current
+ * content into a brand-new slideshow needs exactly this same fresh-ids
+ * deep copy, not a second implementation of it.
+ */
+export function cloneDocWithFreshSectionIds(node: unknown, sectionIdMap: Map<string, string>): unknown {
   if (node === null || typeof node !== 'object') return node
   if (Array.isArray(node)) return node.map((n) => cloneDocWithFreshSectionIds(n, sectionIdMap))
   const obj = node as Record<string, unknown>

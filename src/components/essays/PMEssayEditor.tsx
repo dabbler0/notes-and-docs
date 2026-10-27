@@ -9,7 +9,7 @@ import { Node as PMNode } from 'prosemirror-model'
 import { essaySchema } from '../../lib/pmSchema'
 import { saveEssay } from '../../models/essaysRepo'
 import { createCitationView, SectionView, FootnoteView, createMathView, SlideBreakView, FragmentBreakView } from './pmNodeViews'
-import { splitIntoSection } from './pmCommands'
+import { splitIntoSection, preventJoinIntoSectionTitle } from './pmCommands'
 import { createCommentPlugin } from './pmCommentPlugin'
 import { createCitationArrowPlugin } from './pmCitationArrowPlugin'
 import { createActiveSectionPlugin } from './pmActiveSectionPlugin'
@@ -83,7 +83,7 @@ export interface PMDocHost {
  * (a real reload, or just switching away and back, which remounts this
  * same `EditorView` from `essay.doc`) always starts fully expanded.
  */
-function stripCollapsedAttrs(node: unknown): unknown {
+export function stripCollapsedAttrs(node: unknown): unknown {
   if (node === null || typeof node !== 'object') return node
   const obj = node as Record<string, unknown>
   const next: Record<string, unknown> = { ...obj }
@@ -170,6 +170,9 @@ export function PMEssayEditor({
           'Mod-z': undo,
           'Mod-y': redo,
           'Mod-Shift-z': redo,
+          // Ahead of `keymap(baseKeymap)`'s own default Backspace chain,
+          // below — see `preventJoinIntoSectionTitle`'s own doc comment.
+          Backspace: preventJoinIntoSectionTitle,
           'Mod-b': toggleMark(essaySchema.marks.strong),
           'Mod-i': toggleMark(essaySchema.marks.em),
           'Mod-u': toggleMark(essaySchema.marks.underline),

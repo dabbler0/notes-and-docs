@@ -1,7 +1,8 @@
 import { backend } from '../storage'
 import { id } from '../lib/id'
 import { sectionTitleJson } from '../lib/pmMigration'
-import type { Slideshow } from './types'
+import { cloneDocWithFreshSectionIds } from './essaysRepo'
+import type { Essay, Slideshow } from './types'
 
 const SLIDESHOWS = 'slideshows'
 
@@ -33,6 +34,25 @@ export async function createSlideshow(title: string): Promise<Slideshow> {
   const deckTitle = title || 'Untitled slideshow'
   const doc = { type: 'doc', content: [{ type: 'section', attrs: { id: id() }, content: [sectionTitleJson(''), { type: 'paragraph' }] }] }
   const deck: Slideshow = { id: id(), title: deckTitle, doc, createdAt: now, updatedAt: now }
+  await backend.docs.put(SLIDESHOWS, deck)
+  return deck
+}
+
+/**
+ * Creates a new slideshow by copying an essay's current content wholesale —
+ * "Slideshow" button, `EssayWorkspace.tsx` — rather than starting blank, since
+ * a slideshow's doc is already `essaySchema`-shaped (`pmSchema.ts`'s own doc
+ * comment): every essay could in principle be interpreted as a slideshow, so
+ * turning one into an actual `Slideshow` record is just a deep copy, same
+ * "give every `section` a fresh id" treatment `essaysRepo.ts`'s own
+ * `cloneEssay` already gives an essay cloned from another essay. No
+ * `slide_break`/`fragment_break` dividers exist yet — the copy opens exactly
+ * as one continuous flow, ready for the user to drop dividers into.
+ */
+export async function createSlideshowFromEssay(essay: Essay): Promise<Slideshow> {
+  const now = Date.now()
+  const doc = cloneDocWithFreshSectionIds(essay.doc, new Map())
+  const deck: Slideshow = { id: id(), title: essay.title, doc, createdAt: now, updatedAt: now }
   await backend.docs.put(SLIDESHOWS, deck)
   return deck
 }

@@ -5,6 +5,7 @@ import { toggleMark } from 'prosemirror-commands'
 import { wrapInList } from 'prosemirror-schema-list'
 import type { EditorState, Transaction } from 'prosemirror-state'
 import { cloneEssay, getEssay, saveEssay } from '../../models/essaysRepo'
+import { createSlideshowFromEssay } from '../../models/slideshowsRepo'
 import { groupEssays } from '../../models/projectsRepo'
 import { listSources } from '../../models/sourcesRepo'
 import { addToGraveyard } from '../../models/graveyardRepo'
@@ -15,9 +16,10 @@ import { displayTitle } from '../../lib/bibtex'
 import { confirmDialog } from '../../lib/confirm'
 import { promptDialog } from '../../lib/prompt'
 import { commitPmEssay } from '../../models/essayHistoryRepo'
+import { getAuthorName } from '../../lib/authorPreference'
 import type { Essay, Source } from '../../models/types'
 import { Icon } from '../Icon'
-import { PMEssayEditor } from './PMEssayEditor'
+import { PMEssayEditor, stripCollapsedAttrs } from './PMEssayEditor'
 import { NodeTree } from './NodeTree'
 import { AuthorNoteDialog } from './AuthorNoteDialog'
 import { SplitPickerDialog } from './SplitPickerDialog'
@@ -62,7 +64,18 @@ import { id } from '../../lib/id'
  * component inside itself (see `splitEssayId`) rather than a separate
  * stripped-down renderer.
  */
-export function EssayWorkspace({ essayId, onBack, embedded = false }: { essayId: string; onBack: () => void; embedded?: boolean }) {
+export function EssayWorkspace({
+  essayId,
+  onBack,
+  embedded = false,
+  onOpenSlideshow,
+}: {
+  essayId: string
+  onBack: () => void
+  embedded?: boolean
+  /** Navigate to a newly-created slideshow — "Slideshow" button, below. Threaded through to a split-view pane's own nested `EssayWorkspace` too, so creating a slideshow from inside a split pane still navigates the whole view, not just that pane. */
+  onOpenSlideshow?: (slideshowId: string) => void
+}) {
   const [essay, setEssay] = useState<Essay | null>(null)
   const [essayTitle, setEssayTitle] = useState('')
   const [doc, setDoc] = useState<PMNode | null>(null)
@@ -331,6 +344,23 @@ export function EssayWorkspace({ essayId, onBack, embedded = false }: { essayId:
     setEssay({ ...essay })
   }
 
+  /**
+   * "Slideshow" toolbar button — copies this essay's current content into a
+   * brand-new `Slideshow` (`createSlideshowFromEssay`'s own doc comment) and
+   * navigates to it, same as opening one from the Drafts list. Reads the
+   * doc straight off the live `EditorView` rather than `essay.doc` — the
+   * latter only catches up to the real content up to 500ms after the last
+   * keystroke (`PMEssayEditor.tsx`'s own debounced save), so typing right up
+   * to the click and relying on `essay.doc` could silently copy stale,
+   * pre-edit content.
+   */
+  async function handleCreateSlideshow() {
+    if (!essay) return
+    const liveDoc = viewRef.current ? stripCollapsedAttrs(viewRef.current.state.doc.toJSON()) : essay.doc
+    const deck = await createSlideshowFromEssay({ ...essay, doc: liveDoc })
+    onOpenSlideshow?.(deck.id)
+  }
+
   function handleInsertCitation(source: Source, note?: string) {
     setShowCitation(false)
     sources.set(source.id, source)
@@ -454,6 +484,19 @@ export function EssayWorkspace({ essayId, onBack, embedded = false }: { essayId:
           onBlur={saveEssayTitle}
           style={{ border: 'none', outline: 'none', background: 'transparent', fontSize: 16, fontWeight: 700, flex: 1, minWidth: 0 }}
         />
+        {/* Shows the globally-configured author name (lib/authorPreference.ts)
+            — not editable in place, just a launcher for the real editable
+            field, this essay's own `authorNote` (AuthorNoteDialog). The chip
+            itself has nothing to type into; clicking anywhere on it opens
+            that modal, same as the toolbar button this replaces used to. */}
+        <button
+          className="chip"
+          style={{ border: 'none', cursor: 'pointer', flexShrink: 0 }}
+          title="Thanks/acknowledgements/disclosures for your author attribution in print exports — click to edit"
+          onClick={() => setShowAuthorNote(true)}
+        >
+          <Icon name="footnote" size={13} /> {getAuthorName() || 'No author name set'}
+        </button>
         <button
           className={`btn btn-ghost btn-sm toolbar-toggle${commentMode ? ' active' : ''}`}
           title="Comment mode: a closer-to-print reading view, with editing off but selecting text to comment on still on"
@@ -464,8 +507,8 @@ export function EssayWorkspace({ essayId, onBack, embedded = false }: { essayId:
         <button className="btn btn-ghost btn-sm" onClick={() => setShowExport(true)}>
           <Icon name="export" /> <span className="btn-label">Export</span>
         </button>
-        <button className="btn btn-ghost btn-sm" title="Thanks/acknowledgements/disclosures for your author attribution in print exports" onClick={() => setShowAuthorNote(true)}>
-          <Icon name="footnote" /> <span className="btn-label">Author note</span>
+        <button className="btn btn-ghost btn-sm" title="Create a slideshow from this essay's current content" onClick={handleCreateSlideshow}>
+          <Icon name="slideshow" /> <span className="btn-label">Slideshow</span>
         </button>
         {!embedded && !isMobile && (
           <button
@@ -638,7 +681,7 @@ export function EssayWorkspace({ essayId, onBack, embedded = false }: { essayId:
 
         {splitEssayId && (
           <div className="split-pane-shell">
-            <EssayWorkspace essayId={splitEssayId} embedded onBack={() => setSplitEssayId(null)} />
+            <EssayWorkspace essayId={splitEssayId} embedded onBack={() => setSplitEssayId(null)} onOpenSlideshow={onOpenSlideshow} />
           </div>
         )}
 

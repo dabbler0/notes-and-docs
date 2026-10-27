@@ -19,6 +19,49 @@ export function findEnclosingSection($pos: ResolvedPos): { id: string; title: st
   return null
 }
 
+/**
+ * Guards against a real, confirmed-live ProseMirror default-behavior bug:
+ * pressing Backspace with the cursor at the very start of a section's own
+ * first body block normally falls through to `prosemirror-commands`' own
+ * default `joinBackward`, which treats the section's own title (`section_
+ * title`, right before that first block) and the block itself as two
+ * ordinary adjacent textblocks eligible to merge — both satisfy PM's own
+ * `isTextblock`/`textblockAt` checks, nothing in the schema says a title
+ * and a body paragraph shouldn't merge the way two paragraphs would. The
+ * observed result: the block's own text got pulled into the section's
+ * title (invisible for the essay's own root section — its title is
+ * hidden, `styles.css`'s own `.pm-editor-root .ProseMirror > section >
+ * .section-body > h2.section-title`) and the block itself disappeared,
+ * reading as "my first paragraph just vanished."
+ *
+ * A section's own title is a distinct field, not "the block before this
+ * one" the way two ordinary paragraphs are — Backspace reaching exactly
+ * this boundary should do nothing. Bound ahead of `keymap(baseKeymap)`'s
+ * own default Backspace chain (`PMEssayEditor.tsx`), so only this one
+ * specific boundary is intercepted; every other Backspace (including the
+ * common "merge this paragraph into the previous one" case) falls through
+ * to the normal behavior completely unchanged.
+ *
+ * Mirrors just the piece of `prosemirror-commands`' own (unexported)
+ * `findCutBefore` needed here: walk up from the cursor to the first
+ * ancestor depth where it isn't its parent's first child, and look at the
+ * sibling immediately before that point.
+ */
+export function preventJoinIntoSectionTitle(state: EditorState): boolean {
+  const { selection } = state
+  if (!(selection instanceof TextSelection) || !selection.empty) return false
+  const $cursor = selection.$cursor
+  if (!$cursor || $cursor.parentOffset > 0) return false
+  for (let d = $cursor.depth; d >= 1; d--) {
+    if ($cursor.node(d - 1).type.spec.isolating) return false
+    if ($cursor.index(d - 1) > 0) {
+      const before = $cursor.doc.resolve($cursor.before(d)).nodeBefore
+      return !!before && before.type.name === 'section_title'
+    }
+  }
+  return false
+}
+
 /** `citationHtml`'s own `note` formatting (`lib/bibtex.ts`) — an explicit note wins, otherwise `pageNote` derives "p. N" from a page number (empty if the source has no page numbers at all). Shared by every insertion command below, same as the old HTML-chip path shared it through `citationHtml` itself. */
 function resolveNote(source: Source, opts: { note?: string; page?: number }): string | null {
   const note = opts.note?.trim() || pageNote(source, opts.page)

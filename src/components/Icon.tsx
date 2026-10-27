@@ -51,6 +51,7 @@ export type IconName =
   | 'outdent'
   | 'demote'
   | 'outline'
+  | 'slideshow'
 
 const STROKE = { fill: 'none', stroke: 'currentColor', strokeWidth: 2, strokeLinecap: 'round' as const, strokeLinejoin: 'round' as const }
 
@@ -292,6 +293,16 @@ export function Icon({ name, size = 18, className }: { name: IconName; size?: nu
           <line x1="3" y1="6" x2="17" y2="6" />
           <line x1="7" y1="12" x2="21" y2="12" />
           <line x1="11" y1="18" x2="21" y2="18" />
+        </svg>
+      )
+    case 'slideshow':
+      // A projector screen on a stand — a plain rectangle (the slide) on a
+      // short center leg, distinct from 'outline'/'file' at a glance.
+      return (
+        <svg {...props} {...STROKE}>
+          <rect x="3" y="4" width="18" height="12" rx="1.5" />
+          <line x1="12" y1="16" x2="12" y2="20" />
+          <line x1="8" y1="20" x2="16" y2="20" />
         </svg>
       )
     case 'search':
