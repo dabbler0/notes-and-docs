@@ -11,7 +11,7 @@
 import JSZip from 'jszip'
 import { backend } from '../storage'
 import { ALL_MIGRATIONS } from '../storage/migrationRegistry'
-import type { Bookmark, Essay, EssayCommitEntry, EssayNode, GraveyardFragment, Project, QuoteBankEntry, Source, TodoItem } from '../models/types'
+import type { Bookmark, Essay, EssayCommitEntry, EssayNode, GraveyardFragment, Project, QuoteBankEntry, Slideshow, Source, TodoItem } from '../models/types'
 import type { StoredSourceContent } from '../models/sourcesRepo'
 
 const BACKUP_VERSION = 1
@@ -69,12 +69,14 @@ export interface BackupManifest {
   essayHistory?: EssayCommitEntry[]
   /** Every essay-grouping record (`Project` — see its own doc comment in `models/types.ts`). A genuinely new collection with no binary payload, so — like `essayHistory` — included directly here rather than as zip files. Absent in a backup made before projects existed. */
   projects?: Project[]
+  /** Every slide deck (`Slideshow` — see its own doc comment in `models/types.ts`). Same situation as `projects`: no binary payload, included directly. Absent in a backup made before slideshows existed. */
+  slideshows?: Slideshow[]
   /** Which blob ids the zip's blobs/ folder actually contains — a source can reference a pdfBlobId whose blob went missing locally, so this isn't just "every source's pdfBlobId." */
   blobs: string[]
 }
 
 export async function exportBackup(): Promise<Blob> {
-  const [essays, nodes, sources, quotes, graveyard, bookmarks, todos, sourceContentRecords, essayHistory, projects] = await Promise.all([
+  const [essays, nodes, sources, quotes, graveyard, bookmarks, todos, sourceContentRecords, essayHistory, projects, slideshows] = await Promise.all([
     backend.docs.list<Essay>('essays'),
     backend.docs.list<EssayNode>('nodes'),
     backend.docs.list<Source>('sources'),
@@ -89,6 +91,7 @@ export async function exportBackup(): Promise<Blob> {
     backend.docs.list<StoredSourceContent>('sourceContent'),
     backend.docs.list<EssayCommitEntry>('essayHistory'),
     backend.docs.list<Project>('projects'),
+    backend.docs.list<Slideshow>('slideshows'),
   ])
 
   const zip = new JSZip()
@@ -117,7 +120,7 @@ export async function exportBackup(): Promise<Blob> {
     sourceContent.push({ id: record.id, updatedAt: record.updatedAt })
   }
 
-  const manifest: BackupManifest = { version: BACKUP_VERSION, exportedAt: Date.now(), essays, nodes, sources, quotes, graveyard, bookmarks, todos, sourceContent, essayHistory, projects, blobs: blobIds }
+  const manifest: BackupManifest = { version: BACKUP_VERSION, exportedAt: Date.now(), essays, nodes, sources, quotes, graveyard, bookmarks, todos, sourceContent, essayHistory, projects, slideshows, blobs: blobIds }
   zip.file('data.json', JSON.stringify(manifest, null, 2))
   return zip.generateAsync({ type: 'blob' })
 }
@@ -134,6 +137,7 @@ export interface RestoreResult {
   sourceContent: number
   essayHistory: number
   projects: number
+  slideshows: number
   blobs: number
 }
 
@@ -154,7 +158,7 @@ export async function restoreBackup(file: File | Blob, opts: { mode: 'merge' | '
 
   if (opts.mode === 'replace') await clearAllLocalData()
 
-  const result: RestoreResult = { mode: opts.mode, essays: 0, nodes: 0, sources: 0, quotes: 0, graveyard: 0, bookmarks: 0, todos: 0, sourceContent: 0, essayHistory: 0, projects: 0, blobs: 0 }
+  const result: RestoreResult = { mode: opts.mode, essays: 0, nodes: 0, sources: 0, quotes: 0, graveyard: 0, bookmarks: 0, todos: 0, sourceContent: 0, essayHistory: 0, projects: 0, slideshows: 0, blobs: 0 }
 
   async function applyDocs<T extends { id: string; updatedAt?: number }>(collection: string, items: T[]): Promise<number> {
     let applied = 0
@@ -192,6 +196,7 @@ export async function restoreBackup(file: File | Blob, opts: { mode: 'merge' | '
   result.sourceContent = await applyDocs('sourceContent', sourceContentItems)
   result.essayHistory = await applyDocs('essayHistory', manifest.essayHistory ?? [])
   result.projects = await applyDocs('projects', manifest.projects ?? [])
+  result.slideshows = await applyDocs('slideshows', manifest.slideshows ?? [])
 
   for (const blobId of manifest.blobs) {
     const blobFile = zip.file(`blobs/${blobId}`)
@@ -225,7 +230,7 @@ export async function restoreBackup(file: File | Blob, opts: { mode: 'merge' | '
 }
 
 async function clearAllLocalData(): Promise<void> {
-  const [essays, nodes, sources, quotes, graveyard, bookmarks, todos, essayHistory, projects] = await Promise.all([
+  const [essays, nodes, sources, quotes, graveyard, bookmarks, todos, essayHistory, projects, slideshows] = await Promise.all([
     backend.docs.list<Essay>('essays'),
     backend.docs.list<EssayNode>('nodes'),
     backend.docs.list<Source>('sources'),
@@ -235,6 +240,7 @@ async function clearAllLocalData(): Promise<void> {
     backend.docs.list<TodoItem>('todos'),
     backend.docs.list<EssayCommitEntry>('essayHistory'),
     backend.docs.list<Project>('projects'),
+    backend.docs.list<Slideshow>('slideshows'),
   ])
   for (const e of essays) await backend.docs.delete('essays', e.id)
   for (const n of nodes) await backend.docs.delete('nodes', n.id)
@@ -269,6 +275,7 @@ async function clearAllLocalData(): Promise<void> {
     await backend.docs.delete('sources', s.id)
   }
   for (const p of projects) await backend.docs.delete('projects', p.id)
+  for (const d of slideshows) await backend.docs.delete('slideshows', d.id)
   for (const q of quotes) await backend.docs.delete('quotes', q.id)
   for (const g of graveyard) await backend.docs.delete('graveyard', g.id)
   for (const b of bookmarks) await backend.docs.delete('bookmarks', b.id)

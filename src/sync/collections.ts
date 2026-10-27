@@ -27,8 +27,12 @@
  * `CURRENT_REMOTE_SCHEMA_VERSION`'s own history below) it needed no remote
  * migration to introduce: there was never any pre-existing `projects` data
  * anywhere to transform, only a brand new, empty collection that starts
- * syncing cleanly from here on. */
-export const SYNCED_COLLECTIONS = ['essays', 'nodes', 'sources', 'sourceContent', 'essayHistory', 'projects', 'quotes', 'graveyard', 'bookmarks', 'todos'] as const
+ * syncing cleanly from here on.
+ *
+ * `slideshows` holds slide decks (`Slideshow` — see its own doc comment) —
+ * same situation as `projects`: a brand new collection with no prior shape
+ * to migrate from, not a split of an existing one. */
+export const SYNCED_COLLECTIONS = ['essays', 'nodes', 'sources', 'sourceContent', 'essayHistory', 'projects', 'quotes', 'graveyard', 'bookmarks', 'todos', 'slideshows'] as const
 export type SyncedCollection = (typeof SYNCED_COLLECTIONS)[number]
 
 /**

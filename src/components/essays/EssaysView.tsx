@@ -2,13 +2,15 @@ import { useEffect, useRef, useState } from 'preact/hooks'
 import { archiveEssay, createEssay, deleteEssay, listEssays, unarchiveEssay } from '../../models/essaysRepo'
 import { mergeEssays } from '../../models/essayHistoryRepo'
 import { groupEssays, removeEssayFromProject } from '../../models/projectsRepo'
+import { createSlideshow, deleteSlideshow, listSlideshows } from '../../models/slideshowsRepo'
 import { onSyncApplied } from '../../sync/syncEvents'
 import { confirmDialog } from '../../lib/confirm'
 import { promptDialog } from '../../lib/prompt'
 import { Icon } from '../Icon'
-import type { Essay } from '../../models/types'
+import type { Essay, Slideshow } from '../../models/types'
 import { EssayWorkspace } from './EssayWorkspace'
 import { ImportLatexDialog } from './ImportLatexDialog'
+import { SlideshowWorkspace } from '../slides/SlideshowWorkspace'
 
 type SortOrder = 'updated-desc' | 'updated-asc' | 'created-desc' | 'created-asc' | 'title-asc' | 'title-desc'
 
@@ -61,7 +63,10 @@ function buildRenderItems(visible: Essay[]): RenderItem[] {
 
 export function EssaysView() {
   const [essays, setEssays] = useState<Essay[]>([])
+  const [slideshows, setSlideshows] = useState<Slideshow[]>([])
   const [openId, setOpenId] = useState<string | null>(null)
+  const [openSlideshowId, setOpenSlideshowId] = useState<string | null>(null)
+  const [showNewMenu, setShowNewMenu] = useState(false)
   const [showImport, setShowImport] = useState(false)
   const [showArchived, setShowArchived] = useState(false)
   const [query, setQuery] = useState('')
@@ -94,6 +99,7 @@ export function EssaysView() {
 
   async function reload() {
     setEssays(await listEssays())
+    setSlideshows(await listSlideshows())
   }
 
   useEffect(() => {
@@ -158,6 +164,21 @@ export function EssaysView() {
     setOpenId(essay.id)
   }
 
+  async function handleCreateSlideshow() {
+    const title = await promptDialog('Title for the new slideshow?', { placeholder: 'Untitled slideshow', confirmLabel: 'Create' })
+    if (title === null) return
+    const deck = await createSlideshow(title.trim() || 'Untitled slideshow')
+    await reload()
+    setOpenSlideshowId(deck.id)
+  }
+
+  async function handleDeleteSlideshow(id: string, e: Event) {
+    e.stopPropagation()
+    if (!(await confirmDialog('Delete this slideshow?', { confirmLabel: 'Delete', danger: true }))) return
+    await deleteSlideshow(id)
+    reload()
+  }
+
   async function handleDelete(id: string, e: Event) {
     e.stopPropagation()
     if (!(await confirmDialog('Delete this essay and all its sections/history?', { confirmLabel: 'Delete', danger: true }))) return
@@ -214,6 +235,18 @@ export function EssaysView() {
     reload()
   }
 
+  if (openSlideshowId) {
+    return (
+      <SlideshowWorkspace
+        slideshowId={openSlideshowId}
+        onBack={() => {
+          setOpenSlideshowId(null)
+          reload()
+        }}
+      />
+    )
+  }
+
   if (openId) {
     // Refetches on the way back out, not just on this view's own mount —
     // `EssayWorkspace` has no separate `onChanged` callback the way
@@ -261,9 +294,42 @@ export function EssaysView() {
         <button className="btn btn-ghost" onClick={() => setShowImport(true)}>
           <Icon name="import" /> Import LaTeX project
         </button>
-        <button className="btn btn-primary" onClick={handleCreate}>
-          + New essay
-        </button>
+        <div style={{ position: 'relative' }}>
+          <button className="btn btn-primary" onClick={() => setShowNewMenu((v) => !v)}>
+            + New ▾
+          </button>
+          {showNewMenu && (
+            <>
+              {/* A plain full-viewport backdrop, same idiom `EssaysView` already
+                  uses for drag-and-drop/project-cluster dismissal elsewhere —
+                  closes the menu on any outside click without a document-level
+                  listener to add/remove. */}
+              <div style={{ position: 'fixed', inset: 0, zIndex: 9 }} onClick={() => setShowNewMenu(false)} />
+              <div className="card" style={{ position: 'absolute', right: 0, top: '100%', marginTop: 4, zIndex: 10, padding: 6, minWidth: 160 }}>
+                <button
+                  className="btn btn-ghost btn-sm"
+                  style={{ width: '100%', justifyContent: 'flex-start' }}
+                  onClick={() => {
+                    setShowNewMenu(false)
+                    handleCreate()
+                  }}
+                >
+                  Essay
+                </button>
+                <button
+                  className="btn btn-ghost btn-sm"
+                  style={{ width: '100%', justifyContent: 'flex-start' }}
+                  onClick={() => {
+                    setShowNewMenu(false)
+                    handleCreateSlideshow()
+                  }}
+                >
+                  Slideshow
+                </button>
+              </div>
+            </>
+          )}
+        </div>
       </div>
       {visible.length === 0 ? (
         <p className="empty-state">
@@ -364,6 +430,25 @@ export function EssaysView() {
             ),
           )}
         </div>
+      )}
+      {slideshows.length > 0 && (
+        <>
+          <div className="page-header" style={{ marginTop: 28 }}>
+            <h1>Slideshows</h1>
+          </div>
+          <div className="card-grid">
+            {slideshows.map((deck) => (
+              <div className="card" key={deck.id} onClick={() => setOpenSlideshowId(deck.id)}>
+                <span className="badge">Slideshow</span>
+                <div className="card-title">{deck.title}</div>
+                <div className="card-meta">Updated {new Date(deck.updatedAt).toLocaleString()}</div>
+                <button className="btn btn-sm btn-ghost btn-danger" style={{ alignSelf: 'flex-start' }} onClick={(ev) => handleDeleteSlideshow(deck.id, ev)}>
+                  Delete
+                </button>
+              </div>
+            ))}
+          </div>
+        </>
       )}
       {showImport && (
         <ImportLatexDialog

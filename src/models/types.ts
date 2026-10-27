@@ -440,6 +440,29 @@ export interface Project {
 }
 
 /**
+ * A slide deck — prototype sibling of `Essay`, same "one real ProseMirror
+ * document" shape (`doc` is `Node.fromJSON(slideSchema, ...)`-shaped JSON,
+ * see `lib/slideSchema.ts`) but with its own schema: a flat sequence of
+ * `slide` nodes (no section nesting, no comments/history/footnotes/math —
+ * deliberately out of scope for this first pass, see `SlideDeckEditor.tsx`'s
+ * own doc comment) instead of a recursive section tree. Kept as a wholly
+ * separate collection/type from `Essay` rather than a `kind` discriminant on
+ * it — the two have almost nothing in common downstream (different schema,
+ * no archiving/projects/split-view/graveyard for a deck) and a shared type
+ * would mean every essay-only field becomes conditionally meaningless on a
+ * slide deck, or vice versa.
+ */
+export interface Slideshow {
+  id: string
+  title: string
+  doc: unknown
+  createdAt: number
+  updatedAt: number
+  /** Tombstone — see the note on Source.deleted. */
+  deleted?: boolean
+}
+
+/**
  * Text cut from an essay via "Send to graveyard" rather than deleted
  * outright — kept around, attached to the essay it came from, so it can be
  * browsed and copied back in later instead of only living in undo history.

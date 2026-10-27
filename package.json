@@ -32,12 +32,14 @@
     "prosemirror-transform": "^1.12.4",
     "prosemirror-view": "^1.42.8",
     "qrcode": "^1.5.4",
+    "reveal.js": "^5.2.1",
     "tesseract.js": "^7.0.0"
   },
   "devDependencies": {
     "@preact/preset-vite": "^2.10.6",
     "@types/node": "^24.13.3",
     "@types/qrcode": "^1.5.6",
+    "@types/reveal.js": "^5.2.2",
     "firebase-tools": "^15.29.0",
     "jsdom": "^30.0.1",
     "playwright": "^1.62.1",

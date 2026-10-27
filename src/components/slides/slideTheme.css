@@ -1,0 +1,324 @@
+/**
+ * A from-scratch reveal.js theme, standing in for a `.css` theme file
+ * normally passed to reveal.js directly — deliberately mimicking the
+ * attached Beamer deck's own look (a muted crimson accent sampled directly
+ * off its PDF, a classic serif body, thin rules, a small-caps running
+ * head) rather than reusing one of reveal.js's own bundled themes
+ * (`dist/theme/*.css`), none of which read as "academic Beamer talk."
+ * Shared between the live editor (`SlideDeckEditor.tsx`'s per-slide boxes)
+ * and the presenter (`SlidePresenter.tsx`'s real reveal.js `<section>`s) so
+ * editing and presenting read as the same deck, not two different-looking
+ * surfaces.
+ */
+
+:root {
+  --slide-accent: #7c2a2a;
+  --slide-ink: #1a1a1a;
+  --slide-muted: #767676;
+  --slide-rule: #c9c4bd;
+  --slide-bg: #ffffff;
+}
+
+.reveal,
+.pm-slide-editor-root {
+  font-family: 'Palatino Linotype', 'Book Antiqua', Georgia, 'Times New Roman', serif;
+  color: var(--slide-ink);
+}
+
+/* No bundled reveal.js theme css is loaded (see this file's own doc
+   comment) — `reveal.css` alone supplies no slide background/text color of
+   its own, so both need setting here explicitly. */
+.reveal {
+  background: #222;
+  width: 100%;
+  height: 100%;
+  position: relative;
+}
+
+.reveal .slides section {
+  /* `.reveal .slides` itself gets a real pixel height from reveal.js's own
+     layout computation (its `width`/`height` config, scaled to fit the
+     viewport) — but a `<section>`, with no height of its own, only ever
+     shrink-wraps to its content's height by default, which is what a
+     bundled reveal.js theme's own base CSS normally fixes. Skipping every
+     bundled theme (see this file's own doc comment) means this has to be
+     set explicitly, or `.slide-inner`'s own `height: 100%` below has
+     nothing real to be 100% *of* — every slide would shrink-wrap to
+     whatever its own content's natural height happens to be instead of
+     filling the actual slide area. */
+  height: 100%;
+  background: var(--slide-bg);
+  color: var(--slide-ink);
+  box-shadow: 0 4px 24px rgba(0, 0, 0, 0.35);
+}
+
+/* ---- Shared slide-content look (both editor boxes and real reveal.js sections use these classes) ---- */
+
+.slide-inner {
+  width: 100%;
+  height: 100%;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  text-align: left;
+  padding: 48px 64px;
+}
+
+.slide-eyebrow {
+  font-size: 15px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--slide-accent);
+  margin-bottom: 6px;
+  min-height: 1.1em;
+}
+
+.slide-title-display {
+  font-size: 34px;
+  font-weight: 700;
+  margin: 0 0 14px;
+  color: var(--slide-ink);
+}
+
+.title-rule-thin {
+  border: none;
+  border-top: 1px solid var(--slide-rule);
+  margin: 0 0 28px;
+}
+
+.slide-body {
+  flex: 1;
+  font-size: 24px;
+  line-height: 1.45;
+  display: flex;
+  flex-direction: column;
+}
+
+.slide-body p {
+  margin: 0 0 16px;
+}
+
+.slide-body ul,
+.slide-body ol {
+  margin: 0 0 16px;
+  padding-left: 1.3em;
+}
+
+.slide-body li {
+  margin: 0 0 8px;
+}
+
+.slide-body ul li::marker {
+  color: var(--slide-accent);
+}
+
+.slide-body ol li::marker {
+  color: var(--slide-accent);
+  font-weight: 700;
+}
+
+.slide-body ul ul,
+.slide-body ol ul {
+  font-size: 0.85em;
+  color: var(--slide-muted);
+}
+
+.slide-body ul ul li::marker {
+  color: var(--slide-muted);
+}
+
+.slide-citation-footer {
+  margin-top: auto;
+  padding-top: 16px;
+  text-align: right;
+  font-size: 0.6em;
+  font-style: italic;
+  color: var(--slide-muted);
+}
+
+.slide-citation-missing,
+.pm-citation-unavailable {
+  color: #a23b2c;
+}
+
+/* ---- Title layout ---- */
+
+.slide-layout-title {
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+}
+
+.slide-layout-title .title-rule {
+  width: 420px;
+  max-width: 70%;
+  border-top: 1px solid var(--slide-rule);
+  margin: 0 auto 18px;
+}
+
+.slide-layout-title .deck-title {
+  font-size: 46px;
+  font-weight: 700;
+  margin: 0 0 18px;
+}
+
+.slide-layout-title .deck-subtitle {
+  font-style: italic;
+  color: var(--slide-accent);
+  font-size: 22px;
+  margin-bottom: 34px;
+}
+
+.slide-layout-title .deck-authors {
+  font-size: 16px;
+  color: var(--slide-muted);
+  line-height: 1.6;
+}
+
+/* ---- Section-header layout ---- */
+
+.slide-layout-section {
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+}
+
+.slide-layout-section .section-title-display {
+  font-size: 44px;
+  font-weight: 700;
+  color: var(--slide-ink);
+}
+
+/* ---- Bibliography layout ---- */
+
+.bibliography-body {
+  font-size: 18px;
+}
+
+.bibliography-entry {
+  margin: 0 0 14px;
+}
+
+/* ---- Reveal.js chrome: footer-style deck title + page number, matching the Beamer deck's own corner footer ---- */
+
+.reveal .slide-number,
+.reveal .controls,
+.reveal .progress {
+  color: var(--slide-accent);
+}
+
+/* ---- Editor-only chrome (slide boxes stacked in a scrolling column) ---- */
+
+.pm-slide-editor-root {
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+  padding: 24px;
+  max-width: 1040px;
+  margin: 0 auto;
+}
+
+.slide-edit-box {
+  position: relative;
+  border: 1px solid var(--border, #ddd);
+  border-radius: 8px;
+  background: var(--slide-bg);
+  aspect-ratio: 16 / 9;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.08);
+}
+
+.slide-edit-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  background: var(--surface-2, #f4f1ea);
+  border-bottom: 1px solid var(--border, #ddd);
+  font-family: system-ui, sans-serif;
+}
+
+.slide-edit-index {
+  font-size: 12px;
+  color: var(--ink-dim, #888);
+  margin-right: auto;
+}
+
+.slide-edit-layout {
+  font-size: 12px;
+  padding: 2px 4px;
+}
+
+.slide-edit-body {
+  flex: 1;
+  overflow: auto;
+  padding: 32px 42px;
+}
+
+.slide-edit-body h2.slide-title {
+  font-size: 28px;
+  font-weight: 700;
+  margin: 0 0 12px;
+  outline: none;
+}
+
+.slide-edit-body p {
+  font-size: 18px;
+  line-height: 1.45;
+  margin: 0 0 12px;
+  outline: none;
+}
+
+.slide-edit-body ul,
+.slide-edit-body ol {
+  font-size: 18px;
+  padding-left: 1.3em;
+}
+
+.slide-edit-body ul li::marker {
+  color: var(--slide-accent);
+}
+
+.slide-edit-body ol li::marker {
+  color: var(--slide-accent);
+  font-weight: 700;
+}
+
+.pm-slide-citation {
+  background: #f1e4e4;
+  color: var(--slide-accent);
+  padding: 1px 6px;
+  border-radius: 6px;
+  font-size: 0.85em;
+}
+
+/* ---- Full-screen presenter overlay ---- */
+
+.slide-presenter-overlay {
+  position: fixed;
+  inset: 0;
+  background: #000;
+  z-index: 1000;
+}
+
+.slide-presenter-close {
+  position: fixed;
+  top: 16px;
+  right: 16px;
+  z-index: 1001;
+  background: rgba(255, 255, 255, 0.12);
+  color: #fff;
+  border: none;
+  border-radius: 6px;
+  width: 36px;
+  height: 36px;
+  font-size: 16px;
+  cursor: pointer;
+}
+
+.slide-presenter-close:hover {
+  background: rgba(255, 255, 255, 0.24);
+}
