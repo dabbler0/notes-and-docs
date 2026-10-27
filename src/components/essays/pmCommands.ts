@@ -135,10 +135,15 @@ export function insertSourceLink(view: EditorView, source: Source, linkText: str
  * could promote a few selected words out of the middle of a sentence into
  * their own subsection). Selecting one or more complete paragraphs — the
  * overwhelmingly common real case — behaves identically either way.
+ *
+ * With nothing selected, there's no existing content to promote — instead
+ * this inserts a brand-new, empty subsection right at the cursor (see
+ * `insertEmptySection`, below), the same "new (sub*)section" gesture with
+ * nothing to carry over into it yet.
  */
 export function splitIntoSection(state: EditorState, dispatch?: (tr: Transaction) => void): boolean {
   const { $from, $to, empty } = state.selection
-  if (empty) return false
+  if (empty) return insertEmptySection(state, dispatch)
   const range = $from.blockRange($to)
   if (!range || range.parent.type.name !== 'section') return false
   if (dispatch) {
@@ -147,6 +152,34 @@ export function splitIntoSection(state: EditorState, dispatch?: (tr: Transaction
     const content = Fragment.from(titleNode).append(slice.content)
     const newSection = essaySchema.nodes.section.create({ id: id() }, content)
     const tr = state.tr.replaceWith(range.start, range.end, newSection)
+    dispatch(tr)
+  }
+  return true
+}
+
+/**
+ * Inserts a brand-new, empty `section` (empty title, one empty paragraph
+ * body) as a child of whichever section the cursor is currently in — right
+ * after the current top-level block of that section, same landing spot
+ * `insertDivider` (below) uses for a `slide_break`/`fragment_break`, and
+ * for the same reason: a direct child of the *nearest enclosing* section,
+ * never nested any deeper inside a list/blockquote the cursor happened to
+ * be in. The selection lands inside the new section's own (empty) title,
+ * ready to type a name for it immediately — mirroring `splitIntoSection`'s
+ * own "promote this selection" case, where the title is similarly left
+ * empty for the user to fill in right after.
+ */
+function insertEmptySection(state: EditorState, dispatch?: (tr: Transaction) => void): boolean {
+  const $from = state.selection.$from
+  const containerDepth = nearestSectionDepth($from)
+  const pos = $from.after(containerDepth + 1)
+  if (dispatch) {
+    const titleNode = essaySchema.nodes.section_title.create()
+    const body = essaySchema.nodes.paragraph.create()
+    const newSection = essaySchema.nodes.section.create({ id: id() }, Fragment.from(titleNode).append(Fragment.from(body)))
+    const tr = state.tr.insert(pos, newSection)
+    // Inside the section (+1) and inside its own (empty) title (+1) — ready to type a name for it right away.
+    tr.setSelection(TextSelection.near(tr.doc.resolve(pos + 2), 1))
     dispatch(tr)
   }
   return true

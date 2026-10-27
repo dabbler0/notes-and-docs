@@ -9,6 +9,7 @@ import { Node as PMNode } from 'prosemirror-model'
 import { essaySchema } from '../../lib/pmSchema'
 import { saveEssay } from '../../models/essaysRepo'
 import { createCitationView, SectionView, FootnoteView, createMathView, SlideBreakView, FragmentBreakView } from './pmNodeViews'
+import { splitIntoSection } from './pmCommands'
 import { createCommentPlugin } from './pmCommentPlugin'
 import { createCitationArrowPlugin } from './pmCitationArrowPlugin'
 import { createActiveSectionPlugin } from './pmActiveSectionPlugin'
@@ -187,6 +188,13 @@ export function PMEssayEditor({
             onCiteShortcutRef.current?.()
             return true
           },
+          // New (sub)section — `splitIntoSection`'s own doc comment covers
+          // both the "promote the current selection" and "nothing
+          // selected: insert a new empty one at the cursor" cases; this is
+          // the keyboard counterpart to the toolbar's own "Section" button
+          // (`EssayWorkspace.tsx`/`SlideshowWorkspace.tsx`), shared here
+          // since both editors are this same component.
+          'Mod-Shift-Enter': splitIntoSection,
         }),
         createCitationArrowPlugin(),
         keymap(baseKeymap),

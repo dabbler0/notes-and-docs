@@ -132,7 +132,7 @@ export function SlideshowWorkspace({ slideshowId, onBack }: { slideshowId: strin
             <span className="toolbar-divider" />
             <button
               className="btn btn-sm icon-btn-toolbar"
-              title="Split into subsection: select some text first — it becomes that subsection's own title, with the rest of the selection as its body"
+              title="New (sub)section (Mod-Shift-Enter): with text selected, promotes it into a subsection; with nothing selected, inserts a new empty one at the cursor"
               onMouseDown={(e) => e.preventDefault()}
               onClick={() => runCommand(splitIntoSection)}
             >

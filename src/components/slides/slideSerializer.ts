@@ -21,6 +21,13 @@ import type { Source } from '../../models/types'
  * Each slide's own title comes from "the immediate section header" — the
  * innermost `section` enclosing its `slide_break` — never from a
  * slide-specific title field, since this schema has none.
+ *
+ * Slide boundaries aren't only explicit `slide_break`s: body text from two
+ * different sections is never allowed onto the same slide (`walkNode`'s own
+ * `acc.sectionId` check, below) — the first time a section's own content is
+ * reached, a fresh slide starts automatically, exactly as if a `slide_break`
+ * had been typed right there, even with no real divider in the document at
+ * all.
  */
 
 function escapeHtml(s: string): string {
@@ -217,8 +224,9 @@ function renderBibliographySlide(citedIds: string[], sources: Map<string, Source
   }
 }
 
-/** One slide's worth of state accumulated while walking the document — flushed into a `SerializedSlide` by `renderSlide` whenever the next `slide_break` (or the end of the document) is reached. `title`/`eyebrow` are read once, at `slide_break` time, off whichever `section`(s) enclose it right then (see `serializeDeck`'s own `SectionContext`) — never typed directly. */
+/** One slide's worth of state accumulated while walking the document — flushed into a `SerializedSlide` by `renderSlide` whenever the next `slide_break` (or the end of the document) is reached. `title`/`eyebrow` are read once, at slide-start time, off whichever `section`(s) enclose it right then (see `serializeDeck`'s own `SectionContext`) — never typed directly. `sectionId` is the id of whichever `section` directly owns this slide's body content (the root section's own id for content sitting directly in it, not in any subsection) — `walkNode` compares this against each new block's own owning section to enforce that no two sections' body text ever land on the same slide, even with no explicit `slide_break` between them. */
 interface SlideAccumulator {
+  sectionId: string
   eyebrow: string
   title: string
   body: BodyEntry[]
@@ -255,8 +263,8 @@ export function serializeDeck(doc: PMNode, sources: Map<string, Source>, deckTit
     slides.push(renderSlide(acc, sources))
   }
 
-  function startSlide(ctx: SectionContext | null) {
-    acc = { eyebrow: ctx?.eyebrow ?? '', title: ctx?.title ?? '', body: [] }
+  function startSlide(ctx: SectionContext | null, sectionId: string) {
+    acc = { sectionId, eyebrow: ctx?.eyebrow ?? '', title: ctx?.title ?? '', body: [] }
     fragmentIndex = -1
   }
 
@@ -272,23 +280,32 @@ export function serializeDeck(doc: PMNode, sources: Map<string, Source>, deckTit
     } else {
       ctx = { title, eyebrow: parentCtx.eyebrow }
     }
+    const ownerId: string = section.attrs.id
     section.forEach((child, _offset, index) => {
       if (index === 0) return // section_title itself, already consumed above
-      walkNode(child, ctx)
+      walkNode(child, ctx, ownerId)
     })
   }
 
-  function walkNode(node: PMNode, ctx: SectionContext | null) {
+  function walkNode(node: PMNode, ctx: SectionContext | null, ownerId: string) {
     if (node.type.name === 'section') {
       walkSection(node, ctx, false)
       return
     }
     if (node.type.name === 'slide_break') {
       flush()
-      startSlide(ctx)
+      startSlide(ctx, ownerId)
       return
     }
-    if (!acc) startSlide(ctx) // defensive: content before any slide_break at all
+    // No explicit `slide_break` here, but this block belongs to a different
+    // section than whatever the current slide's own body content belongs
+    // to (including "no slide started yet at all") — per the "no two
+    // sections' body text ever share a slide" rule, that's itself a slide
+    // boundary, exactly as if a `slide_break` had been typed right here.
+    if (!acc || acc.sectionId !== ownerId) {
+      flush()
+      startSlide(ctx, ownerId)
+    }
     if (node.type.name === 'fragment_break') {
       fragmentIndex++
       return
@@ -296,7 +313,7 @@ export function serializeDeck(doc: PMNode, sources: Map<string, Source>, deckTit
     acc!.body.push({ block: node, fragmentIndex })
   }
 
-  // The document's own single root section (`pmSchema.ts`'s `doc: { content: 'section' }`) is just a wrapper, same as the essay editor's own convention — its own title never becomes any slide's title/eyebrow; its direct children are walked as top-level content.
+  // The document's own single root section (`pmSchema.ts`'s `doc: { content: 'section' }`) is just a wrapper, same as the essay editor's own convention — its own title never becomes any slide's title/eyebrow; its direct children are walked as top-level content, owned (for the "never share a slide" check above) by the root section's own id.
   walkSection(doc.firstChild!, null, true)
   flush()
 

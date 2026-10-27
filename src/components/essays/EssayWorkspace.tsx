@@ -554,7 +554,12 @@ export function EssayWorkspace({ essayId, onBack, embedded = false }: { essayId:
                   <Icon name="link" />
                 </button>
                 <span className="toolbar-divider" />
-                <button className="btn btn-sm icon-btn-toolbar" title="Split selection into subsection" onMouseDown={(e) => e.preventDefault()} onClick={() => run(splitIntoSection)}>
+                <button
+                  className="btn btn-sm icon-btn-toolbar"
+                  title="New (sub)section (Mod-Shift-Enter): with text selected, promotes it into a subsection; with nothing selected, inserts a new empty one at the cursor"
+                  onMouseDown={(e) => e.preventDefault()}
+                  onClick={() => run(splitIntoSection)}
+                >
                   <Icon name="subsection" />
                 </button>
                 <button
