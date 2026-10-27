@@ -150,7 +150,7 @@ export function EssayHistoryPanel({
         <div className="version-split-pane frozen-pane" style={{ marginTop: 10 }}>
           <div className="version-split-label">Preview</div>
           <div className="pm-history-preview">
-            <PMEssayEditor essay={previewEssay} sources={sources ?? new Map()} commentsHolder={previewCommentsHolder} editable={false} />
+            <PMEssayEditor record={previewEssay} sources={sources ?? new Map()} commentsHolder={previewCommentsHolder} editable={false} />
           </div>
         </div>
       )}

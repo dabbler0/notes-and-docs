@@ -5,13 +5,12 @@
  * off its PDF, a classic serif body, thin rules, a small-caps running
  * head) rather than reusing one of reveal.js's own bundled themes
  * (`dist/theme/*.css`), none of which read as "academic Beamer talk."
- * Shared between the live editor (`SlideDeckEditor.tsx`'s one continuous
- * flow of prose, broken up by slide/fragment dividers) and the presenter
- * (`SlidePresenter.tsx`'s real reveal.js `<section>`s) so editing and
- * presenting read as the same deck, not two different-looking surfaces —
- * though only the `.slide-*`/`.deck-*`/`.bibliography-*` classes below are
- * actually shared; the editor itself never renders a real `.slide-inner`
- * box, since there's no per-slide box at all to put one in.
+ *
+ * Presenter-only (`SlidePresenter.tsx`'s real reveal.js `<section>`s) — the
+ * live editing surface is now the real essay editor (`PMEssayEditor.tsx`),
+ * reused directly per the "slideshow format is a strict extension of the
+ * essay format" rewrite, so it uses `styles.css`'s own `.pm-editor-root`
+ * rules, not this file.
  */
 
 :root {
@@ -22,8 +21,7 @@
   --slide-bg: #ffffff;
 }
 
-.reveal,
-.pm-slide-editor-root {
+.reveal {
   font-family: 'Palatino Linotype', 'Book Antiqua', Georgia, 'Times New Roman', serif;
   color: var(--slide-ink);
 }
@@ -172,27 +170,6 @@
   line-height: 1.6;
 }
 
-/* ---- Section-header layout ---- */
-
-.slide-layout-section {
-  align-items: center;
-  justify-content: center;
-  text-align: center;
-}
-
-.slide-layout-section .section-title-display {
-  font-size: 44px;
-  font-weight: 700;
-  color: var(--slide-ink);
-}
-
-.slide-layout-section .section-extra-body {
-  flex: none;
-  margin-top: 20px;
-  font-size: 20px;
-  color: var(--slide-muted);
-}
-
 /* ---- Bibliography layout ---- */
 
 .bibliography-body {
@@ -209,177 +186,6 @@
 .reveal .controls,
 .reveal .progress {
   color: var(--slide-accent);
-}
-
-/* ---- Editor-only chrome: one continuous flow of prose, same reading
-   width/line-height idiom as `.pm-editor-root .ProseMirror` (styles.css)
-   uses for the essay editor, broken up only by the slide/fragment
-   dividers below — never a grid of boxes. */
-
-/* Reserved on the right so a divider's own controls (`.divider-controls`,
-   below) always have somewhere to sit without overlapping real text on an
-   adjacent line — every divider positions its controls at `right:
-   -$(divider-margin)`, i.e. exactly into this same reserved strip. */
-.pm-slide-editor-root {
-  --divider-margin: 40px;
-  outline: none;
-  font-size: 18px;
-  line-height: 1.6;
-  max-width: 760px;
-  margin: 0 auto;
-  padding: 24px var(--divider-margin) 24px 24px;
-}
-
-/* Sections exist to drive auto-titling (`slideSchema.ts`'s own doc
-   comment), not to look like a document outline — a plain, modest
-   heading for `section_title` is the entire visual footprint, no
-   numbering the way the essay editor's own sections get. The collapse
-   chevron and "demote" button (`SlideSectionView`, pmSlideNodeViews.ts),
-   imported wholesale from the essay editor, *are* real editing chrome
-   though: `padding-left` clears the chevron sitting in the left margin,
-   `padding-right` (matching `.pm-slide-editor-root`'s own
-   `--divider-margin`) clears the demote button hanging in the right one,
-   same reserved-strip idea the dividers above already use. */
-.pm-slide-editor-root section {
-  position: relative;
-  margin: 4px 0;
-  padding: 0 var(--divider-margin) 0 22px;
-}
-
-.pm-slide-editor-root section section {
-  margin-left: 10px;
-}
-
-.pm-slide-editor-root section > .section-chevron {
-  position: absolute;
-  left: 0;
-  top: 0.15em;
-}
-
-.pm-slide-editor-root section > .section-demote {
-  position: absolute;
-  right: calc(-1 * var(--divider-margin));
-  top: 0.15em;
-}
-
-.pm-slide-editor-root section.collapsed > .slide-section-body > :not(:first-child) {
-  display: none;
-}
-
-.pm-slide-editor-root h2.slide-section-title {
-  font-size: 1.05em;
-  font-weight: 700;
-  color: var(--slide-accent);
-  margin: 1.5em 0 0.3em;
-  outline: none;
-}
-
-.pm-slide-editor-root p {
-  margin: 0 0 12px;
-}
-
-.pm-slide-editor-root ul,
-.pm-slide-editor-root ol {
-  padding-left: 1.3em;
-  margin: 0 0 12px;
-}
-
-.pm-slide-editor-root ul li::marker {
-  color: var(--slide-accent);
-}
-
-.pm-slide-editor-root ol li::marker {
-  color: var(--slide-accent);
-  font-weight: 700;
-}
-
-.pm-slide-editor-root blockquote {
-  margin: 1em 0;
-  padding: 0.6em 1em;
-  border-left: 3px solid var(--slide-accent);
-  border-radius: 0 6px 6px 0;
-  background: var(--surface-2, #f4f1ea);
-}
-
-.pm-slide-citation {
-  background: #f1e4e4;
-  color: var(--slide-accent);
-  padding: 1px 6px;
-  border-radius: 6px;
-  font-size: 0.85em;
-}
-
-/* A `slide_break`'s/`fragment_break`'s own in-flow divider
-   (`pmSlideNodeViews.ts`) — just a bare horizontal rule, exactly as tall
-   as the rule itself (`height: 0`, the rule is the node's own border, not
-   a label row with padding around it) — with its controls
-   (`.divider-controls`) hanging off the right end into the margin
-   `.pm-slide-editor-root` already reserves for them, never sitting inline
-   in the flow. */
-.slide-break-divider,
-.fragment-break-divider {
-  position: relative;
-  height: 0;
-}
-
-.slide-break-divider {
-  border-top: 2px solid var(--slide-accent);
-  margin: 26px 0;
-}
-
-.fragment-break-divider {
-  border-top: 1px dashed var(--slide-rule);
-  margin: 14px 0;
-}
-
-.divider-controls {
-  position: absolute;
-  top: 50%;
-  right: calc(-1 * var(--divider-margin));
-  transform: translateY(-50%);
-  display: flex;
-  align-items: center;
-  gap: 2px;
-  font-family: system-ui, sans-serif;
-}
-
-/* The layout picker only actually appears on hover (or while focused,
-   mid-interaction) — otherwise invisible, taking no visual weight at all,
-   so a plain thin rule is genuinely all that's seen while just reading/
-   typing. The delete button stays small but always visible; both already
-   have clearance from real body text via `.pm-slide-editor-root`'s own
-   right padding, so neither ever needs to be hover-gated just to avoid
-   overlapping it. */
-.divider-controls select {
-  font-size: 11px;
-  padding: 1px 2px;
-  opacity: 0;
-  pointer-events: none;
-  transition: opacity 0.1s ease;
-}
-
-.slide-break-divider:hover .divider-controls select,
-.divider-controls select:focus {
-  opacity: 1;
-  pointer-events: auto;
-}
-
-.divider-delete {
-  border: none;
-  background: transparent;
-  color: var(--ink-dim, #888);
-  cursor: pointer;
-  font-size: 11px;
-  line-height: 1;
-  padding: 3px 5px;
-  border-radius: 4px;
-  opacity: 0.6;
-}
-
-.divider-delete:hover {
-  background: rgba(0, 0, 0, 0.06);
-  color: var(--slide-accent);
-  opacity: 1;
 }
 
 /* ---- Full-screen presenter overlay ---- */

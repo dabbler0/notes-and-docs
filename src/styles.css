@@ -3428,6 +3428,51 @@ select {
   background: var(--surface-2);
 }
 
+/* `slide_break`/`fragment_break` dividers (`pmNodeViews.ts`'s shared
+   `createDividerView`) — a slideshow-only pair of nodes living directly in
+   the shared essay schema (`pmSchema.ts`'s own doc comment): a plain
+   horizontal rule with a delete button hanging off the right margin,
+   reusing the exact same reserved gutter every `section` already keeps
+   clear for its own demote button (`section`'s own `padding-right: 28px`,
+   above) — the essay editor never renders either node at all (an essay
+   document has none), so this adds no visual weight there. */
+.pm-editor-root .ProseMirror .slide-break-divider,
+.pm-editor-root .ProseMirror .fragment-break-divider {
+  position: relative;
+  height: 0;
+}
+
+.pm-editor-root .ProseMirror .slide-break-divider {
+  border-top: 2px solid var(--ink-dim);
+  margin: 26px 0;
+}
+
+.pm-editor-root .ProseMirror .fragment-break-divider {
+  border-top: 1px dashed var(--border);
+  margin: 14px 0;
+}
+
+.pm-editor-root .ProseMirror .divider-delete {
+  position: absolute;
+  right: 0;
+  top: 50%;
+  transform: translateY(-50%);
+  border: none;
+  background: transparent;
+  color: var(--ink-dim);
+  cursor: pointer;
+  font-size: 11px;
+  line-height: 1;
+  padding: 3px 5px;
+  border-radius: 4px;
+  opacity: 0.6;
+}
+
+.pm-editor-root .ProseMirror .divider-delete:hover {
+  background: var(--surface-2);
+  opacity: 1;
+}
+
 /* A list item's own paragraph(s) keep the same default spacing as any
    other paragraph when read on their own, but back-to-back items in the
    same list should read as one list, separated only by their own line

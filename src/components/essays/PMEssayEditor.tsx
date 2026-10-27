@@ -8,12 +8,27 @@ import { splitListItem, sinkListItem } from 'prosemirror-schema-list'
 import { Node as PMNode } from 'prosemirror-model'
 import { essaySchema } from '../../lib/pmSchema'
 import { saveEssay } from '../../models/essaysRepo'
-import { createCitationView, SectionView, FootnoteView, createMathView } from './pmNodeViews'
+import { createCitationView, SectionView, FootnoteView, createMathView, SlideBreakView, FragmentBreakView } from './pmNodeViews'
 import { createCommentPlugin } from './pmCommentPlugin'
 import { createCitationArrowPlugin } from './pmCitationArrowPlugin'
 import { createActiveSectionPlugin } from './pmActiveSectionPlugin'
 import { createMathInputRules, createListInputRules } from './pmInputRules'
 import type { Essay, Source } from '../../models/types'
+
+/**
+ * The minimal shape `PMEssayEditor` actually needs from whatever record it's
+ * editing — just enough to load/save a PM `doc`. `Essay` already satisfies
+ * this structurally, so every existing caller keeps type-checking unchanged;
+ * `Slideshow` (`SlideshowWorkspace.tsx`) satisfies it too, which is the whole
+ * point: a slideshow's document is a strict superset of the essay format
+ * (`pmSchema.ts`'s own doc comment on `slide_break`/`fragment_break`), so the
+ * *editor* for it can be exactly this same component, not a reimplementation.
+ */
+export interface PMDocHost {
+  id: string
+  doc?: unknown
+  updatedAt: number
+}
 
 /**
  * The real ProseMirror editing surface for a migrated essay (`Essay.doc`) —
@@ -81,7 +96,7 @@ function stripCollapsedAttrs(node: unknown): unknown {
 }
 
 export function PMEssayEditor({
-  essay,
+  record,
   sources,
   commentsHolder,
   onAnchorClick,
@@ -90,11 +105,12 @@ export function PMEssayEditor({
   onViewReady,
   onViewDestroyed,
   onDocChanged,
+  onSave,
 }: {
-  essay: Essay
+  record: PMDocHost
   /** Live source map (`listSources()`, loaded once by `EssayWorkspace.tsx`) — closed over by the `citation` NodeView so every citation always renders fresh from current bibtex, never a cached label (see `pmSchema.ts`'s own doc comment). */
   sources: Map<string, Source>
-  /** A stable holder for the live `essay` (same "never replaced, always re-pointed at the current object" shape as `sources` above) — closed over once by `pmCommentPlugin.ts`'s own decorations, which need `essay.comments` fresh on every rebuild, not whatever it was the moment this `EditorView` first mounted. */
+  /** A stable holder for the live essay (same "never replaced, always re-pointed at the current object" shape as `sources` above) — closed over once by `pmCommentPlugin.ts`'s own decorations, which need `essay.comments` fresh on every rebuild, not whatever it was the moment this `EditorView` first mounted. Left permanently `null` for a non-essay `record` (a slideshow) — there's no comment feature for those, so the plugin's own anchor lookups just never find anything to decorate. */
   commentsHolder: { current: Essay | null }
   /** A `comment_anchor` mark (margin) or an inline comment's own preview chip was clicked — see `pmCommentPlugin.ts`'s own doc comment for why this is the one place both route through. */
   onAnchorClick?: (commentId: string) => void
@@ -104,6 +120,8 @@ export function PMEssayEditor({
   onViewReady?: (view: EditorView) => void
   onViewDestroyed?: () => void
   onDocChanged?: (doc: PMNode) => void
+  /** How to persist `record` once its `doc`/`updatedAt` have already been updated in place — defaults to `saveEssay`, so every existing essay caller (which never passes this) keeps its exact old behavior. `SlideshowWorkspace.tsx` passes `saveSlideshow` instead. */
+  onSave?: (record: PMDocHost) => void
 }) {
   const containerRef = useRef<HTMLDivElement>(null)
   // Read live by `editable: () => editableRef.current` below, rather than
@@ -126,17 +144,20 @@ export function PMEssayEditor({
   const onCiteShortcutRef = useRef(onCiteShortcut)
   onCiteShortcutRef.current = onCiteShortcut
 
+  const onSaveRef = useRef(onSave)
+  onSaveRef.current = onSave
+
   useEffect(() => {
     if (!containerRef.current) return
-    const doc = PMNode.fromJSON(essaySchema, essay.doc)
+    const doc = PMNode.fromJSON(essaySchema, record.doc)
     let saveTimer: number | undefined
 
     function scheduleSave(newDoc: PMNode) {
       window.clearTimeout(saveTimer)
       saveTimer = window.setTimeout(() => {
-        essay.doc = stripCollapsedAttrs(newDoc.toJSON())
-        essay.updatedAt = Date.now()
-        saveEssay(essay)
+        record.doc = stripCollapsedAttrs(newDoc.toJSON())
+        record.updatedAt = Date.now()
+        ;(onSaveRef.current ?? ((r) => saveEssay(r as Essay)))(record)
       }, 500)
     }
 
@@ -185,6 +206,8 @@ export function PMEssayEditor({
         footnote: (node) => new FootnoteView(node),
         math_inline: (node, v, getPos) => new (createMathView(false))(node, v, getPos as () => number | undefined),
         math_block: (node, v, getPos) => new (createMathView(true))(node, v, getPos as () => number | undefined),
+        slide_break: (node, v, getPos) => new SlideBreakView(node, v, getPos as () => number | undefined),
+        fragment_break: (node, v, getPos) => new FragmentBreakView(node, v, getPos as () => number | undefined),
       },
       dispatchTransaction(tr) {
         const newState = view.state.apply(tr)
@@ -203,14 +226,14 @@ export function PMEssayEditor({
       view.destroy()
       onViewDestroyed?.()
     }
-    // Only `essay.id` — a new EditorView per essay switch, never per
+    // Only `record.id` — a new EditorView per record switch, never per
     // unrelated prop/state change. `editable` itself is read live off
     // `editableRef` (see above) specifically so "Comment mode" can flip it
     // without a remount; `sources`/`commentsHolder` are the same kind of
     // stable, mutated-in-place container, read fresh by the NodeViews/
     // plugin that close over them rather than re-closed-over per render.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [essay.id])
+  }, [record.id])
 
   return <div className="pm-editor-root" ref={containerRef} />
 }

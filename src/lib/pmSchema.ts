@@ -269,6 +269,40 @@ const nodes: Record<string, NodeSpec> = {
       return ['math-block', { 'data-latex': node.attrs.latex }]
     },
   },
+
+  /**
+   * A slideshow's own slide boundary — makes this same schema a strict
+   * superset of the essay format: any essay doc is already a valid
+   * slideshow doc, just one with no `slide_break`/`fragment_break`
+   * dividers in it (and so, when presented, one single slide). A plain
+   * atom with no content of its own and no layout attr — every slide
+   * other than the deck's own auto-generated title/bibliography slides
+   * (`slideSerializer.ts`, never real document content) shares one plain
+   * layout, so there is nothing for a divider to choose between. Lands as
+   * a direct child of whichever `section` encloses it (`pmCommands.ts`'s
+   * `insertSlideBreak`) — `slideSerializer.ts` reads each slide's own
+   * title from that same enclosing section.
+   */
+  slide_break: {
+    group: 'block',
+    atom: true,
+    attrs: { id: { default: null } },
+    parseDOM: [{ tag: 'slide-break', getAttrs: (dom) => ({ id: (dom as HTMLElement).getAttribute('data-id') }) }],
+    toDOM(node) {
+      return ['slide-break', { 'data-id': node.attrs.id }]
+    },
+  },
+
+  /** A reveal.js fragment boundary within one slide — everything between two of these (or between a `slide_break`/`fragment_break` and the next one) reveals together as one incremental step when presenting (`slideSerializer.ts`); no effect at all on an essay rendered any other way. */
+  fragment_break: {
+    group: 'block',
+    atom: true,
+    attrs: { id: { default: null } },
+    parseDOM: [{ tag: 'fragment-break', getAttrs: (dom) => ({ id: (dom as HTMLElement).getAttribute('data-id') }) }],
+    toDOM(node) {
+      return ['fragment-break', { 'data-id': node.attrs.id }]
+    },
+  },
 }
 
 const marks: Record<string, MarkSpec> = {

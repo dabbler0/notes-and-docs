@@ -9,8 +9,8 @@ import type { Source } from '../../models/types'
  * mounted fresh every time (no incremental reveal.js `sync()` calls against
  * live edits; this prototype only ever presents a point-in-time snapshot,
  * reopened after any further editing), via the same imperative
- * mount/destroy-in-an-effect shape `SlideDeckEditor.tsx`/`PMEssayEditor.tsx`
- * already use for their own underlying library instances.
+ * mount/destroy-in-an-effect shape `PMEssayEditor.tsx` already uses for its
+ * own underlying library instance.
  */
 export function SlidePresenter({
   doc,

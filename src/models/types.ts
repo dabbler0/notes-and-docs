@@ -440,17 +440,15 @@ export interface Project {
 }
 
 /**
- * A slide deck — prototype sibling of `Essay`, same "one real ProseMirror
- * document" shape (`doc` is `Node.fromJSON(slideSchema, ...)`-shaped JSON,
- * see `lib/slideSchema.ts`) but with its own schema: a flat sequence of
- * `slide` nodes (no section nesting, no comments/history/footnotes/math —
- * deliberately out of scope for this first pass, see `SlideDeckEditor.tsx`'s
- * own doc comment) instead of a recursive section tree. Kept as a wholly
- * separate collection/type from `Essay` rather than a `kind` discriminant on
- * it — the two have almost nothing in common downstream (different schema,
- * no archiving/projects/split-view/graveyard for a deck) and a shared type
- * would mean every essay-only field becomes conditionally meaningless on a
- * slide deck, or vice versa.
+ * A slide deck — its own entity, distinct from `Essay` (renderable to a
+ * reveal.js presentation, never to PDF/Markdown/LaTeX; no archiving/
+ * projects/split-view/graveyard), but `doc` here is literally
+ * `essaySchema`-shaped JSON (`lib/pmSchema.ts`) — the slideshow document
+ * format is a strict extension of the essay format: every essay could in
+ * principle be interpreted as a slideshow, just one with no `slide_break`/
+ * `fragment_break` dividers in it. This is why `PMEssayEditor.tsx` (the real
+ * essay editor) is reused directly as the slideshow editing surface too,
+ * with no separate schema/editor of its own.
  */
 export interface Slideshow {
   id: string

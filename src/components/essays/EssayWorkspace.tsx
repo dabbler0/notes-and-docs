@@ -614,7 +614,7 @@ export function EssayWorkspace({ essayId, onBack, embedded = false }: { essayId:
           <div className={`editor-scroll doc-scroll${commentMode ? ' comment-mode' : ''}`} ref={docScrollRef} onMouseUp={handleMouseUpForComments}>
             <PMEssayEditor
               key={docGeneration}
-              essay={essay}
+              record={essay}
               sources={sources}
               commentsHolder={commentsHolder}
               onAnchorClick={handleAnchorClick}

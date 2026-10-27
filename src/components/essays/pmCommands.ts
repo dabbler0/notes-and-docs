@@ -304,3 +304,57 @@ export function insertHtmlAtSelection(view: EditorView, html: string): void {
   const slice = PMDOMParser.fromSchema(essaySchema).parseSlice(dom, { preserveWhitespace: true })
   view.dispatch(view.state.tr.replaceSelection(slice))
 }
+
+/** The depth of the nearest enclosing `section` around `$pos` — always ≥1 (the essay/slideshow document's own single root section, at depth 1) since, unlike a plain `doc`, `pmSchema.ts`'s `doc` content expression (`"section"`) guarantees every position is inside at least that one. Shared by `insertDivider` below: a `slide_break`/`fragment_break` always lands as a direct child of this container, never nested any deeper inside a list/blockquote the cursor happened to be in, and never lifted out past it — `slideSerializer.ts` reads a slide's own title off of exactly whichever section(s) enclose its own divider. */
+function nearestSectionDepth($pos: ResolvedPos): number {
+  for (let d = $pos.depth; d >= 1; d--) {
+    if ($pos.node(d).type.name === 'section') return d
+  }
+  return 1
+}
+
+/**
+ * Inserts a divider node (`slide_break`/`fragment_break`) right after the
+ * current top-level block of its own nearest enclosing section. A
+ * content-less atom's own post-insert selection isn't safe to depend on —
+ * `replaceSelectionWith`'s own choice of where the selection lands next can
+ * end up a `NodeSelection` *on* the atom just inserted rather than a
+ * `TextSelection` after it (confirmed live in the previous slide-specific
+ * prototype this replaces: typing right after inserting a divider was
+ * silently replacing the divider itself with the first character typed).
+ * Always following the break with a real, explicit empty paragraph of our
+ * own — only when one doesn't already immediately follow — and placing the
+ * selection inside *that* sidesteps the question entirely.
+ */
+function insertDivider(view: EditorView, breakNode: PMNode): void {
+  const { state } = view
+  const containerDepth = nearestSectionDepth(state.selection.$from)
+  const pos = state.selection.$from.after(containerDepth + 1)
+  const tr = state.tr.insert(pos, breakNode)
+  const afterBreak = pos + breakNode.nodeSize
+  const followingNode = tr.doc.nodeAt(afterBreak)
+  if (!followingNode || !followingNode.isTextblock) {
+    tr.insert(afterBreak, essaySchema.nodes.paragraph.create())
+  }
+  tr.setSelection(TextSelection.near(tr.doc.resolve(afterBreak + 1), 1))
+  view.dispatch(tr)
+  view.focus()
+}
+
+/** "Slide change" — a slideshow-only operation (see `pmSchema.ts`'s own doc comment on `slide_break`); the toolbar/keyboard-shortcut counterpart to typing plain prose. See `insertDivider`'s own doc comment for exactly where it lands. */
+export function insertSlideBreak(view: EditorView): void {
+  insertDivider(view, essaySchema.nodes.slide_break.create({ id: id() }))
+}
+
+/** "Fragmented reveal": everything from here to the next divider (of either kind) becomes the next reveal step when presenting (see `slideSerializer.ts`). See `insertDivider`'s own doc comment for exactly where it lands. */
+export function insertFragmentBreak(view: EditorView): void {
+  insertDivider(view, essaySchema.nodes.fragment_break.create({ id: id() }))
+}
+
+/** Deletes the divider at `pos` outright — since neither divider has any content of its own, this is already the entire "merge this slide into the previous one" / "drop this fragment boundary" operation. */
+export function deleteDivider(view: EditorView, pos: number): void {
+  const { state } = view
+  const node = state.doc.nodeAt(pos)
+  if (!node) return
+  view.dispatch(state.tr.delete(pos, pos + node.nodeSize))
+}

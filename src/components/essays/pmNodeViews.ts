@@ -3,7 +3,7 @@ import { TextSelection } from 'prosemirror-state'
 import type { EditorView, NodeView, ViewMutationRecord } from 'prosemirror-view'
 import { citationLabelOpen } from '../../lib/bibtex'
 import { renderMathHtml } from '../../lib/math'
-import { demoteSectionAt } from './pmCommands'
+import { demoteSectionAt, deleteDivider } from './pmCommands'
 import type { Source } from '../../models/types'
 
 /** The one thing `pmCitationArrowPlugin.ts` needs back out of a citation's own DOM — there's no public ProseMirror API to recover a NodeView instance from a position, only its DOM (`view.nodeDOM`), so `CitationView` stashes itself on its own root element for that plugin to read via `getCitationView` below. */
@@ -406,6 +406,57 @@ export class SectionView implements NodeView {
     return !this.contentDOM.contains(record.target as Node)
   }
 }
+
+/**
+ * A `slide_break`/`fragment_break`'s own in-flow divider — just a plain
+ * horizontal rule with a delete button hanging off its right margin, same
+ * reserved-gutter idea `SectionView`'s own demote button already uses
+ * (see styles.css). No label text, no layout picker — see `pmSchema.ts`'s
+ * own doc comment on why these two atoms carry nothing beyond a stable
+ * `id`. Shared by both node types; `tagName`/`className`/`deleteTitle`
+ * are each one's only real difference.
+ */
+function createDividerView(tagName: 'slide-break' | 'fragment-break', className: string, deleteTitle: string): new (node: PMNode, view: EditorView, getPos: () => number | undefined) => NodeView {
+  return class DividerView implements NodeView {
+    dom: HTMLElement
+    node: PMNode
+    view: EditorView
+    getPos: () => number | undefined
+
+    constructor(node: PMNode, view: EditorView, getPos: () => number | undefined) {
+      this.node = node
+      this.view = view
+      this.getPos = getPos
+      this.dom = document.createElement('div')
+      this.dom.className = className
+      this.dom.contentEditable = 'false'
+
+      const deleteBtn = document.createElement('button')
+      deleteBtn.type = 'button'
+      deleteBtn.className = 'divider-delete'
+      deleteBtn.title = deleteTitle
+      deleteBtn.textContent = '✕'
+      deleteBtn.addEventListener('mousedown', (e) => e.preventDefault())
+      deleteBtn.addEventListener('click', (e) => {
+        e.preventDefault()
+        const pos = this.getPos()
+        if (pos != null) deleteDivider(this.view, pos)
+      })
+      this.dom.appendChild(deleteBtn)
+    }
+
+    update(node: PMNode) {
+      return node.type.name === tagName.replace('-', '_')
+    }
+
+    stopEvent() {
+      return true
+    }
+  }
+}
+
+export const SlideBreakView = createDividerView('slide-break', 'slide-break-divider', 'Remove this slide break (merges into the previous slide)')
+export const FragmentBreakView = createDividerView('fragment-break', 'fragment-break-divider', 'Remove this fragment break')
 
 /**
  * `footnote` NodeView — ported from the standalone prototype's own

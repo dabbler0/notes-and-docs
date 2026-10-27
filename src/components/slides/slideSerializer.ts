@@ -3,19 +3,24 @@ import { citationLabel, formatCitation } from '../../lib/bibtex'
 import type { Source } from '../../models/types'
 
 /**
- * Turns a `slideSchema`-shaped PM document — one continuous flow of prose,
- * organized into (possibly nested) `section`s and broken into slides/
- * fragments by `slide_break`/`fragment_break` divider nodes (see
- * `slideSchema.ts`'s own doc comment) — into an array of reveal.js
+ * Turns an `essaySchema`-shaped PM document (`pmSchema.ts`) — a slideshow's
+ * doc is a strict superset of the essay format, just one that also uses
+ * `slide_break`/`fragment_break` dividers — into an array of reveal.js
  * `<section>` inner-HTML strings, one per slide, in order, for
  * `SlidePresenter.tsx` to drop straight into `.reveal > .slides`.
  *
- * Not `DOMSerializer.fromSchema` for the same reason `pmCommands.ts`'s own
- * `sliceToHtml` doesn't try to reuse one for a `citation` node either — a
- * citation's schema-level `toDOM` is just its bare attrs; the real,
- * human-readable label only exists by resolving `sourceId` against the
- * live `sources` map, which a generic schema-driven serializer has no way
- * to do on its own.
+ * Per explicit scope: special formatting only for `blockquote` and
+ * `citation`; everything else in the essay vocabulary (marks, lists,
+ * footnotes, math, links) gets a generic, reasonable passthrough rather
+ * than its own bespoke slide treatment. Not `DOMSerializer.fromSchema` for
+ * the same reason `pmCommands.ts`'s own `sliceToHtml` doesn't try to reuse
+ * one for a `citation` node either — a citation's schema-level `toDOM` is
+ * just its bare attrs; the real, human-readable label only exists by
+ * resolving `sourceId` against the live `sources` map.
+ *
+ * Each slide's own title comes from "the immediate section header" — the
+ * innermost `section` enclosing its `slide_break` — never from a
+ * slide-specific title field, since this schema has none.
  */
 
 function escapeHtml(s: string): string {
@@ -32,10 +37,17 @@ function renderInline(node: PMNode, sources: Map<string, Source>): string {
         else if (mark.type.name === 'em') text = `<em>${text}</em>`
         else if (mark.type.name === 'underline') text = `<u>${text}</u>`
         else if (mark.type.name === 'quote_inline') text = `<q>${text}</q>`
+        else if (mark.type.name === 'link' || mark.type.name === 'source_link') text = `<a href="${escapeHtml(mark.attrs.href ?? '#')}">${text}</a>`
       }
       out += text
     } else if (child.type.name === 'citation') {
       out += renderCitationLabel(child, sources)
+    } else if (child.type.name === 'hard_break') {
+      out += '<br/>'
+    } else if (child.type.name === 'footnote') {
+      out += `<sup class="slide-footnote-marker">${renderInline(child, sources)}</sup>`
+    } else if (child.type.name === 'math_inline') {
+      out += `<span class="slide-math">${escapeHtml(child.attrs.latex ?? '')}</span>`
     }
   })
   return out
@@ -47,7 +59,7 @@ function renderCitationLabel(citation: PMNode, sources: Map<string, Source>): st
   return `<span class="slide-citation-label">${escapeHtml(citationLabel(source.bibtex, citation.attrs.note ?? undefined))}</span>`
 }
 
-/** A paragraph whose only real content is a single `citation` node — any surrounding text has to be whitespace-only, since `slideCommands.ts`'s own `insertCitation` always leaves a trailing space after one for normal mid-sentence typing to continue into — rendered as the slide's own bottom-aligned attribution line rather than as ordinary body text. */
+/** A paragraph whose only real content is a single `citation` node — any surrounding text has to be whitespace-only, since `pmCommands.ts`'s own `insertCitation` always leaves a trailing space after one for normal mid-sentence typing to continue into — rendered as the slide's own bottom-aligned attribution line rather than as ordinary body text. */
 function citationOnlyParagraph(node: PMNode): PMNode | null {
   if (node.type.name !== 'paragraph') return null
   let found: PMNode | null = null
@@ -59,6 +71,7 @@ function citationOnlyParagraph(node: PMNode): PMNode | null {
   return ok ? found : null
 }
 
+/** Generic passthrough rendering for everything except blockquote/citation — paragraphs, lists, math blocks. Nested `section`s shouldn't normally appear inside a slide's own body (a section boundary is where the enclosing title/eyebrow comes from — see `walkSection` below), but render their content plainly rather than silently dropping it if one ever does. */
 function renderBodyBlock(node: PMNode, sources: Map<string, Source>): string {
   switch (node.type.name) {
     case 'paragraph':
@@ -78,6 +91,16 @@ function renderBodyBlock(node: PMNode, sources: Map<string, Source>): string {
       node.forEach((li) => (items += renderListItem(li, sources)))
       const start = node.attrs.order && node.attrs.order !== 1 ? ` start="${node.attrs.order}"` : ''
       return `<ol${start}>${items}</ol>`
+    }
+    case 'math_block':
+      return `<div class="slide-math slide-math-block">${escapeHtml(node.attrs.latex ?? '')}</div>`
+    case 'section': {
+      let inner = ''
+      node.forEach((child, _o, index) => {
+        if (index === 0) return
+        inner += renderBodyBlock(child, sources)
+      })
+      return inner
     }
     default:
       return ''
@@ -196,24 +219,12 @@ function renderBibliographySlide(citedIds: string[], sources: Map<string, Source
 
 /** One slide's worth of state accumulated while walking the document — flushed into a `SerializedSlide` by `renderSlide` whenever the next `slide_break` (or the end of the document) is reached. `title`/`eyebrow` are read once, at `slide_break` time, off whichever `section`(s) enclose it right then (see `serializeDeck`'s own `SectionContext`) — never typed directly. */
 interface SlideAccumulator {
-  layout: string
   eyebrow: string
   title: string
   body: BodyEntry[]
 }
 
 function renderSlide(acc: SlideAccumulator, sources: Map<string, Source>): SerializedSlide {
-  if (acc.layout === 'section') {
-    return {
-      html: `<div class="slide-inner slide-layout-section">
-        <h1 class="section-title-display">${escapeHtml(acc.title)}</h1>
-        ${acc.body.length ? `<div class="slide-body section-extra-body">${renderBody(acc.body, sources)}</div>` : ''}
-      </div>`,
-      notes: '',
-    }
-  }
-
-  // 'content' (default) and anything unrecognized.
   return {
     html: `<div class="slide-inner slide-layout-content">
       <div class="slide-eyebrow">${escapeHtml(acc.eyebrow)}</div>
@@ -225,7 +236,7 @@ function renderSlide(acc: SlideAccumulator, sources: Map<string, Source>): Seria
   }
 }
 
-/** What a `slide_break` reads its own title/eyebrow off of — the *innermost* enclosing section's own title is the slide's title; the *outermost* (top-level) enclosing section's own title, numbered, is the running "eyebrow" shown on every slide inside it. Both empty for a slide_break that isn't inside any section at all. */
+/** What a `slide_break` reads its own title/eyebrow off of — the *immediate* enclosing section's own title is the slide's title; the *outermost* enclosing section under the document's own single root — the root itself is just a wrapper, same convention as the essay editor's own un-numbered root — gets a numbered "eyebrow" shown on every slide inside it. Both empty for a slide_break sitting directly in the root with no other section around it. */
 interface SectionContext {
   title: string
   eyebrow: string
@@ -244,21 +255,23 @@ export function serializeDeck(doc: PMNode, sources: Map<string, Source>, deckTit
     slides.push(renderSlide(acc, sources))
   }
 
-  function startSlide(layout: string, ctx: SectionContext | null) {
-    acc = { layout, eyebrow: ctx?.eyebrow ?? '', title: ctx?.title ?? '', body: [] }
+  function startSlide(ctx: SectionContext | null) {
+    acc = { eyebrow: ctx?.eyebrow ?? '', title: ctx?.title ?? '', body: [] }
     fragmentIndex = -1
   }
 
-  function walkSection(section: PMNode, parentCtx: SectionContext | null) {
+  /** `isTopLevel`: true for the document's own single root section (unnumbered, title discarded — just a wrapper, same convention `SectionView`'s own number-path logic already uses for it), false for every section nested inside it (gets a title; its own *direct* children of the root additionally start a new numbered eyebrow). */
+  function walkSection(section: PMNode, parentCtx: SectionContext | null, isRoot: boolean) {
     const title = section.firstChild?.textContent ?? ''
-    let eyebrow: string
-    if (!parentCtx) {
+    let ctx: SectionContext | null
+    if (isRoot) {
+      ctx = null
+    } else if (!parentCtx) {
       topSectionCount++
-      eyebrow = `${toRoman(topSectionCount)}. ${title.toUpperCase()}`
+      ctx = { title, eyebrow: `${toRoman(topSectionCount)}. ${title.toUpperCase()}` }
     } else {
-      eyebrow = parentCtx.eyebrow
+      ctx = { title, eyebrow: parentCtx.eyebrow }
     }
-    const ctx: SectionContext = { title, eyebrow }
     section.forEach((child, _offset, index) => {
       if (index === 0) return // section_title itself, already consumed above
       walkNode(child, ctx)
@@ -267,15 +280,15 @@ export function serializeDeck(doc: PMNode, sources: Map<string, Source>, deckTit
 
   function walkNode(node: PMNode, ctx: SectionContext | null) {
     if (node.type.name === 'section') {
-      walkSection(node, ctx)
+      walkSection(node, ctx, false)
       return
     }
     if (node.type.name === 'slide_break') {
       flush()
-      startSlide((node.attrs.layout as string) || 'content', ctx)
+      startSlide(ctx)
       return
     }
-    if (!acc) startSlide('content', ctx) // defensive: content before any slide_break at all
+    if (!acc) startSlide(ctx) // defensive: content before any slide_break at all
     if (node.type.name === 'fragment_break') {
       fragmentIndex++
       return
@@ -283,7 +296,8 @@ export function serializeDeck(doc: PMNode, sources: Map<string, Source>, deckTit
     acc!.body.push({ block: node, fragmentIndex })
   }
 
-  doc.forEach((node) => walkNode(node, null))
+  // The document's own single root section (`pmSchema.ts`'s `doc: { content: 'section' }`) is just a wrapper, same as the essay editor's own convention — its own title never becomes any slide's title/eyebrow; its direct children are walked as top-level content.
+  walkSection(doc.firstChild!, null, true)
   flush()
 
   slides.push(renderBibliographySlide(citedIds, sources))

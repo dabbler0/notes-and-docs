@@ -1,6 +1,6 @@
 import { backend } from '../storage'
 import { id } from '../lib/id'
-import { initialSlideDeckJson } from '../lib/slideSchema'
+import { sectionTitleJson } from '../lib/pmMigration'
 import type { Slideshow } from './types'
 
 const SLIDESHOWS = 'slideshows'
@@ -19,11 +19,19 @@ export async function saveSlideshow(deck: Slideshow): Promise<void> {
   await backend.docs.put(SLIDESHOWS, deck)
 }
 
-/** A brand-new deck's own document starts with one empty top-level section — the deck's own title slide is generated automatically from `Slideshow.title` itself plus the globally configured author name (`lib/authorPreference.ts`), never stored as real document content (see `slideSchema.ts`'s own doc comment). */
+/**
+ * A brand-new deck's own document — the exact same shape `essaysRepo.ts`'s
+ * own `createEssay` seeds (a single root `section` with an empty title and
+ * one empty paragraph), since a slideshow's doc is a strict extension of the
+ * essay format (`pmSchema.ts`'s own doc comment on `slide_break`). The
+ * deck's own title slide is generated automatically from `Slideshow.title`
+ * itself plus the globally configured author name (`lib/authorPreference.ts`),
+ * never stored as real document content.
+ */
 export async function createSlideshow(title: string): Promise<Slideshow> {
   const now = Date.now()
   const deckTitle = title || 'Untitled slideshow'
-  const doc = initialSlideDeckJson(id())
+  const doc = { type: 'doc', content: [{ type: 'section', attrs: { id: id() }, content: [sectionTitleJson(''), { type: 'paragraph' }] }] }
   const deck: Slideshow = { id: id(), title: deckTitle, doc, createdAt: now, updatedAt: now }
   await backend.docs.put(SLIDESHOWS, deck)
   return deck
