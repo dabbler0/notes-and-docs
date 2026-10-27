@@ -484,19 +484,6 @@ export function EssayWorkspace({
           onBlur={saveEssayTitle}
           style={{ border: 'none', outline: 'none', background: 'transparent', fontSize: 16, fontWeight: 700, flex: 1, minWidth: 0 }}
         />
-        {/* Shows the globally-configured author name (lib/authorPreference.ts)
-            — not editable in place, just a launcher for the real editable
-            field, this essay's own `authorNote` (AuthorNoteDialog). The chip
-            itself has nothing to type into; clicking anywhere on it opens
-            that modal, same as the toolbar button this replaces used to. */}
-        <button
-          className="chip"
-          style={{ border: 'none', cursor: 'pointer', flexShrink: 0 }}
-          title="Thanks/acknowledgements/disclosures for your author attribution in print exports — click to edit"
-          onClick={() => setShowAuthorNote(true)}
-        >
-          <Icon name="footnote" size={13} /> {getAuthorName() || 'No author name set'}
-        </button>
         <button
           className={`btn btn-ghost btn-sm toolbar-toggle${commentMode ? ' active' : ''}`}
           title="Comment mode: a closer-to-print reading view, with editing off but selecting text to comment on still on"
@@ -660,6 +647,25 @@ export function EssayWorkspace({
           </div>
 
           <div className={`editor-scroll doc-scroll${commentMode ? ' comment-mode' : ''}`} ref={docScrollRef} onMouseUp={handleMouseUpForComments}>
+            {/* Shows the globally-configured author name
+                (lib/authorPreference.ts) — not editable in place, just a
+                launcher for the real editable field, this essay's own
+                `authorNote` (AuthorNoteDialog). The chip itself has nothing
+                to type into; clicking anywhere on it opens that modal.
+                Sits right above the document's own body text, aligned to
+                the same reading column `.pm-editor-root .ProseMirror`
+                itself uses (max-width: 760px), rather than in the topbar —
+                it reads as part of the essay, not as a toolbar control. */}
+            <div style={{ maxWidth: 760, marginBottom: 14 }}>
+              <button
+                className="chip"
+                style={{ border: 'none', cursor: 'pointer' }}
+                title="Thanks/acknowledgements/disclosures for your author attribution in print exports — click to edit"
+                onClick={() => setShowAuthorNote(true)}
+              >
+                <Icon name="footnote" size={13} /> {getAuthorName() || 'No author name set'}
+              </button>
+            </div>
             <PMEssayEditor
               key={docGeneration}
               record={essay}
