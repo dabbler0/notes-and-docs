@@ -1,6 +1,6 @@
 import { backend } from '../storage'
 import { id } from '../lib/id'
-import { slideJson } from '../lib/slideSchema'
+import { initialSlideDeckJson } from '../lib/slideSchema'
 import type { Slideshow } from './types'
 
 const SLIDESHOWS = 'slideshows'
@@ -23,7 +23,7 @@ export async function saveSlideshow(deck: Slideshow): Promise<void> {
 export async function createSlideshow(title: string): Promise<Slideshow> {
   const now = Date.now()
   const deckTitle = title || 'Untitled slideshow'
-  const doc = { type: 'doc', content: [slideJson(deckTitle, 'title', id())] }
+  const doc = initialSlideDeckJson(deckTitle, id())
   const deck: Slideshow = { id: id(), title: deckTitle, doc, createdAt: now, updatedAt: now }
   await backend.docs.put(SLIDESHOWS, deck)
   return deck

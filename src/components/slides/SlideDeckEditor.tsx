@@ -9,19 +9,21 @@ import { inputRules, wrappingInputRule } from 'prosemirror-inputrules'
 import { Node as PMNode } from 'prosemirror-model'
 import { slideSchema } from '../../lib/slideSchema'
 import { saveSlideshow } from '../../models/slideshowsRepo'
-import { SlideView } from './pmSlideNodeViews'
+import { SlideBreakView, FragmentBreakView } from './pmSlideNodeViews'
 import { createSlideCitationView } from './pmSlideCitationView'
-import { insertSlideAfter, findEnclosingSlide } from './slideCommands'
+import { insertSlideBreak, insertFragmentBreak } from './slideCommands'
 import type { Slideshow, Source } from '../../models/types'
 
 /**
  * The slide-deck counterpart of `PMEssayEditor.tsx` — same "mount/tear down
- * a real `EditorView` imperatively, debounced whole-doc save" shape, scaled
- * down to what a first prototype actually needs: no comments, no commit
- * history, no footnotes/math. Those are essay-only concerns this deck
- * schema deliberately never grew (see `slideSchema.ts`'s own doc comment);
- * if slide decks turn out to want any of them later, they can be added the
- * same way the essay editor already has them, not by sharing this component
+ * a real `EditorView` imperatively, debounced whole-doc save" shape, but
+ * editing one continuous flow of prose (see `slideSchema.ts`'s own doc
+ * comment) rather than a slide-per-box layout — deliberately as close to
+ * the essay editor's own feel as this schema allows. No comments, commit
+ * history, or footnotes/math yet; those are essay-only concerns this deck
+ * schema hasn't grown (see `slideSchema.ts`'s own doc comment) — if a
+ * slide deck turns out to want any of them later, they can be added the
+ * same way the essay editor already has them, not by sharing a component
  * with it.
  */
 export function SlideDeckEditor({
@@ -69,10 +71,18 @@ export function SlideDeckEditor({
           'Mod-i': toggleMark(slideSchema.marks.em),
           'Mod-u': toggleMark(slideSchema.marks.underline),
           Enter: splitListItem(slideSchema.nodes.list_item),
+          // "Slide change" / "fragmented reveal" as real keyboard commands
+          // against the live document, the PM-native counterpart of the
+          // slash-commands idea floated while discussing this feature —
+          // real divider nodes instead of parsed text syntax.
           'Mod-Enter': (editorState, dispatch, view) => {
             if (!view) return false
-            const enclosing = findEnclosingSlide(view)
-            insertSlideAfter(view, enclosing?.pos ?? null)
+            insertSlideBreak(view)
+            return true
+          },
+          'Mod-Shift-Enter': (editorState, dispatch, view) => {
+            if (!view) return false
+            insertFragmentBreak(view)
             return true
           },
           Tab: (editorState, dispatch, view) => {
@@ -104,7 +114,8 @@ export function SlideDeckEditor({
     const view = new EditorView(containerRef.current, {
       state,
       nodeViews: {
-        slide: (node, v, getPos) => new SlideView(node, v, getPos as () => number | undefined),
+        slide_break: (node, v, getPos) => new SlideBreakView(node, v, getPos as () => number | undefined),
+        fragment_break: (node, v, getPos) => new FragmentBreakView(node, v, getPos as () => number | undefined),
         citation: (node) => new (createSlideCitationView(sources))(node),
       },
       dispatchTransaction(tr) {

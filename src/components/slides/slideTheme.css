@@ -5,10 +5,13 @@
  * off its PDF, a classic serif body, thin rules, a small-caps running
  * head) rather than reusing one of reveal.js's own bundled themes
  * (`dist/theme/*.css`), none of which read as "academic Beamer talk."
- * Shared between the live editor (`SlideDeckEditor.tsx`'s per-slide boxes)
- * and the presenter (`SlidePresenter.tsx`'s real reveal.js `<section>`s) so
- * editing and presenting read as the same deck, not two different-looking
- * surfaces.
+ * Shared between the live editor (`SlideDeckEditor.tsx`'s one continuous
+ * flow of prose, broken up by slide/fragment dividers) and the presenter
+ * (`SlidePresenter.tsx`'s real reveal.js `<section>`s) so editing and
+ * presenting read as the same deck, not two different-looking surfaces —
+ * though only the `.slide-*`/`.deck-*`/`.bibliography-*` classes below are
+ * actually shared; the editor itself never renders a real `.slide-inner`
+ * box, since there's no per-slide box at all to put one in.
  */
 
 :root {
@@ -190,6 +193,13 @@
   color: var(--slide-ink);
 }
 
+.slide-layout-section .section-extra-body {
+  flex: none;
+  margin-top: 20px;
+  font-size: 20px;
+  color: var(--slide-muted);
+}
+
 /* ---- Bibliography layout ---- */
 
 .bibliography-body {
@@ -208,83 +218,45 @@
   color: var(--slide-accent);
 }
 
-/* ---- Editor-only chrome (slide boxes stacked in a scrolling column) ---- */
+/* ---- Editor-only chrome: one continuous flow of prose, same reading
+   width/line-height idiom as `.pm-editor-root .ProseMirror` (styles.css)
+   uses for the essay editor, broken up only by the slide/fragment
+   dividers below — never a grid of boxes. */
 
 .pm-slide-editor-root {
-  display: flex;
-  flex-direction: column;
-  gap: 24px;
-  padding: 24px;
-  max-width: 1040px;
+  outline: none;
+  font-size: 18px;
+  line-height: 1.6;
+  max-width: 760px;
   margin: 0 auto;
+  padding: 24px;
 }
 
-.slide-edit-box {
-  position: relative;
-  border: 1px solid var(--border, #ddd);
-  border-radius: 8px;
-  background: var(--slide-bg);
-  aspect-ratio: 16 / 9;
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
-  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.08);
-}
-
-.slide-edit-header {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 6px 10px;
-  background: var(--surface-2, #f4f1ea);
-  border-bottom: 1px solid var(--border, #ddd);
-  font-family: system-ui, sans-serif;
-}
-
-.slide-edit-index {
-  font-size: 12px;
-  color: var(--ink-dim, #888);
-  margin-right: auto;
-}
-
-.slide-edit-layout {
-  font-size: 12px;
-  padding: 2px 4px;
-}
-
-.slide-edit-body {
-  flex: 1;
-  overflow: auto;
-  padding: 32px 42px;
-}
-
-.slide-edit-body h2.slide-title {
-  font-size: 28px;
-  font-weight: 700;
+.pm-slide-editor-root p {
   margin: 0 0 12px;
-  outline: none;
 }
 
-.slide-edit-body p {
-  font-size: 18px;
-  line-height: 1.45;
-  margin: 0 0 12px;
-  outline: none;
-}
-
-.slide-edit-body ul,
-.slide-edit-body ol {
-  font-size: 18px;
+.pm-slide-editor-root ul,
+.pm-slide-editor-root ol {
   padding-left: 1.3em;
+  margin: 0 0 12px;
 }
 
-.slide-edit-body ul li::marker {
+.pm-slide-editor-root ul li::marker {
   color: var(--slide-accent);
 }
 
-.slide-edit-body ol li::marker {
+.pm-slide-editor-root ol li::marker {
   color: var(--slide-accent);
   font-weight: 700;
+}
+
+.pm-slide-editor-root blockquote {
+  margin: 1em 0;
+  padding: 0.6em 1em;
+  border-left: 3px solid var(--slide-accent);
+  border-radius: 0 6px 6px 0;
+  background: var(--surface-2, #f4f1ea);
 }
 
 .pm-slide-citation {
@@ -293,6 +265,68 @@
   padding: 1px 6px;
   border-radius: 6px;
   font-size: 0.85em;
+}
+
+/* A `slide_break`'s own in-flow divider (`SlideBreakView`, pmSlideNodeViews.ts) — a full-width labeled rule with its own layout picker, sitting right in the reading flow between two slides' worth of prose. */
+.slide-break-divider {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 28px 0 20px;
+  padding: 6px 10px;
+  background: var(--surface-2, #f4f1ea);
+  border-top: 2px solid var(--slide-accent);
+  border-bottom: 2px solid var(--slide-accent);
+  border-radius: 4px;
+  font-family: system-ui, sans-serif;
+  font-size: 12px;
+}
+
+.slide-break-label {
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  color: var(--slide-accent);
+  margin-right: auto;
+}
+
+.slide-break-divider select {
+  font-size: 12px;
+  padding: 2px 4px;
+}
+
+.slide-break-delete,
+.fragment-break-delete {
+  border: none;
+  background: transparent;
+  color: var(--ink-dim, #888);
+  cursor: pointer;
+  font-size: 12px;
+  padding: 2px 6px;
+  border-radius: 4px;
+}
+
+.slide-break-delete:hover,
+.fragment-break-delete:hover {
+  background: rgba(0, 0, 0, 0.06);
+  color: var(--slide-accent);
+}
+
+/* A `fragment_break`'s own divider — a thin dashed rule, much quieter than a slide break's since it only marks a reveal step within the current slide, not a new one. */
+.fragment-break-divider {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 14px 0;
+  padding: 2px 10px;
+  border-top: 1px dashed var(--slide-rule);
+  font-family: system-ui, sans-serif;
+  font-size: 11px;
+}
+
+.fragment-break-label {
+  color: var(--slide-muted);
+  margin-right: auto;
 }
 
 /* ---- Full-screen presenter overlay ---- */

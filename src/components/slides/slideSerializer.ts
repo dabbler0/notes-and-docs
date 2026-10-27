@@ -3,17 +3,18 @@ import { citationLabel, formatCitation } from '../../lib/bibtex'
 import type { Source } from '../../models/types'
 
 /**
- * Turns a `slideSchema`-shaped PM document into an array of reveal.js
- * `<section>` inner-HTML strings — one per slide, in order — for
- * `SlidePresenter.tsx` to drop straight into `.reveal > .slides`. This is
- * deliberately a bespoke small walker, not `DOMSerializer.fromSchema` (the
- * way `pmCommands.ts`'s own `sliceToHtml` uses it for essays): a
- * `citation` node's schema-level `toDOM` is just its bare attrs (see
- * `slideSchema.ts`) — the real, human-readable label only exists by
- * resolving `sourceId` against the live `sources` map, exactly the same
- * "always re-derived, never baked in" rule `pmNodeViews.ts`'s `CitationView`
- * already follows for the live editor — so every citation has to be
- * resolved here too, which a generic schema-driven serializer has no way
+ * Turns a `slideSchema`-shaped PM document — one continuous flow of
+ * prose, broken into slides/fragments by `slide_break`/`fragment_break`
+ * divider nodes rather than by any real nesting (see `slideSchema.ts`'s
+ * own doc comment) — into an array of reveal.js `<section>` inner-HTML
+ * strings, one per slide, in order, for `SlidePresenter.tsx` to drop
+ * straight into `.reveal > .slides`.
+ *
+ * Not `DOMSerializer.fromSchema` for the same reason `pmCommands.ts`'s own
+ * `sliceToHtml` doesn't try to reuse one for a `citation` node either — a
+ * citation's schema-level `toDOM` is just its bare attrs; the real,
+ * human-readable label only exists by resolving `sourceId` against the
+ * live `sources` map, which a generic schema-driven serializer has no way
  * to do on its own.
  */
 
@@ -30,6 +31,7 @@ function renderInline(node: PMNode, sources: Map<string, Source>): string {
         if (mark.type.name === 'strong') text = `<strong>${text}</strong>`
         else if (mark.type.name === 'em') text = `<em>${text}</em>`
         else if (mark.type.name === 'underline') text = `<u>${text}</u>`
+        else if (mark.type.name === 'quote_inline') text = `<q>${text}</q>`
       }
       out += text
     } else if (child.type.name === 'citation') {
@@ -45,7 +47,7 @@ function renderCitationLabel(citation: PMNode, sources: Map<string, Source>): st
   return `<span class="slide-citation-label">${escapeHtml(citationLabel(source.bibtex, citation.attrs.note ?? undefined))}</span>`
 }
 
-/** A paragraph whose only real content is a single `citation` node — any surrounding text has to be whitespace-only, since `slideCommands.ts`'s own `insertCitation` always leaves a trailing space after one for normal mid-sentence typing to continue into — rendered as the slide's own bottom-aligned attribution line (see `renderBody`) rather than as ordinary body text, the same visual role the attached Beamer deck's own small citation lines under a quote play. */
+/** A paragraph whose only real content is a single `citation` node — any surrounding text has to be whitespace-only, since `slideCommands.ts`'s own `insertCitation` always leaves a trailing space after one for normal mid-sentence typing to continue into — rendered as the slide's own bottom-aligned attribution line rather than as ordinary body text. */
 function citationOnlyParagraph(node: PMNode): PMNode | null {
   if (node.type.name !== 'paragraph') return null
   let found: PMNode | null = null
@@ -61,6 +63,11 @@ function renderBodyBlock(node: PMNode, sources: Map<string, Source>): string {
   switch (node.type.name) {
     case 'paragraph':
       return `<p>${renderInline(node, sources)}</p>`
+    case 'blockquote': {
+      let inner = ''
+      node.forEach((p) => (inner += renderBodyBlock(p, sources)))
+      return `<blockquote>${inner}</blockquote>`
+    }
     case 'bullet_list': {
       let items = ''
       node.forEach((li) => (items += renderListItem(li, sources)))
@@ -83,17 +90,37 @@ function renderListItem(li: PMNode, sources: Map<string, Source>): string {
   return `<li>${inner}</li>`
 }
 
-/** Renders a `content`/`quote`-shaped slide's own body blocks — ordinary flow, except a trailing citation-only paragraph (see above), which renders separately as `.slide-citation-footer` so the theme CSS can pin it to the bottom of the slide regardless of how much body content sits above it. */
-function renderBody(blocks: PMNode[], sources: Map<string, Source>): string {
+/** One block of body content plus which reveal-fragment step it belongs to — `-1` means "always visible," never wrapped in a `.fragment` div; `0, 1, 2, …` are grouped together by `renderBody` below. */
+interface BodyEntry {
+  block: PMNode
+  fragmentIndex: number
+}
+
+/** Renders a slide's own body — ordinary flow, except: a trailing citation-only paragraph (see above) renders separately as `.slide-citation-footer` so the theme CSS can pin it to the slide's bottom regardless of how much content sits above it; and consecutive entries sharing the same (non–`-1`) `fragmentIndex` are grouped into one `.fragment` wrapper, so everything typed between two fragment breaks reveals together as a single step. */
+function renderBody(entries: BodyEntry[], sources: Map<string, Source>): string {
   let html = ''
   let footer = ''
-  for (const block of blocks) {
+  let i = 0
+  while (i < entries.length) {
+    const { block, fragmentIndex } = entries[i]
     const citation = citationOnlyParagraph(block)
-    if (citation) {
+    if (citation && fragmentIndex === -1) {
       footer += renderCitationLabel(citation, sources)
+      i++
       continue
     }
-    html += renderBodyBlock(block, sources)
+    if (fragmentIndex === -1) {
+      html += renderBodyBlock(block, sources)
+      i++
+      continue
+    }
+    // Group every consecutive entry sharing this same fragment index into one wrapper.
+    let group = ''
+    while (i < entries.length && entries[i].fragmentIndex === fragmentIndex) {
+      group += renderBodyBlock(entries[i].block, sources)
+      i++
+    }
+    html += `<div class="fragment" data-fragment-index="${fragmentIndex}">${group}</div>`
   }
   if (footer) html += `<div class="slide-citation-footer">${footer}</div>`
   return html
@@ -118,7 +145,7 @@ function toRoman(n: number): string {
   return out || String(n)
 }
 
-/** Every `citation` node's `sourceId` anywhere in the whole deck, in first-appearance order (deduped) — what a `bibliography`-layout slide's own body is generated from, regardless of what (if anything) is actually sitting in its content. */
+/** Every `citation` node's `sourceId` anywhere in the whole deck, in first-appearance order (deduped) — what a `bibliography`-layout slide's own body is generated from. */
 function collectCitedSourceIds(doc: PMNode): string[] {
   const seen = new Set<string>()
   const ids: string[] = []
@@ -133,8 +160,75 @@ function collectCitedSourceIds(doc: PMNode): string[] {
 
 export interface SerializedSlide {
   html: string
-  /** Reveal.js's own speaker-notes convention (`<aside class="notes">`) has no counterpart in this schema yet — reserved for later, left empty for now rather than omitting the field and having every call site guess. */
   notes: string
+}
+
+/** One slide's worth of state accumulated while walking the flat document — flushed into a `SerializedSlide` by `renderSlide` whenever the next `slide_break` (or the end of the document) is reached. */
+interface SlideAccumulator {
+  layout: string
+  eyebrow: string
+  /** For `title`: [title, subtitle, ...authorLines]. For every other layout: [title] (or empty, if the slide has no content at all yet). */
+  titleSlots: PMNode[]
+  body: BodyEntry[]
+}
+
+function renderSlide(acc: SlideAccumulator, sources: Map<string, Source>, citedIds: string[]): SerializedSlide {
+  const title = acc.titleSlots[0] ? acc.titleSlots[0].textContent : ''
+
+  if (acc.layout === 'title') {
+    const subtitlePara = acc.titleSlots[1]
+    const authorParas = acc.titleSlots.slice(2)
+    const subtitle = subtitlePara ? renderInline(subtitlePara, sources) : ''
+    const authors = authorParas.map((p) => renderInline(p, sources)).join('<br>')
+    return {
+      html: `<div class="slide-inner slide-layout-title">
+        <div class="title-rule"></div>
+        <h1 class="deck-title">${escapeHtml(title)}</h1>
+        ${subtitle ? `<div class="deck-subtitle">${subtitle}</div>` : ''}
+        <div class="title-rule"></div>
+        ${authors ? `<div class="deck-authors">${authors}</div>` : ''}
+      </div>`,
+      notes: '',
+    }
+  }
+
+  if (acc.layout === 'section') {
+    return {
+      html: `<div class="slide-inner slide-layout-section">
+        <h1 class="section-title-display">${escapeHtml(title)}</h1>
+        ${acc.body.length ? `<div class="slide-body section-extra-body">${renderBody(acc.body, sources)}</div>` : ''}
+      </div>`,
+      notes: '',
+    }
+  }
+
+  if (acc.layout === 'bibliography') {
+    const entries = citedIds
+      .map((sid) => sources.get(sid))
+      .filter((s): s is Source => !!s)
+      .map((s) => `<p class="bibliography-entry">${escapeHtml(formatCitation(s.bibtex))}</p>`)
+      .join('')
+    return {
+      html: `<div class="slide-inner slide-layout-content">
+        <div class="slide-eyebrow">${escapeHtml(acc.eyebrow)}</div>
+        <h2 class="slide-title-display">${escapeHtml(title || 'References')}</h2>
+        <hr class="title-rule-thin" />
+        <div class="slide-body bibliography-body">${entries || '<p class="muted">No sources cited in this deck yet.</p>'}</div>
+      </div>`,
+      notes: '',
+    }
+  }
+
+  // 'content' (default) and anything unrecognized.
+  return {
+    html: `<div class="slide-inner slide-layout-content">
+      <div class="slide-eyebrow">${escapeHtml(acc.eyebrow)}</div>
+      <h2 class="slide-title-display">${escapeHtml(title)}</h2>
+      <hr class="title-rule-thin" />
+      <div class="slide-body">${renderBody(acc.body, sources)}</div>
+    </div>`,
+    notes: '',
+  }
 }
 
 export function serializeDeck(doc: PMNode, sources: Map<string, Source>): SerializedSlide[] {
@@ -143,69 +237,54 @@ export function serializeDeck(doc: PMNode, sources: Map<string, Source>): Serial
   let eyebrow = ''
   let sectionCount = 0
 
-  doc.forEach((slide) => {
-    const layout = (slide.attrs.layout as string) || 'content'
-    const title = slide.firstChild?.type.name === 'slide_title' ? (slide.firstChild.textContent ?? '') : ''
-    const bodyBlocks: PMNode[] = []
-    slide.forEach((child, _offset, index) => {
-      if (index === 0 && child.type.name === 'slide_title') return
-      bodyBlocks.push(child)
-    })
+  let acc: SlideAccumulator | null = null
+  let fragmentIndex = -1
 
+  function startSlide(layout: string) {
     if (layout === 'section') {
       sectionCount++
-      eyebrow = `${toRoman(sectionCount)}. ${title.toUpperCase()}`
-      slides.push({ html: `<div class="slide-inner slide-layout-section"><h1 class="section-title-display">${escapeHtml(title)}</h1></div>`, notes: '' })
+      eyebrow = `${toRoman(sectionCount)}. `
+    }
+    acc = { layout, eyebrow, titleSlots: [], body: [] }
+    fragmentIndex = -1
+  }
+
+  function flush() {
+    if (!acc) return
+    // A `section`-layout slide's own eyebrow gets set *after* flushing
+    // (every following slide reads it), but the title text itself needs
+    // to finish uppercasing into it only once the slide's own title is
+    // known — done here, once, right before rendering.
+    if (acc.layout === 'section' && acc.titleSlots[0]) {
+      eyebrow = `${eyebrow}${acc.titleSlots[0].textContent.toUpperCase()}`
+      acc.eyebrow = eyebrow
+    }
+    slides.push(renderSlide(acc, sources, citedIds))
+  }
+
+  doc.forEach((node) => {
+    if (node.type.name === 'slide_break') {
+      flush()
+      startSlide((node.attrs.layout as string) || 'content')
       return
     }
-
-    if (layout === 'title') {
-      const subtitlePara = bodyBlocks[0]
-      const authorParas = bodyBlocks.slice(1)
-      const subtitle = subtitlePara ? renderInline(subtitlePara, sources) : ''
-      const authors = authorParas.map((p) => renderInline(p, sources)).join('<br>')
-      slides.push({
-        html: `<div class="slide-inner slide-layout-title">
-          <div class="title-rule"></div>
-          <h1 class="deck-title">${escapeHtml(title)}</h1>
-          ${subtitle ? `<div class="deck-subtitle">${subtitle}</div>` : ''}
-          <div class="title-rule"></div>
-          ${authors ? `<div class="deck-authors">${authors}</div>` : ''}
-        </div>`,
-        notes: '',
-      })
+    if (!acc) startSlide('content') // defensive: content before any slide_break at all
+    if (node.type.name === 'fragment_break') {
+      fragmentIndex++
       return
     }
-
-    if (layout === 'bibliography') {
-      const entries = citedIds
-        .map((sid) => sources.get(sid))
-        .filter((s): s is Source => !!s)
-        .map((s) => `<p class="bibliography-entry">${escapeHtml(formatCitation(s.bibtex))}</p>`)
-        .join('')
-      slides.push({
-        html: `<div class="slide-inner slide-layout-content">
-          <div class="slide-eyebrow">${escapeHtml(eyebrow)}</div>
-          <h2 class="slide-title-display">${escapeHtml(title || 'References')}</h2>
-          <hr class="title-rule-thin" />
-          <div class="slide-body bibliography-body">${entries || '<p class="muted">No sources cited in this deck yet.</p>'}</div>
-        </div>`,
-        notes: '',
-      })
+    // A `title`-layout slide consumes *every* block as a title slot
+    // (title, subtitle, then one author line per further block — see
+    // `renderSlide`'s own handling of `titleSlots`); every other layout
+    // consumes only its own first block as the title, everything after
+    // that is ordinary body content.
+    if (acc!.layout === 'title' || acc!.titleSlots.length === 0) {
+      acc!.titleSlots.push(node)
       return
     }
-
-    // 'content' (default) and anything unrecognized falls back to it.
-    slides.push({
-      html: `<div class="slide-inner slide-layout-content">
-        <div class="slide-eyebrow">${escapeHtml(eyebrow)}</div>
-        <h2 class="slide-title-display">${escapeHtml(title)}</h2>
-        <hr class="title-rule-thin" />
-        <div class="slide-body">${renderBody(bodyBlocks, sources)}</div>
-      </div>`,
-      notes: '',
-    })
+    acc!.body.push({ block: node, fragmentIndex })
   })
+  flush()
 
   return slides
 }

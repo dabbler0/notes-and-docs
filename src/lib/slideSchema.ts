@@ -1,86 +1,55 @@
 import { Schema, type NodeSpec, type MarkSpec } from 'prosemirror-model'
 
 /**
- * A prototype second schema, sibling to `essaySchema` (`pmSchema.ts`) rather
- * than a variant of it — a slide deck's own structure (a flat, ordered
- * sequence of slides, each one a fixed, named layout rather than a nested
- * tree of sections) has little enough in common with an essay's that
- * sharing one schema between them would mean every essay-only concept
- * (recursive sections, footnotes, math) becomes a dead option slides never
- * use, or vice versa. `paragraph`/`bullet_list`/`ordered_list`/`list_item`/
- * `text`/`citation` and the inline marks are duplicated from `pmSchema.ts`
- * rather than imported — ProseMirror `NodeSpec`/`MarkSpec` objects are
- * perfectly fine to reuse across two independent `Schema` instances, but
- * keeping two tiny, independent copies here is simpler than threading a
- * shared-pieces module through both for a handful of plain-object specs
- * unlikely to drift (and if they ever do need to diverge — e.g. a slide
- * paragraph someday wanting different inline content — nothing has to be
- * un-shared first).
+ * A slide deck as one continuous flowing document — not a slide-per-box
+ * structure (an earlier prototype tried that; see the
+ * `slideshow-wysiwyg-boxes-prototype` branch for it, kept around rather
+ * than deleted). Per explicit direction: editing a deck should feel like
+ * editing an essay — one scrollable flow of real prose, read and typed
+ * top to bottom — with slide/fragment boundaries marked by thin in-flow
+ * divider nodes rather than by chopping the document into separate boxes.
+ *
+ * `slide_break` and `fragment_break` are the only two new ideas versus
+ * `pmSchema.ts`'s own essay schema; everything else (`paragraph`/
+ * `bullet_list`/`ordered_list`/`list_item`/`blockquote`/`citation`/`text`,
+ * `strong`/`em`/`underline`/`quote_inline`) is duplicated from it verbatim
+ * for the same reason `pmSchema.ts`'s own sibling-schema doc comment
+ * already gives for not sharing a module: two tiny independent copies of a
+ * handful of plain-object specs is simpler than threading a shared-pieces
+ * module through both schemas for something unlikely to drift.
+ *
+ * - `slide_break` — an atom, block-level divider marking "a new slide
+ *   starts here," carrying the new slide's own `layout` (see `slide`'s
+ *   own doc comment on the old branch, same four values: title/section/
+ *   content/bibliography). The document's very first block is always
+ *   implicitly slide 1's own content even with no `slide_break` before it
+ *   (`slideshowsRepo.ts`'s `createSlideshow` always inserts one anyway, so
+ *   every slide — including the first — has a real, editable divider with
+ *   its own layout widget; nothing in the schema *enforces* this, the same
+ *   "soft convention, not a hard schema constraint" every other derived-
+ *   from-position rule in this codebase already uses, e.g. `pmSchema.ts`'s
+ *   own `isAbstractTitled`).
+ * - `fragment_break` — an atom, block-level divider marking "a reveal step
+ *   starts here," within whatever slide it falls inside. Everything from
+ *   one `fragment_break` up to the next one (or the next `slide_break`)
+ *   reveals together as one step when presenting — see
+ *   `slideSerializer.ts` for exactly how.
+ *
+ * Both are deliberately *content-free* atoms, the same shape `pmSchema.ts`'s
+ * own `citation`/`math_inline` are — a divider has nothing to edit inside
+ * it, just a position in the flow and (for `slide_break`) one attr a small
+ * widget on its own NodeView changes directly (`pmSlideNodeViews.ts`).
+ * Deleting one is just deleting a node like any other — no custom
+ * "merge the two slides on either side" command needed, since removing the
+ * divider between them already *is* that merge, for free, via ordinary
+ * backspace/delete.
  */
 
 const pDOM = ['p', 0] as const
 
 const nodes: Record<string, NodeSpec> = {
-  /** A deck is just its slides, in order — no nesting, unlike `essaySchema`'s recursive `section`. */
   doc: {
-    content: 'slide+',
-  },
-
-  /**
-   * One slide. `layout` is the entire "where does things go" decision for
-   * this slide — see `slideSerializer.ts` for what each value actually
-   * renders as. There is deliberately no x/y, size, or free content
-   * placement anywhere in this schema: every slide's layout is one of a
-   * fixed, small set of templates, which is the whole point (see the
-   * conversation that led to this file — "forces all things into natural
-   * and mathematically precise locations").
-   *
-   * - `title` — the deck's own opening slide: big centered title, italic
-   *   subtitle, author line. Exactly one of these is expected (the first
-   *   slide), but nothing enforces that structurally — a prototype choice,
-   *   not a schema limitation.
-   * - `section` — a section-header slide (just a big title, no body) that
-   *   also sets the "eyebrow" label (the small running head in the
-   *   corner of every slide after it) shown on every following `content`/
-   *   `quote`/`bibliography` slide, up to the next `section` slide —
-   *   computed at serialize time (`slideSerializer.ts`), never stored.
-   * - `content` — the ordinary case: a title plus body blocks.
-   * - `bibliography` — its own body content is ignored; rendered content
-   *   is generated fresh at serialize time from every `citation` node's
-   *   `sourceId` anywhere in the whole deck (see `slideSerializer.ts`),
-   *   the same "always re-derived, never baked in" choice `pmSchema.ts`'s
-   *   own `citation` node doc comment already makes for essays.
-   */
-  slide: {
-    content: 'slide_title block*',
-    group: 'block',
-    defining: true,
-    attrs: {
-      id: { default: null },
-      layout: { default: 'content' },
-    },
-    parseDOM: [
-      {
-        tag: 'slide',
-        getAttrs: (dom) => ({
-          id: (dom as HTMLElement).getAttribute('data-slide-id'),
-          layout: (dom as HTMLElement).getAttribute('data-layout') || 'content',
-        }),
-      },
-    ],
-    toDOM(node) {
-      return ['slide', { 'data-slide-id': node.attrs.id, 'data-layout': node.attrs.layout }, 0]
-    },
-  },
-
-  /** A slide's own title — plain text only, same constraint `pmSchema.ts`'s `section_title` already uses. Always the first child, enforced by `slide`'s own content expression. */
-  slide_title: {
-    content: 'text*',
-    marks: '',
-    parseDOM: [{ tag: 'h1, h2, h3, h4, h5, h6' }],
-    toDOM() {
-      return ['h2', { class: 'slide-title' }, 0]
-    },
+    content: 'block+',
   },
 
   paragraph: {
@@ -89,6 +58,16 @@ const nodes: Record<string, NodeSpec> = {
     parseDOM: [{ tag: 'p' }],
     toDOM() {
       return pDOM
+    },
+  },
+
+  blockquote: {
+    content: 'paragraph+',
+    group: 'block',
+    defining: true,
+    parseDOM: [{ tag: 'blockquote' }],
+    toDOM() {
+      return ['blockquote', 0]
     },
   },
 
@@ -130,7 +109,7 @@ const nodes: Record<string, NodeSpec> = {
 
   text: { group: 'inline' },
 
-  /** Same shape as `pmSchema.ts`'s own `citation` — a true atom, always re-rendered fresh from the current `Source`, never a baked-in label. See `slide`'s own doc comment above for how the `bibliography` layout consumes these. */
+  /** Same shape as `pmSchema.ts`'s own `citation` — see its doc comment there. */
   citation: {
     inline: true,
     group: 'inline',
@@ -147,6 +126,33 @@ const nodes: Record<string, NodeSpec> = {
     ],
     toDOM(node) {
       return ['citation', { 'data-source-id': node.attrs.sourceId, 'data-note': node.attrs.note ?? undefined }]
+    },
+  },
+
+  /** Marks "a new slide starts here" — see this file's own doc comment. `id` is a stable handle nothing currently dereferences, kept for the same forward-looking reason `pmSchema.ts`'s `section.attrs.id` is. */
+  slide_break: {
+    group: 'block',
+    atom: true,
+    attrs: { id: { default: null }, layout: { default: 'content' } },
+    parseDOM: [
+      {
+        tag: 'slide-break',
+        getAttrs: (dom) => ({ id: (dom as HTMLElement).getAttribute('data-id'), layout: (dom as HTMLElement).getAttribute('data-layout') || 'content' }),
+      },
+    ],
+    toDOM(node) {
+      return ['slide-break', { 'data-id': node.attrs.id, 'data-layout': node.attrs.layout }]
+    },
+  },
+
+  /** Marks "a reveal step starts here" — see this file's own doc comment. */
+  fragment_break: {
+    group: 'block',
+    atom: true,
+    attrs: { id: { default: null } },
+    parseDOM: [{ tag: 'fragment-break', getAttrs: (dom) => ({ id: (dom as HTMLElement).getAttribute('data-id') }) }],
+    toDOM(node) {
+      return ['fragment-break', { 'data-id': node.attrs.id }]
     },
   },
 }
@@ -170,15 +176,26 @@ const marks: Record<string, MarkSpec> = {
       return ['u', 0]
     },
   },
+  /** Same shape as `pmSchema.ts`'s own `quote_inline` — see its doc comment there. */
+  quote_inline: {
+    attrs: { sourceId: {}, page: { default: null } },
+    parseDOM: [{ tag: 'quote-inline', getAttrs: (dom) => ({ sourceId: (dom as HTMLElement).getAttribute('data-source-id'), page: (dom as HTMLElement).getAttribute('data-page') }) }],
+    toDOM(mark) {
+      return ['quote-inline', { 'data-source-id': mark.attrs.sourceId, 'data-page': mark.attrs.page ?? undefined }]
+    },
+  },
 }
 
 export const slideSchema = new Schema({ nodes, marks })
 
-/** A brand-new slide's own minimal content — a title and one empty paragraph, same shape `essaysRepo.ts`'s `createEssay` gives a fresh root section. */
-export function slideJson(title: string, layout: 'title' | 'section' | 'content' | 'bibliography' = 'content', id?: string) {
+/** A brand-new deck's own minimal content: an explicit `slide_break` (layout `title`) right at the start — so even the opening slide has a real, editable divider — then a title paragraph and one empty paragraph to start typing a subtitle into. */
+export function initialSlideDeckJson(title: string, breakId: string) {
   return {
-    type: 'slide',
-    attrs: { id: id ?? null, layout },
-    content: [{ type: 'slide_title', content: title ? [{ type: 'text', text: title }] : [] }, { type: 'paragraph' }],
+    type: 'doc',
+    content: [
+      { type: 'slide_break', attrs: { id: breakId, layout: 'title' } },
+      { type: 'paragraph', content: title ? [{ type: 'text', text: title }] : [] },
+      { type: 'paragraph' },
+    ],
   }
 }

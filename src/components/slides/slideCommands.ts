@@ -1,62 +1,113 @@
 import type { EditorView } from 'prosemirror-view'
-import type { Node as PMNode } from 'prosemirror-model'
 import { TextSelection } from 'prosemirror-state'
-import { slideSchema, slideJson } from '../../lib/slideSchema'
+import { slideSchema } from '../../lib/slideSchema'
 import { pageNote } from '../../lib/bibtex'
 import { id } from '../../lib/id'
 import type { Source } from '../../models/types'
 
-function resolveNote(source: Source, note?: string): string | null {
-  const trimmed = note?.trim() || pageNote(source, undefined)
-  return trimmed || null
+function resolveNote(source: Source, opts: { note?: string; page?: number }): string | null {
+  const note = opts.note?.trim() || pageNote(source, opts.page)
+  return note || null
 }
 
 /** Same shape as `pmCommands.ts`'s own `insertCitation` — see its doc comment. */
 export function insertCitation(view: EditorView, source: Source, note?: string): void {
   const { state } = view
-  const citationNode = slideSchema.nodes.citation.create({ sourceId: source.id, note: resolveNote(source, note) })
+  const citationNode = slideSchema.nodes.citation.create({ sourceId: source.id, note: resolveNote(source, { note }) })
   const tr = state.tr.replaceSelectionWith(citationNode, false)
   tr.insertText(' ')
   view.dispatch(tr)
   view.focus()
 }
 
-/** Finds the enclosing `slide` node's own position for wherever the selection currently is — every command below that acts "on the current slide" (new slide after it, delete it, change its layout from a per-slide control) needs this first. */
-export function findEnclosingSlide(view: EditorView): { pos: number; node: PMNode } | null {
-  const { $from } = view.state.selection
-  for (let d = $from.depth; d >= 0; d--) {
-    if ($from.node(d).type.name === 'slide') return { pos: $from.before(d), node: $from.node(d) }
-  }
-  return null
-}
-
-/** Inserts a brand-new slide right after the one at `afterPos` (or at the document's end if omitted), focused into its own title. */
-export function insertSlideAfter(view: EditorView, afterPos: number | null, layout: 'title' | 'section' | 'content' | 'bibliography' = 'content'): void {
+/** Same shape as `pmCommands.ts`'s own `insertQuoteBlock`. */
+export function insertQuoteBlock(view: EditorView, source: Source, quoteText: string, page: number): void {
   const { state } = view
-  const insertPos = afterPos != null ? afterPos + state.doc.nodeAt(afterPos)!.nodeSize : state.doc.content.size
-  const node = state.schema.nodeFromJSON(slideJson('', layout, id()))
-  let tr = state.tr.insert(insertPos, node)
-  // Lands the cursor inside the new slide's own (empty) title, same "ready
-  // to type immediately" convention `pmCommands.ts`'s own insertion
-  // commands already follow.
-  tr = tr.setSelection(TextSelection.near(tr.doc.resolve(insertPos + 2)))
+  const quoteNode = slideSchema.nodes.blockquote.create(null, slideSchema.nodes.paragraph.create(null, slideSchema.text(quoteText)))
+  const citationNode = slideSchema.nodes.citation.create({ sourceId: source.id, note: resolveNote(source, { page }) })
+  const citationPara = slideSchema.nodes.paragraph.create(null, citationNode)
+  const tr = state.tr.replaceSelectionWith(quoteNode, false)
+  tr.insert(tr.selection.to, citationPara)
   view.dispatch(tr)
   view.focus()
 }
 
-/** Removes the slide at `pos` outright — refuses when it's the deck's only slide, since an empty deck has nothing for the editor/presenter to render. */
-export function deleteSlide(view: EditorView, pos: number): boolean {
+/** Same shape as `pmCommands.ts`'s own `insertQuoteInline`. */
+export function insertQuoteInline(view: EditorView, source: Source, quoteText: string, page: number): void {
   const { state } = view
-  if (state.doc.childCount <= 1) return false
-  const node = state.doc.nodeAt(pos)
-  if (!node) return false
-  view.dispatch(state.tr.delete(pos, pos + node.nodeSize))
-  return true
+  const mark = slideSchema.marks.quote_inline.create({ sourceId: source.id, page })
+  const citationNode = slideSchema.nodes.citation.create({ sourceId: source.id, note: resolveNote(source, { page }) })
+  const tr = state.tr.insertText(`“${quoteText}”`)
+  tr.addMark(tr.selection.to - quoteText.length - 2, tr.selection.to, mark)
+  tr.insertText(' ')
+  tr.replaceSelectionWith(citationNode, false)
+  tr.insertText(' ')
+  view.dispatch(tr)
+  view.focus()
 }
 
-export function setSlideLayout(view: EditorView, pos: number, layout: string): void {
+/**
+ * Inserts a divider node (`slide_break`/`fragment_break`) — both commands
+ * below go through this. Always lands right after the *whole* current
+ * top-level block, never mid-paragraph:
+ *
+ * - `slideSerializer.ts` only ever looks at the document's own top-level
+ *   children, so a divider has to land there too, not nested a level or
+ *   two down inside whatever block-level structure the cursor happens to
+ *   be in (a list item, a blockquote) — easy to end up inside otherwise
+ *   (e.g. pressing Enter inside a bullet list, then immediately asking for
+ *   a slide change, with the cursor still formally inside that list item).
+ * - A content-less atom's own post-insert selection isn't safe to depend
+ *   on either way — `replaceSelectionWith`'s own choice of where the
+ *   selection lands next can end up a `NodeSelection` *on* the atom just
+ *   inserted rather than a `TextSelection` after it (confirmed live:
+ *   typing a new slide's title right after clicking "Slide" was silently
+ *   replacing the divider itself with the first character typed). Always
+ *   following the break with a real, explicit empty paragraph of our own
+ *   — only when one doesn't already immediately follow — and placing the
+ *   selection inside *that* sidesteps the question entirely: it's always
+ *   a plain `TextSelection`, ready to type straight into, every time.
+ */
+function insertDivider(view: EditorView, breakNode: ReturnType<typeof slideSchema.nodes.slide_break.create>): void {
+  const { state } = view
+  const pos = state.selection.$from.after(1)
+  const tr = state.tr.insert(pos, breakNode)
+  const afterBreak = pos + breakNode.nodeSize
+  const followingNode = tr.doc.nodeAt(afterBreak)
+  if (!followingNode || !followingNode.isTextblock) {
+    tr.insert(afterBreak, slideSchema.nodes.paragraph.create())
+  }
+  tr.setSelection(TextSelection.near(tr.doc.resolve(afterBreak + 1), 1))
+  view.dispatch(tr)
+  view.focus()
+}
+
+/** "Slide change" — the editor-toolbar/keyboard-shortcut counterpart to typing plain prose. See `insertDivider`'s own doc comment for exactly where it lands. */
+export function insertSlideBreak(view: EditorView, layout: 'title' | 'section' | 'content' | 'bibliography' = 'content'): void {
+  insertDivider(view, slideSchema.nodes.slide_break.create({ id: id(), layout }))
+}
+
+/** "Fragmented reveal": everything from here to the next divider (of either kind) becomes the next reveal step when presenting (see `slideSerializer.ts`). See `insertDivider`'s own doc comment for exactly where it lands. */
+export function insertFragmentBreak(view: EditorView): void {
+  insertDivider(view, slideSchema.nodes.fragment_break.create({ id: id() }))
+}
+
+export function setSlideBreakLayout(view: EditorView, pos: number, layout: string): void {
+  const { state } = view
+  const node = state.doc.nodeAt(pos)
+  if (!node || node.type.name !== 'slide_break') return
+  view.dispatch(state.tr.setNodeMarkup(pos, undefined, { ...node.attrs, layout }))
+  // The `<select>` itself just took real DOM focus (a native form control,
+  // not part of ProseMirror's own contentEditable surface) — without this,
+  // the very next keystroke goes to whatever focus the browser leaves
+  // sitting on that dropdown instead of back into the document.
+  view.focus()
+}
+
+/** Deletes the divider at `pos` outright — since neither divider has any content of its own, this is already the entire "merge this slide into the previous one" / "drop this fragment boundary" operation; nothing else needs to happen. */
+export function deleteBreak(view: EditorView, pos: number): void {
   const { state } = view
   const node = state.doc.nodeAt(pos)
   if (!node) return
-  view.dispatch(state.tr.setNodeMarkup(pos, undefined, { ...node.attrs, layout }))
+  view.dispatch(state.tr.delete(pos, pos + node.nodeSize))
 }
