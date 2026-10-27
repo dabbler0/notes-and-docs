@@ -3,22 +3,22 @@ import type { EditorView, NodeView } from 'prosemirror-view'
 import { deleteBreak, setSlideBreakLayout } from './slideCommands'
 
 const LAYOUTS: { value: string; label: string }[] = [
-  { value: 'title', label: 'Title slide' },
-  { value: 'section', label: 'Section header' },
   { value: 'content', label: 'Content' },
-  { value: 'bibliography', label: 'Bibliography (auto)' },
+  { value: 'section', label: 'Section header' },
 ]
 
 /**
- * A `slide_break`'s own in-flow divider — a thin labeled rule sitting
- * between two slides' worth of ordinary prose, with a layout `<select>`
- * widget right on it and a delete control, rather than a box wrapping
- * each slide's content. Same "NodeView owns a little UI outside the real
- * document content it's attached to" pattern `pmNodeViews.ts`'s own
- * `SectionView` uses for the essay editor's chevron/number/demote button
- * — the actual text before/after this divider is ordinary paragraph
- * content, with nothing special about it; only the divider itself is this
- * NodeView's concern.
+ * A `slide_break`'s own in-flow divider — just a thin rule the width of
+ * the text column, with a layout picker and a delete control hanging off
+ * its right margin rather than sitting inline in the flow (so the rule
+ * itself stays exactly as tall as a rule, nothing more). The layout
+ * picker only actually shows up on hover — see `styles.css`/
+ * `slideTheme.css`'s own `:hover` rule — so it's not permanent visual
+ * clutter sitting in the middle of running prose; the delete button stays
+ * small but always visible. `.pm-slide-editor-root`'s own right padding
+ * (`slideTheme.css`) reserves exactly enough room for it, in both this
+ * NodeView's controls and `FragmentBreakView`'s own, so neither one ever
+ * overlaps real body text sitting on an adjacent line.
  */
 export class SlideBreakView implements NodeView {
   dom: HTMLElement
@@ -26,7 +26,6 @@ export class SlideBreakView implements NodeView {
   view: EditorView
   getPos: () => number | undefined
   private layoutSelect: HTMLSelectElement
-  private label: HTMLSpanElement
 
   constructor(node: PMNode, view: EditorView, getPos: () => number | undefined) {
     this.node = node
@@ -37,9 +36,8 @@ export class SlideBreakView implements NodeView {
     this.dom.className = 'slide-break-divider'
     this.dom.contentEditable = 'false'
 
-    this.label = document.createElement('span')
-    this.label.className = 'slide-break-label'
-    this.dom.appendChild(this.label)
+    const controls = document.createElement('div')
+    controls.className = 'divider-controls'
 
     this.layoutSelect = document.createElement('select')
     for (const opt of LAYOUTS) {
@@ -49,16 +47,17 @@ export class SlideBreakView implements NodeView {
       this.layoutSelect.appendChild(el)
     }
     this.layoutSelect.value = node.attrs.layout || 'content'
+    this.layoutSelect.title = 'Slide layout'
     this.layoutSelect.addEventListener('mousedown', (e) => e.stopPropagation())
     this.layoutSelect.addEventListener('change', () => {
       const pos = this.getPos()
       if (pos != null) setSlideBreakLayout(this.view, pos, this.layoutSelect.value)
     })
-    this.dom.appendChild(this.layoutSelect)
+    controls.appendChild(this.layoutSelect)
 
     const deleteBtn = document.createElement('button')
     deleteBtn.type = 'button'
-    deleteBtn.className = 'slide-break-delete'
+    deleteBtn.className = 'divider-delete'
     deleteBtn.title = 'Remove this slide break (merges into the previous slide)'
     deleteBtn.textContent = '✕'
     deleteBtn.addEventListener('mousedown', (e) => e.preventDefault())
@@ -67,21 +66,15 @@ export class SlideBreakView implements NodeView {
       const pos = this.getPos()
       if (pos != null) deleteBreak(this.view, pos)
     })
-    this.dom.appendChild(deleteBtn)
-    this.syncLabel()
-  }
+    controls.appendChild(deleteBtn)
 
-  /** `bibliography` is the one layout where what you type after this divider isn't what ends up on the slide (its body is generated fresh at present time from every citation in the whole deck — see `slideSerializer.ts`) — called out directly on the divider itself so that's never a silent surprise while editing. */
-  private syncLabel() {
-    const layout = this.node.attrs.layout || 'content'
-    this.label.textContent = layout === 'bibliography' ? 'Slide · auto-generated, text below is ignored' : 'Slide'
+    this.dom.appendChild(controls)
   }
 
   update(node: PMNode) {
     if (node.type.name !== 'slide_break') return false
     this.node = node
     this.layoutSelect.value = node.attrs.layout || 'content'
-    this.syncLabel()
     return true
   }
 
@@ -90,7 +83,7 @@ export class SlideBreakView implements NodeView {
   }
 }
 
-/** A `fragment_break`'s own in-flow divider — much smaller than a slide break's, since the only thing to do with one is remove it. */
+/** A `fragment_break`'s own in-flow divider — even thinner than a slide break's, with no label at all (just the rule itself) and only a delete control. */
 export class FragmentBreakView implements NodeView {
   dom: HTMLElement
   node: PMNode
@@ -106,14 +99,12 @@ export class FragmentBreakView implements NodeView {
     this.dom.className = 'fragment-break-divider'
     this.dom.contentEditable = 'false'
 
-    const label = document.createElement('span')
-    label.className = 'fragment-break-label'
-    label.textContent = '⋯ fragment ⋯'
-    this.dom.appendChild(label)
+    const controls = document.createElement('div')
+    controls.className = 'divider-controls'
 
     const deleteBtn = document.createElement('button')
     deleteBtn.type = 'button'
-    deleteBtn.className = 'fragment-break-delete'
+    deleteBtn.className = 'divider-delete'
     deleteBtn.title = 'Remove this fragment break'
     deleteBtn.textContent = '✕'
     deleteBtn.addEventListener('mousedown', (e) => e.preventDefault())
@@ -122,7 +113,9 @@ export class FragmentBreakView implements NodeView {
       const pos = this.getPos()
       if (pos != null) deleteBreak(this.view, pos)
     })
-    this.dom.appendChild(deleteBtn)
+    controls.appendChild(deleteBtn)
+
+    this.dom.appendChild(controls)
   }
 
   update(node: PMNode) {

@@ -9,47 +9,80 @@ import { Schema, type NodeSpec, type MarkSpec } from 'prosemirror-model'
  * top to bottom — with slide/fragment boundaries marked by thin in-flow
  * divider nodes rather than by chopping the document into separate boxes.
  *
- * `slide_break` and `fragment_break` are the only two new ideas versus
- * `pmSchema.ts`'s own essay schema; everything else (`paragraph`/
- * `bullet_list`/`ordered_list`/`list_item`/`blockquote`/`citation`/`text`,
- * `strong`/`em`/`underline`/`quote_inline`) is duplicated from it verbatim
- * for the same reason `pmSchema.ts`'s own sibling-schema doc comment
- * already gives for not sharing a module: two tiny independent copies of a
- * handful of plain-object specs is simpler than threading a shared-pieces
- * module through both schemas for something unlikely to drift.
+ * `section`/`section_title` (recursive, same shape as `pmSchema.ts`'s own
+ * essay sections) plus `slide_break`/`fragment_break` are the new ideas
+ * versus the essay schema; everything else (`paragraph`/`bullet_list`/
+ * `ordered_list`/`list_item`/`blockquote`/`citation`/`text`, `strong`/`em`/
+ * `underline`/`quote_inline`) is duplicated from it verbatim for the same
+ * reason `pmSchema.ts`'s own sibling-schema doc comment already gives for
+ * not sharing a module: two tiny independent copies of a handful of plain-
+ * object specs is simpler than threading a shared-pieces module through
+ * both schemas for something unlikely to drift.
  *
+ * - `section`/`section_title` — the same outline structure an essay has,
+ *   nestable arbitrarily deep, but it deliberately renders as little as
+ *   possible (`SlideDeckEditor.tsx`'s own CSS: a plain small heading, no
+ *   vertical rule/chevron/numbering) — its real job isn't visual, it's to
+ *   drive `slideSerializer.ts`'s own auto-titling: a slide's own title is
+ *   never typed directly, it's always just whichever section it happens to
+ *   sit inside at that point in the document (the *innermost* one, for a
+ *   slide nested two or more sections deep), and the deck's running
+ *   "eyebrow" label is the *outermost* enclosing section's own title. See
+ *   `slideSerializer.ts` for exactly how. Unlike the essay schema, `doc`
+ *   here allows any number of top-level `section`s side by side (not one
+ *   single root) — a deck's own sections are its top-level "parts," not one
+ *   all-enclosing whole-deck wrapper the way an essay's root section is.
  * - `slide_break` — an atom, block-level divider marking "a new slide
- *   starts here," carrying the new slide's own `layout` (see `slide`'s
- *   own doc comment on the old branch, same four values: title/section/
- *   content/bibliography). The document's very first block is always
- *   implicitly slide 1's own content even with no `slide_break` before it
- *   (`slideshowsRepo.ts`'s `createSlideshow` always inserts one anyway, so
- *   every slide — including the first — has a real, editable divider with
- *   its own layout widget; nothing in the schema *enforces* this, the same
- *   "soft convention, not a hard schema constraint" every other derived-
- *   from-position rule in this codebase already uses, e.g. `pmSchema.ts`'s
- *   own `isAbstractTitled`).
+ *   starts here." `layout` is now just `content` (the default) or
+ *   `section` (a big, centered, title-only divider slide) — a *title* or
+ *   *bibliography* slide is never one of these; both are generated
+ *   automatically, always, at fixed points (deck start/end) rather than
+ *   being a layout choice on some particular divider (see
+ *   `slideSerializer.ts`'s own `serializeDeck`).
  * - `fragment_break` — an atom, block-level divider marking "a reveal step
  *   starts here," within whatever slide it falls inside. Everything from
  *   one `fragment_break` up to the next one (or the next `slide_break`)
  *   reveals together as one step when presenting — see
  *   `slideSerializer.ts` for exactly how.
  *
- * Both are deliberately *content-free* atoms, the same shape `pmSchema.ts`'s
- * own `citation`/`math_inline` are — a divider has nothing to edit inside
- * it, just a position in the flow and (for `slide_break`) one attr a small
- * widget on its own NodeView changes directly (`pmSlideNodeViews.ts`).
- * Deleting one is just deleting a node like any other — no custom
- * "merge the two slides on either side" command needed, since removing the
- * divider between them already *is* that merge, for free, via ordinary
- * backspace/delete.
+ * Both dividers are deliberately *content-free* atoms, the same shape
+ * `pmSchema.ts`'s own `citation`/`math_inline` are — a divider has nothing
+ * to edit inside it, just a position in the flow and (for `slide_break`)
+ * one attr a small widget on its own NodeView changes directly
+ * (`pmSlideNodeViews.ts`). Deleting one is just deleting a node like any
+ * other — no custom "merge the two slides on either side" command needed,
+ * since removing the divider between them already *is* that merge, for
+ * free, via ordinary backspace/delete.
  */
 
 const pDOM = ['p', 0] as const
 
 const nodes: Record<string, NodeSpec> = {
+  /** Any number of top-level blocks — unlike `pmSchema.ts`'s own single-root-`section` essay `doc`, a deck's own `section`s are siblings, not nested inside one implicit whole-deck wrapper (see this file's own doc comment). */
   doc: {
     content: 'block+',
+  },
+
+  /** Same recursive shape as `pmSchema.ts`'s own `section` — see this file's own doc comment on why it exists here at all (driving auto-titling, not visual nesting). */
+  section: {
+    content: 'section_title block+',
+    group: 'block',
+    defining: true,
+    attrs: { id: { default: null } },
+    parseDOM: [{ tag: 'section', getAttrs: (dom) => ({ id: (dom as HTMLElement).getAttribute('data-section-id') }) }],
+    toDOM(node) {
+      return ['section', { 'data-section-id': node.attrs.id }, 0]
+    },
+  },
+
+  /** Same shape as `pmSchema.ts`'s own `section_title` — plain text only, always a section's first child. */
+  section_title: {
+    content: 'text*',
+    marks: '',
+    parseDOM: [{ tag: 'h1, h2, h3, h4, h5, h6' }],
+    toDOM() {
+      return ['h2', { class: 'slide-section-title' }, 0]
+    },
   },
 
   paragraph: {
@@ -188,14 +221,10 @@ const marks: Record<string, MarkSpec> = {
 
 export const slideSchema = new Schema({ nodes, marks })
 
-/** A brand-new deck's own minimal content: an explicit `slide_break` (layout `title`) right at the start — so even the opening slide has a real, editable divider — then a title paragraph and one empty paragraph to start typing a subtitle into. */
-export function initialSlideDeckJson(title: string, breakId: string) {
+/** A brand-new deck's own minimal content: one empty top-level section, ready to type its own title (the deck's first "part") straight into — not the deck's own title, which never lives in the document at all (see `slideSerializer.ts`'s own auto-generated title slide). */
+export function initialSlideDeckJson(sectionId: string) {
   return {
     type: 'doc',
-    content: [
-      { type: 'slide_break', attrs: { id: breakId, layout: 'title' } },
-      { type: 'paragraph', content: title ? [{ type: 'text', text: title }] : [] },
-      { type: 'paragraph' },
-    ],
+    content: [{ type: 'section', attrs: { id: sectionId }, content: [{ type: 'section_title' }, { type: 'paragraph' }] }],
   }
 }

@@ -12,13 +12,25 @@ import type { Source } from '../../models/types'
  * mount/destroy-in-an-effect shape `SlideDeckEditor.tsx`/`PMEssayEditor.tsx`
  * already use for their own underlying library instances.
  */
-export function SlidePresenter({ doc, sources, onClose }: { doc: PMNode; sources: Map<string, Source>; onClose: () => void }) {
+export function SlidePresenter({
+  doc,
+  sources,
+  deckTitle,
+  authorName,
+  onClose,
+}: {
+  doc: PMNode
+  sources: Map<string, Source>
+  deckTitle: string
+  authorName: string
+  onClose: () => void
+}) {
   const revealRootRef = useRef<HTMLDivElement>(null)
   const slidesRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
     if (!revealRootRef.current || !slidesRef.current) return
-    const slides = serializeDeck(doc, sources)
+    const slides = serializeDeck(doc, sources, deckTitle, authorName)
     slidesRef.current.innerHTML = slides.map((s) => `<section>${s.html}</section>`).join('')
 
     const deck = new Reveal(revealRootRef.current, {

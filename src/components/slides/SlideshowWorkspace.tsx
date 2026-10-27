@@ -7,7 +7,8 @@ import './slideTheme.css'
 import { getSlideshow, saveSlideshow } from '../../models/slideshowsRepo'
 import { listSources } from '../../models/sourcesRepo'
 import { slideSchema } from '../../lib/slideSchema'
-import { insertCitation, insertQuoteBlock, insertQuoteInline, insertSlideBreak, insertFragmentBreak } from './slideCommands'
+import { getAuthorName } from '../../lib/authorPreference'
+import { insertCitation, insertQuoteBlock, insertQuoteInline, insertSlideBreak, insertFragmentBreak, insertSection } from './slideCommands'
 import { SlideDeckEditor } from './SlideDeckEditor'
 import { SlidePresenter } from './SlidePresenter'
 import { CitationPickerDialog } from '../essays/CitationPickerDialog'
@@ -132,6 +133,14 @@ export function SlideshowWorkspace({ slideshowId, onBack }: { slideshowId: strin
               <Icon name="quote" />
             </button>
             <span className="toolbar-divider" />
+            <button
+              className="btn btn-sm icon-btn-toolbar"
+              title="New section: select some text first — it becomes that section's own title, with the rest of the selection as its body"
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={() => runView((view) => insertSection(view))}
+            >
+              <Icon name="outline" /> <span className="btn-label">Section</span>
+            </button>
             <button className="btn btn-sm icon-btn-toolbar" title="Slide change (Mod-Enter)" onMouseDown={(e) => e.preventDefault()} onClick={() => runView((view) => insertSlideBreak(view))}>
               <Icon name="subsection" /> <span className="btn-label">Slide</span>
             </button>
@@ -170,7 +179,7 @@ export function SlideshowWorkspace({ slideshowId, onBack }: { slideshowId: strin
 
       {showQuoteDialog && <QuoteInsertDialog onClose={() => setShowQuoteDialog(false)} onInsertBlock={handleInsertQuoteBlock} onInsertInline={handleInsertQuoteInline} />}
 
-      {presenting && doc && <SlidePresenter doc={doc} sources={sources.current} onClose={() => setPresenting(false)} />}
+      {presenting && doc && <SlidePresenter doc={doc} sources={sources.current} deckTitle={title} authorName={getAuthorName()} onClose={() => setPresenting(false)} />}
     </div>
   )
 }

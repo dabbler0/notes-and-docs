@@ -19,11 +19,11 @@ export async function saveSlideshow(deck: Slideshow): Promise<void> {
   await backend.docs.put(SLIDESHOWS, deck)
 }
 
-/** A brand-new deck starts with one `title`-layout slide, pre-filled with the deck's own title — a talk needs an opening slide anyway, and this avoids a deck ever having zero slides for the editor/presenter to render. */
+/** A brand-new deck's own document starts with one empty top-level section — the deck's own title slide is generated automatically from `Slideshow.title` itself plus the globally configured author name (`lib/authorPreference.ts`), never stored as real document content (see `slideSchema.ts`'s own doc comment). */
 export async function createSlideshow(title: string): Promise<Slideshow> {
   const now = Date.now()
   const deckTitle = title || 'Untitled slideshow'
-  const doc = initialSlideDeckJson(deckTitle, id())
+  const doc = initialSlideDeckJson(id())
   const deck: Slideshow = { id: id(), title: deckTitle, doc, createdAt: now, updatedAt: now }
   await backend.docs.put(SLIDESHOWS, deck)
   return deck

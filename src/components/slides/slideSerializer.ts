@@ -3,12 +3,12 @@ import { citationLabel, formatCitation } from '../../lib/bibtex'
 import type { Source } from '../../models/types'
 
 /**
- * Turns a `slideSchema`-shaped PM document — one continuous flow of
- * prose, broken into slides/fragments by `slide_break`/`fragment_break`
- * divider nodes rather than by any real nesting (see `slideSchema.ts`'s
- * own doc comment) — into an array of reveal.js `<section>` inner-HTML
- * strings, one per slide, in order, for `SlidePresenter.tsx` to drop
- * straight into `.reveal > .slides`.
+ * Turns a `slideSchema`-shaped PM document — one continuous flow of prose,
+ * organized into (possibly nested) `section`s and broken into slides/
+ * fragments by `slide_break`/`fragment_break` divider nodes (see
+ * `slideSchema.ts`'s own doc comment) — into an array of reveal.js
+ * `<section>` inner-HTML strings, one per slide, in order, for
+ * `SlidePresenter.tsx` to drop straight into `.reveal > .slides`.
  *
  * Not `DOMSerializer.fromSchema` for the same reason `pmCommands.ts`'s own
  * `sliceToHtml` doesn't try to reuse one for a `citation` node either — a
@@ -145,7 +145,7 @@ function toRoman(n: number): string {
   return out || String(n)
 }
 
-/** Every `citation` node's `sourceId` anywhere in the whole deck, in first-appearance order (deduped) — what a `bibliography`-layout slide's own body is generated from. */
+/** Every `citation` node's `sourceId` anywhere in the whole deck, in first-appearance order (deduped) — what the auto-generated bibliography slide's own body is built from. */
 function collectCitedSourceIds(doc: PMNode): string[] {
   const seen = new Set<string>()
   const ids: string[] = []
@@ -163,57 +163,51 @@ export interface SerializedSlide {
   notes: string
 }
 
-/** One slide's worth of state accumulated while walking the flat document — flushed into a `SerializedSlide` by `renderSlide` whenever the next `slide_break` (or the end of the document) is reached. */
+/** The deck's own fixed opening slide — generated fresh every time from `Slideshow.title` and the globally configured author name (`lib/authorPreference.ts`), never stored as real document content. */
+function renderTitleSlide(deckTitle: string, authorName: string): SerializedSlide {
+  return {
+    html: `<div class="slide-inner slide-layout-title">
+      <div class="title-rule"></div>
+      <h1 class="deck-title">${escapeHtml(deckTitle)}</h1>
+      <div class="title-rule"></div>
+      ${authorName ? `<div class="deck-authors">${escapeHtml(authorName)}</div>` : ''}
+    </div>`,
+    notes: '',
+  }
+}
+
+/** The deck's own fixed closing slide — generated fresh every time from every citation used anywhere in the deck (`collectCitedSourceIds`), never stored as real document content. */
+function renderBibliographySlide(citedIds: string[], sources: Map<string, Source>): SerializedSlide {
+  const entries = citedIds
+    .map((sid) => sources.get(sid))
+    .filter((s): s is Source => !!s)
+    .map((s) => `<p class="bibliography-entry">${escapeHtml(formatCitation(s.bibtex))}</p>`)
+    .join('')
+  return {
+    html: `<div class="slide-inner slide-layout-content">
+      <div class="slide-eyebrow"></div>
+      <h2 class="slide-title-display">References</h2>
+      <hr class="title-rule-thin" />
+      <div class="slide-body bibliography-body">${entries || '<p class="muted">No sources cited in this deck yet.</p>'}</div>
+    </div>`,
+    notes: '',
+  }
+}
+
+/** One slide's worth of state accumulated while walking the document — flushed into a `SerializedSlide` by `renderSlide` whenever the next `slide_break` (or the end of the document) is reached. `title`/`eyebrow` are read once, at `slide_break` time, off whichever `section`(s) enclose it right then (see `serializeDeck`'s own `SectionContext`) — never typed directly. */
 interface SlideAccumulator {
   layout: string
   eyebrow: string
-  /** For `title`: [title, subtitle, ...authorLines]. For every other layout: [title] (or empty, if the slide has no content at all yet). */
-  titleSlots: PMNode[]
+  title: string
   body: BodyEntry[]
 }
 
-function renderSlide(acc: SlideAccumulator, sources: Map<string, Source>, citedIds: string[]): SerializedSlide {
-  const title = acc.titleSlots[0] ? acc.titleSlots[0].textContent : ''
-
-  if (acc.layout === 'title') {
-    const subtitlePara = acc.titleSlots[1]
-    const authorParas = acc.titleSlots.slice(2)
-    const subtitle = subtitlePara ? renderInline(subtitlePara, sources) : ''
-    const authors = authorParas.map((p) => renderInline(p, sources)).join('<br>')
-    return {
-      html: `<div class="slide-inner slide-layout-title">
-        <div class="title-rule"></div>
-        <h1 class="deck-title">${escapeHtml(title)}</h1>
-        ${subtitle ? `<div class="deck-subtitle">${subtitle}</div>` : ''}
-        <div class="title-rule"></div>
-        ${authors ? `<div class="deck-authors">${authors}</div>` : ''}
-      </div>`,
-      notes: '',
-    }
-  }
-
+function renderSlide(acc: SlideAccumulator, sources: Map<string, Source>): SerializedSlide {
   if (acc.layout === 'section') {
     return {
       html: `<div class="slide-inner slide-layout-section">
-        <h1 class="section-title-display">${escapeHtml(title)}</h1>
+        <h1 class="section-title-display">${escapeHtml(acc.title)}</h1>
         ${acc.body.length ? `<div class="slide-body section-extra-body">${renderBody(acc.body, sources)}</div>` : ''}
-      </div>`,
-      notes: '',
-    }
-  }
-
-  if (acc.layout === 'bibliography') {
-    const entries = citedIds
-      .map((sid) => sources.get(sid))
-      .filter((s): s is Source => !!s)
-      .map((s) => `<p class="bibliography-entry">${escapeHtml(formatCitation(s.bibtex))}</p>`)
-      .join('')
-    return {
-      html: `<div class="slide-inner slide-layout-content">
-        <div class="slide-eyebrow">${escapeHtml(acc.eyebrow)}</div>
-        <h2 class="slide-title-display">${escapeHtml(title || 'References')}</h2>
-        <hr class="title-rule-thin" />
-        <div class="slide-body bibliography-body">${entries || '<p class="muted">No sources cited in this deck yet.</p>'}</div>
       </div>`,
       notes: '',
     }
@@ -223,7 +217,7 @@ function renderSlide(acc: SlideAccumulator, sources: Map<string, Source>, citedI
   return {
     html: `<div class="slide-inner slide-layout-content">
       <div class="slide-eyebrow">${escapeHtml(acc.eyebrow)}</div>
-      <h2 class="slide-title-display">${escapeHtml(title)}</h2>
+      <h2 class="slide-title-display">${escapeHtml(acc.title)}</h2>
       <hr class="title-rule-thin" />
       <div class="slide-body">${renderBody(acc.body, sources)}</div>
     </div>`,
@@ -231,60 +225,67 @@ function renderSlide(acc: SlideAccumulator, sources: Map<string, Source>, citedI
   }
 }
 
-export function serializeDeck(doc: PMNode, sources: Map<string, Source>): SerializedSlide[] {
+/** What a `slide_break` reads its own title/eyebrow off of — the *innermost* enclosing section's own title is the slide's title; the *outermost* (top-level) enclosing section's own title, numbered, is the running "eyebrow" shown on every slide inside it. Both empty for a slide_break that isn't inside any section at all. */
+interface SectionContext {
+  title: string
+  eyebrow: string
+}
+
+export function serializeDeck(doc: PMNode, sources: Map<string, Source>, deckTitle: string, authorName: string): SerializedSlide[] {
   const citedIds = collectCitedSourceIds(doc)
-  const slides: SerializedSlide[] = []
-  let eyebrow = ''
-  let sectionCount = 0
+  const slides: SerializedSlide[] = [renderTitleSlide(deckTitle, authorName)]
 
   let acc: SlideAccumulator | null = null
   let fragmentIndex = -1
-
-  function startSlide(layout: string) {
-    if (layout === 'section') {
-      sectionCount++
-      eyebrow = `${toRoman(sectionCount)}. `
-    }
-    acc = { layout, eyebrow, titleSlots: [], body: [] }
-    fragmentIndex = -1
-  }
+  let topSectionCount = 0
 
   function flush() {
     if (!acc) return
-    // A `section`-layout slide's own eyebrow gets set *after* flushing
-    // (every following slide reads it), but the title text itself needs
-    // to finish uppercasing into it only once the slide's own title is
-    // known — done here, once, right before rendering.
-    if (acc.layout === 'section' && acc.titleSlots[0]) {
-      eyebrow = `${eyebrow}${acc.titleSlots[0].textContent.toUpperCase()}`
-      acc.eyebrow = eyebrow
-    }
-    slides.push(renderSlide(acc, sources, citedIds))
+    slides.push(renderSlide(acc, sources))
   }
 
-  doc.forEach((node) => {
-    if (node.type.name === 'slide_break') {
-      flush()
-      startSlide((node.attrs.layout as string) || 'content')
+  function startSlide(layout: string, ctx: SectionContext | null) {
+    acc = { layout, eyebrow: ctx?.eyebrow ?? '', title: ctx?.title ?? '', body: [] }
+    fragmentIndex = -1
+  }
+
+  function walkSection(section: PMNode, parentCtx: SectionContext | null) {
+    const title = section.firstChild?.textContent ?? ''
+    let eyebrow: string
+    if (!parentCtx) {
+      topSectionCount++
+      eyebrow = `${toRoman(topSectionCount)}. ${title.toUpperCase()}`
+    } else {
+      eyebrow = parentCtx.eyebrow
+    }
+    const ctx: SectionContext = { title, eyebrow }
+    section.forEach((child, _offset, index) => {
+      if (index === 0) return // section_title itself, already consumed above
+      walkNode(child, ctx)
+    })
+  }
+
+  function walkNode(node: PMNode, ctx: SectionContext | null) {
+    if (node.type.name === 'section') {
+      walkSection(node, ctx)
       return
     }
-    if (!acc) startSlide('content') // defensive: content before any slide_break at all
+    if (node.type.name === 'slide_break') {
+      flush()
+      startSlide((node.attrs.layout as string) || 'content', ctx)
+      return
+    }
+    if (!acc) startSlide('content', ctx) // defensive: content before any slide_break at all
     if (node.type.name === 'fragment_break') {
       fragmentIndex++
       return
     }
-    // A `title`-layout slide consumes *every* block as a title slot
-    // (title, subtitle, then one author line per further block — see
-    // `renderSlide`'s own handling of `titleSlots`); every other layout
-    // consumes only its own first block as the title, everything after
-    // that is ordinary body content.
-    if (acc!.layout === 'title' || acc!.titleSlots.length === 0) {
-      acc!.titleSlots.push(node)
-      return
-    }
     acc!.body.push({ block: node, fragmentIndex })
-  })
+  }
+
+  doc.forEach((node) => walkNode(node, null))
   flush()
 
+  slides.push(renderBibliographySlide(citedIds, sources))
   return slides
 }
