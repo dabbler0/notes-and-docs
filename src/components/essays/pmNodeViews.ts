@@ -220,14 +220,24 @@ export class SectionView implements NodeView {
   node: PMNode
   view: EditorView
   getPos: () => number | undefined
+  private registry: Set<SectionView>
   private chevron: HTMLButtonElement | null = null
   private numberLabel: HTMLElement | null = null
   private demoteBtn: HTMLButtonElement | null = null
 
-  constructor(node: PMNode, view: EditorView, getPos: () => number | undefined) {
+  /**
+   * `registry` — every currently-mounted `SectionView` in this one
+   * `EditorView` (a fresh `Set`, created once per mount — `PMEssayEditor.tsx`'s
+   * own effect — and passed to each instance alike) — is what makes
+   * `renumber()`, below, possible: see its own doc comment for why calling
+   * it is needed at all.
+   */
+  constructor(node: PMNode, view: EditorView, getPos: () => number | undefined, registry: Set<SectionView>) {
     this.node = node
     this.view = view
     this.getPos = getPos
+    this.registry = registry
+    this.registry.add(this)
     this.dom = document.createElement('section')
     this.dom.dataset.sectionId = node.attrs.id ?? ''
 
@@ -294,16 +304,18 @@ export class SectionView implements NodeView {
 
   /**
    * This section's own `x.y.z` numbering path, recomputed fresh from
-   * `view.state.doc` on every mount/`update()` — the PM-doc counterpart of
-   * `treeNumbering.ts`'s own `pathOf`, which print/PDF export's
-   * `addPrintChrome` (`lib/export.ts`) already shows the very same way;
-   * restoring it live here means the document always reads with the same
-   * numbers it'll actually print with. Walks this section's own resolved
-   * position upward rather than storing/threading a path through props —
-   * nothing else in this NodeView model has a channel for "tell every
-   * section when any *other* section's numbering might have changed," and
-   * ProseMirror already re-invokes `update()` on the sections a structural
-   * edit actually affects. Only counts `section`-typed siblings (a
+   * `view.state.doc` on every mount/`update()`/external `renumber()` call
+   * (see that method's own doc comment — *not* just `update()`, confirmed
+   * live: ProseMirror's own diffing only calls `update()` on the sections
+   * actually inside a transaction's changed range, so inserting a new
+   * section left every *other* section's own number stale until something
+   * else forced a full remount, e.g. reloading the page) — the PM-doc
+   * counterpart of `treeNumbering.ts`'s own `pathOf`, which print/PDF
+   * export's `addPrintChrome` (`lib/export.ts`) already shows the very same
+   * way; restoring it live here means the document always reads with the
+   * same numbers it'll actually print with. Walks this section's own
+   * resolved position upward rather than storing/threading a path through
+   * props. Only counts `section`-typed siblings (a
    * section's own content can freely mix paragraphs in with subsections),
    * and, like `pathOf`, a root-level section titled exactly "Abstract"
    * neither gets a number nor consumes a numbering slot — the real section
@@ -337,6 +349,28 @@ export class SectionView implements NodeView {
     if (!this.numberLabel) return
     const path = this.computeNumberPath()
     this.numberLabel.textContent = path ? `${path.join('.')}.` : ''
+  }
+
+  /**
+   * The external trigger `dispatchTransaction` (`PMEssayEditor.tsx`) calls,
+   * via `registry`, on every *other* mounted `SectionView` whenever any
+   * transaction changes the document — not just the one(s) ProseMirror's
+   * own diffing decided were inside the changed range. Numbering depends
+   * on a section's position among its siblings, not on anything in its
+   * own node (content/attrs can be bit-for-bit identical before and after
+   * a sibling is inserted elsewhere), so it's exactly the kind of change
+   * `update()` alone can silently miss — confirmed live as a real bug:
+   * inserting a new section between two others left every section after
+   * it showing its own *old* number (sometimes a bare duplicate of the
+   * new section's own) until a full page reload remounted every view from
+   * scratch. `getPos()` is already live/current by the time this runs —
+   * `view.updateState()` finishes reconciling position tracking for every
+   * mounted view synchronously, whether or not that view's own `update()`
+   * was invoked — so this always reads this section's true, current place
+   * in the document, not a stale one.
+   */
+  renumber() {
+    this.syncNumber()
   }
 
   private computeNumberPath(): number[] | null {
@@ -404,6 +438,11 @@ export class SectionView implements NodeView {
   // caused once when it didn't.
   ignoreMutation(record: ViewMutationRecord) {
     return !this.contentDOM.contains(record.target as Node)
+  }
+
+  /** Unregisters from `registry` — called whenever ProseMirror tears this view down (the section was deleted, demoted away, or replaced by a fresh instance), so a later `renumber()` pass never iterates a detached view. */
+  destroy() {
+    this.registry.delete(this)
   }
 }
 

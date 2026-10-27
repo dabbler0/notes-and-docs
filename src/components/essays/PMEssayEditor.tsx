@@ -208,12 +208,22 @@ export function PMEssayEditor({
       ],
     })
 
+    // Every currently-mounted `SectionView` in this one editor — passed to
+    // each instance alike so `dispatchTransaction`, below, can renumber all
+    // of them on every doc-changing transaction, not just whichever ones
+    // ProseMirror's own diffing decided were inside the changed range. See
+    // `SectionView.renumber`'s own doc comment for the real, confirmed-live
+    // bug this fixes: numbering depends on a section's position among its
+    // siblings, which a section's own `update()` can miss entirely when a
+    // *different* section is inserted/removed elsewhere in the document.
+    const sectionViews = new Set<SectionView>()
+
     const view = new EditorView(containerRef.current, {
       state,
       editable: () => editableRef.current,
       nodeViews: {
         citation: (node, v, getPos) => new (createCitationView(sources))(node, v, getPos as () => number | undefined),
-        section: (node, v, getPos) => new SectionView(node, v, getPos as () => number | undefined),
+        section: (node, v, getPos) => new SectionView(node, v, getPos as () => number | undefined, sectionViews),
         footnote: (node) => new FootnoteView(node),
         math_inline: (node, v, getPos) => new (createMathView(false))(node, v, getPos as () => number | undefined),
         math_block: (node, v, getPos) => new (createMathView(true))(node, v, getPos as () => number | undefined),
@@ -224,6 +234,11 @@ export function PMEssayEditor({
         const newState = view.state.apply(tr)
         view.updateState(newState)
         if (tr.docChanged) {
+          // `updateState` above has already finished reconciling every
+          // mounted view's own position tracking (`getPos()`), whether or
+          // not that view's own `update()` was actually invoked — safe to
+          // renumber all of them now.
+          sectionViews.forEach((v) => v.renumber())
           onDocChanged?.(newState.doc)
           if (editableRef.current) scheduleSave(newState.doc)
         }
