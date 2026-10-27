@@ -422,9 +422,44 @@ export function insertSlideBreak(view: EditorView): void {
   insertDivider(view, essaySchema.nodes.slide_break.create({ id: id() }))
 }
 
-/** "Fragmented reveal": everything from here to the next divider (of either kind) becomes the next reveal step when presenting (see `slideSerializer.ts`). See `insertDivider`'s own doc comment for exactly where it lands. */
+/** The depth of the nearest enclosing `list_item` around `$pos`, or `null` if it isn't inside one — the innermost one, if nested lists put it inside more than one, matching "fragment at whatever bullet level the cursor is actually at." Only `insertFragmentBreak` below uses this; `insertSlideBreak` keeps landing after the *whole* list regardless (ending a slide mid-list isn't a gesture this schema needs to support the way mid-list fragmentation is). */
+function nearestListItemDepth($pos: ResolvedPos): number | null {
+  for (let d = $pos.depth; d >= 1; d--) {
+    if ($pos.node(d).type.name === 'list_item') return d
+  }
+  return null
+}
+
+/**
+ * "Fragmented reveal": everything from here to the next divider (of either
+ * kind) becomes the next reveal step when presenting (see
+ * `slideSerializer.ts`). With the cursor inside a list item, lands the
+ * break as a sibling right after that item — *inside* the list, between
+ * two bullets (`pmSchema.ts`'s own `bullet_list`/`ordered_list` content
+ * expression allows this) — rather than `insertDivider`'s own generic
+ * "after the current top-level block of the enclosing section" landing
+ * spot, which for a list would mean only ever after the *entire* list.
+ * Deliberately a separate, simpler insertion path rather than a special
+ * case inside `insertDivider` itself: a plain filler paragraph (what
+ * `insertDivider` adds when nothing textblock-shaped immediately follows)
+ * isn't valid content directly inside a list — only `list_item`/
+ * `fragment_break` are — so there's nothing to backfill here; the next
+ * list item (or the list's own end) is already a perfectly fine place for
+ * the selection to land on its own.
+ */
 export function insertFragmentBreak(view: EditorView): void {
-  insertDivider(view, essaySchema.nodes.fragment_break.create({ id: id() }))
+  const { state } = view
+  const listItemDepth = nearestListItemDepth(state.selection.$from)
+  if (listItemDepth == null) {
+    insertDivider(view, essaySchema.nodes.fragment_break.create({ id: id() }))
+    return
+  }
+  const pos = state.selection.$from.after(listItemDepth)
+  const breakNode = essaySchema.nodes.fragment_break.create({ id: id() })
+  const tr = state.tr.insert(pos, breakNode)
+  tr.setSelection(TextSelection.near(tr.doc.resolve(pos + breakNode.nodeSize), 1))
+  view.dispatch(tr)
+  view.focus()
 }
 
 /** Deletes the divider at `pos` outright — since neither divider has any content of its own, this is already the entire "merge this slide into the previous one" / "drop this fragment boundary" operation. */

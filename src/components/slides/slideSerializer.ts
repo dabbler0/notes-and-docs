@@ -114,16 +114,52 @@ function renderBodyBlock(node: PMNode, sources: Map<string, Source>): string {
   }
 }
 
-function renderListItem(li: PMNode, sources: Map<string, Source>): string {
+/** `fragmentIndex`, here, is the *item's own* — same meaning as `BlockBodyEntry.fragmentIndex` below, just attached to one `<li>` instead of a whole top-level block, since mid-list fragmentation (`ListBodyEntry`'s own doc comment) means different items of the very same list can each belong to a different reveal step. `-1` (the default, used for every ordinary, non-top-level-list `<li>` — nothing below `renderBodyBlock`'s own generic `bullet_list`/`ordered_list` case ever passes anything else) renders a plain `<li>`, same as before this existed. */
+function renderListItem(li: PMNode, sources: Map<string, Source>, fragmentIndex = -1): string {
   let inner = ''
   li.forEach((child) => (inner += renderBodyBlock(child, sources)))
-  return `<li>${inner}</li>`
+  const cls = fragmentIndex === -1 ? '' : ` class="fragment" data-fragment-index="${fragmentIndex}"`
+  return `<li${cls}>${inner}</li>`
 }
 
-/** One block of body content plus which reveal-fragment step it belongs to — `-1` means "always visible," never wrapped in a `.fragment` div; `0, 1, 2, …` are grouped together by `renderBody` below. */
-interface BodyEntry {
+/** One top-level block of body content plus which reveal-fragment step it belongs to — `-1` means "always visible," never wrapped in a `.fragment` div; `0, 1, 2, …` are grouped together by `renderBody` below. */
+interface BlockBodyEntry {
+  kind: 'block'
   block: PMNode
   fragmentIndex: number
+}
+
+/**
+ * A top-level `bullet_list`/`ordered_list` — kept as its own `BodyEntry`
+ * variant, rather than going through `BlockBodyEntry`/`renderBodyBlock`
+ * like every other block, specifically so a `fragment_break` typed *inside*
+ * the list (`pmSchema.ts`'s own content-expression allowance for this) can
+ * split it into several reveal steps while it still renders as one single,
+ * visually continuous `<ul>`/`<ol>` — never several separate list elements
+ * stacked on top of each other, which is what treating each in-list
+ * fragment group as its own ordinary `BlockBodyEntry` would produce.
+ * `items` already carries each one's own resolved `fragmentIndex`
+ * (`walkNode`'s own list-flattening below) — same `-1`-or-real-index
+ * meaning as `BlockBodyEntry.fragmentIndex`, just per item instead of per
+ * block, and advancing the very same shared counter, so an in-list
+ * fragment group reveals in its correct place relative to whatever else
+ * on the slide is also stepping through fragments.
+ */
+interface ListBodyEntry {
+  kind: 'list'
+  listType: 'bullet_list' | 'ordered_list'
+  order: number
+  items: { node: PMNode; fragmentIndex: number }[]
+}
+
+type BodyEntry = BlockBodyEntry | ListBodyEntry
+
+function renderList(entry: ListBodyEntry, sources: Map<string, Source>): string {
+  const tag = entry.listType === 'ordered_list' ? 'ol' : 'ul'
+  const startAttr = entry.listType === 'ordered_list' && entry.order !== 1 ? ` start="${entry.order}"` : ''
+  let items = ''
+  for (const { node, fragmentIndex } of entry.items) items += renderListItem(node, sources, fragmentIndex)
+  return `<${tag}${startAttr}>${items}</${tag}>`
 }
 
 /** A slide's own rendered body, split into the part that gets vertically centered (`html`) and a trailing citation-only paragraph, if any (`footer`) — kept separate so `renderSlide`/`renderBibliographySlide` can place `footer` as its own sibling, pinned to the slide's bottom by ordinary flow (nothing further above it reserves space for it) rather than inside the centered block itself, where it would get centered right along with everything else. */
@@ -132,13 +168,19 @@ interface RenderedBody {
   footer: string
 }
 
-/** Renders a slide's own body — ordinary flow, except: a trailing citation-only paragraph (see above) is pulled out into `footer` instead of `html` (see `RenderedBody`'s own doc comment); and consecutive entries sharing the same (non–`-1`) `fragmentIndex` are grouped into one `.fragment` wrapper, so everything typed between two fragment breaks reveals together as a single step. */
+/** Renders a slide's own body — ordinary flow, except: a trailing citation-only paragraph (see above) is pulled out into `footer` instead of `html` (see `RenderedBody`'s own doc comment); a `ListBodyEntry` renders itself (`renderList`, above — already fragment-aware per item) rather than joining the grouping below; and consecutive `BlockBodyEntry` entries sharing the same (non–`-1`) `fragmentIndex` are grouped into one `.fragment` wrapper, so everything typed between two fragment breaks reveals together as a single step. */
 function renderBody(entries: BodyEntry[], sources: Map<string, Source>): RenderedBody {
   let html = ''
   let footer = ''
   let i = 0
   while (i < entries.length) {
-    const { block, fragmentIndex } = entries[i]
+    const entry = entries[i]
+    if (entry.kind === 'list') {
+      html += renderList(entry, sources)
+      i++
+      continue
+    }
+    const { block, fragmentIndex } = entry
     const citation = citationOnlyParagraph(block)
     if (citation && fragmentIndex === -1) {
       footer += renderCitationLabel(citation, sources)
@@ -152,8 +194,9 @@ function renderBody(entries: BodyEntry[], sources: Map<string, Source>): Rendere
     }
     // Group every consecutive entry sharing this same fragment index into one wrapper.
     let group = ''
-    while (i < entries.length && entries[i].fragmentIndex === fragmentIndex) {
-      group += renderBodyBlock(entries[i].block, sources)
+    let next: BodyEntry | undefined
+    while (i < entries.length && (next = entries[i]).kind === 'block' && next.fragmentIndex === fragmentIndex) {
+      group += renderBodyBlock(next.block, sources)
       i++
     }
     html += `<div class="fragment" data-fragment-index="${fragmentIndex}">${group}</div>`
@@ -321,7 +364,24 @@ export function serializeDeck(doc: PMNode, sources: Map<string, Source>, deckTit
       fragmentIndex++
       return
     }
-    acc!.body.push({ block: node, fragmentIndex })
+    if (node.type.name === 'bullet_list' || node.type.name === 'ordered_list') {
+      // Flatten the list's own children here (rather than handing the whole
+      // node to `renderBodyBlock`), advancing the very same shared
+      // `fragmentIndex` for any `fragment_break` found *inside* it — see
+      // `ListBodyEntry`'s own doc comment for why this is a distinct
+      // `BodyEntry` variant rather than an ordinary block.
+      const items: { node: PMNode; fragmentIndex: number }[] = []
+      node.forEach((child) => {
+        if (child.type.name === 'fragment_break') {
+          fragmentIndex++
+          return
+        }
+        items.push({ node: child, fragmentIndex })
+      })
+      acc!.body.push({ kind: 'list', listType: node.type.name as 'bullet_list' | 'ordered_list', order: (node.attrs.order as number) ?? 1, items })
+      return
+    }
+    acc!.body.push({ kind: 'block', block: node, fragmentIndex })
   }
 
   // The document's own single root section (`pmSchema.ts`'s `doc: { content: 'section' }`) is just a wrapper, same as the essay editor's own convention — its own title never becomes any slide's title/eyebrow; its direct children are walked as top-level content, owned (for the "never share a slide" check above) by the root section's own id.

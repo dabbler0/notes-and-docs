@@ -138,7 +138,14 @@ const nodes: Record<string, NodeSpec> = {
   },
 
   bullet_list: {
-    content: 'list_item+',
+    // `fragment_break` interleaved with `list_item` — a slideshow-only
+    // allowance (see its own doc comment below), harmless for an essay
+    // that never puts one there — is what lets "fragmented reveal" land
+    // *between* two bullets of the very same list, rather than only ever
+    // after the list as a whole (the only option before this): without
+    // it, the list itself is the smallest "block" `pmCommands.ts`'s own
+    // divider-insertion logic has a position for, same as any other block.
+    content: '(list_item | fragment_break)+',
     group: 'block',
     parseDOM: [{ tag: 'ul' }],
     toDOM() {
@@ -147,7 +154,7 @@ const nodes: Record<string, NodeSpec> = {
   },
 
   ordered_list: {
-    content: 'list_item+',
+    content: '(list_item | fragment_break)+',
     group: 'block',
     attrs: { order: { default: 1 } },
     parseDOM: [
