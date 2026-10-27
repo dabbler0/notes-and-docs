@@ -151,6 +151,25 @@
   color: var(--slide-muted);
 }
 
+/** A quoted excerpt reads as set apart from the surrounding prose — italic (the explicit minimum), plus an accent rule down the left edge and a slight indent, the same visual language `styles.css`'s own `.pm-editor-root .ProseMirror blockquote` already uses for the live editor, so a quote reads the same way whether you're writing it or presenting it. */
+.slide-body blockquote {
+  margin: 0.3em 0 0.8em;
+  padding: 0.2em 0 0.2em 0.9em;
+  border-left: 3px solid var(--slide-accent);
+  font-style: italic;
+  color: var(--slide-ink);
+}
+
+.slide-body blockquote p:last-child {
+  margin-bottom: 0;
+}
+
+/** A citation's own rendered label (`slideSerializer.ts`'s `renderCitationLabel`) — accent-colored and a touch bolder than surrounding text, so it reads as a distinct, structured reference rather than ordinary prose, both inline in the body and inside `.slide-citation-footer` below (its own more specific selector match here wins over that block's plain `color: var(--slide-muted)`). */
+.slide-citation-label {
+  color: var(--slide-accent);
+  font-weight: 600;
+}
+
 /**
  * A sibling of `.slide-body-wrap`, not a child of `.slide-body` inside it
  * — deliberately kept out of the centered block (`slideSerializer.ts`'s
