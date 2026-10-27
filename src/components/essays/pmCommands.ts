@@ -281,6 +281,69 @@ export function toggleSectionCollapsed(view: EditorView, sectionId: string): voi
   view.dispatch(view.state.tr.setNodeMarkup(hit.pos, undefined, { ...hit.node.attrs, collapsed: !hit.node.attrs.collapsed }))
 }
 
+/** Finds a section node's own `{ pos, node }` by its stable id — `pos` is the position right before the section's own opening tag, same convention `getPos()` uses. Shared by `moveSectionTo`, below; `toggleSectionCollapsed`, above, inlines the same walk since it only ever needs the one hit. */
+function findSectionById(doc: PMNode, sectionId: string): { pos: number; node: PMNode } | null {
+  let found: { pos: number; node: PMNode } | null = null
+  doc.descendants((node, pos) => {
+    if (found) return false
+    if (node.type.name === 'section' && node.attrs.id === sectionId) {
+      found = { pos, node }
+      return false
+    }
+    return true
+  })
+  return found
+}
+
+export type SectionDropZone = 'before' | 'after' | 'into'
+
+/**
+ * Drag-and-drop section reordering — `NodeTree.tsx`'s own outline sidebar.
+ * Moves the whole `draggedId` section (its own title and all its content,
+ * nested subsections included) to a new position relative to `targetId`:
+ * `'before'`/`'after'` land it as target's own sibling, at *target's own*
+ * nesting depth — so dropping onto the gap above/below a shallower or
+ * deeper section re-parents the dragged one too, not just reorders it
+ * among whatever siblings it already had, the usual drag-tree convention;
+ * `'into'` lands it as target's own last child, one level deeper.
+ *
+ * Refuses (returns `false`, no transaction) three cases that would
+ * otherwise corrupt the document or do nothing useful: dragging the
+ * essay's own root section (`pos === 0` — nothing to reorder it relative
+ * to, it's the whole essay), dropping a section onto itself, or dropping a
+ * section into its own descendant (would create a cycle the schema has no
+ * way to represent).
+ *
+ * Implemented as a plain cut-and-reinsert: delete the dragged section's
+ * own range first, then insert its own (unchanged — same id, same
+ * content, nothing remapped) node at `target`'s own insertion point,
+ * mapped through the delete step's own position shift — standard
+ * ProseMirror idiom for "move a node," same shape `demoteSectionAt`'s own
+ * `replaceWith` uses for a different kind of section move.
+ */
+export function moveSectionTo(view: EditorView, draggedId: string, targetId: string, zone: SectionDropZone): boolean {
+  const { state } = view
+  const dragged = findSectionById(state.doc, draggedId)
+  const target = findSectionById(state.doc, targetId)
+  if (!dragged || !target) return false
+  if (dragged.pos === 0) return false
+  const draggedEnd = dragged.pos + dragged.node.nodeSize
+  if (target.pos === dragged.pos) return false
+  if (target.pos > dragged.pos && target.pos < draggedEnd) return false
+
+  let insertPos: number
+  if (zone === 'before') insertPos = target.pos
+  else if (zone === 'after') insertPos = target.pos + target.node.nodeSize
+  else insertPos = target.pos + target.node.nodeSize - 1 // just inside target's own closing tag — becomes its new last child
+
+  let tr = state.tr.delete(dragged.pos, draggedEnd)
+  insertPos = tr.mapping.map(insertPos)
+  tr = tr.insert(insertPos, dragged.node)
+  view.dispatch(tr)
+  view.focus()
+  return true
+}
+
 /** Serializes a document slice to plain HTML via the schema's own `toDOM` — `pmSchema.ts` already defines exactly this for every node/mark, so no separate HTML-rendering logic is needed here. Used by "Send to graveyard," which keeps its own storage format (`GraveyardFragment.html`) unchanged regardless of what model the live editor uses. */
 export function sliceToHtml(slice: { content: Fragment }): string {
   const serializer = DOMSerializer.fromSchema(essaySchema)

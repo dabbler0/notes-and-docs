@@ -38,11 +38,13 @@ import {
   splitIntoSection,
   sliceToHtml,
   toggleSectionCollapsed,
+  moveSectionTo,
   findEnclosingSection,
   insertCommentAnchorMark,
   removeCommentAnchorMark,
   insertFootnote,
 } from './pmCommands'
+import type { SectionDropZone } from './pmCommands'
 import { Modal } from '../Modal'
 import { useIsMobile } from '../../lib/useIsMobile'
 import { id } from '../../lib/id'
@@ -468,6 +470,12 @@ export function EssayWorkspace({
     if (view) toggleSectionCollapsed(view, id)
   }
 
+  /** Drag-and-drop reordering — `NodeTree.tsx`'s own `onMove`. */
+  function moveSection(draggedId: string, targetId: string, zone: SectionDropZone) {
+    const view = viewRef.current
+    if (view) moveSectionTo(view, draggedId, targetId, zone)
+  }
+
   if (!essay || !essay.doc) return <div className="page-pad">Loading…</div>
 
   const openInlineCommentRecord = openInlineComment ? findEssayCommentById(essay, openInlineComment.id) : undefined
@@ -514,7 +522,7 @@ export function EssayWorkspace({
           !splitEssayId &&
           (showTree ? (
             <div className="tree-panel-shell">
-              {doc && <NodeTree doc={doc} essayTitle={essayTitle} onToggleCollapse={toggleCollapse} onScrollTo={scrollToNode} />}
+              {doc && <NodeTree doc={doc} essayTitle={essayTitle} onToggleCollapse={toggleCollapse} onScrollTo={scrollToNode} onMove={moveSection} />}
               <button className="panel-edge-toggle left" onClick={() => setShowTree(false)} title="Collapse outline">
                 ‹
               </button>
@@ -733,6 +741,7 @@ export function EssayWorkspace({
                 setMobileTreeOpen(false)
                 requestAnimationFrame(() => scrollToNode(sectionId))
               }}
+              onMove={moveSection}
             />
           )}
         </Modal>
