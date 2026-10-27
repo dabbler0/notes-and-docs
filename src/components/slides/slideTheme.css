@@ -232,15 +232,38 @@
 
 /* Sections exist to drive auto-titling (`slideSchema.ts`'s own doc
    comment), not to look like a document outline — a plain, modest
-   heading for `section_title` and a small fixed indent per nesting level
-   is the entire visual footprint; no rule, chevron, or numbering the way
-   the essay editor's own sections get. */
+   heading for `section_title` is the entire visual footprint, no
+   numbering the way the essay editor's own sections get. The collapse
+   chevron and "demote" button (`SlideSectionView`, pmSlideNodeViews.ts),
+   imported wholesale from the essay editor, *are* real editing chrome
+   though: `padding-left` clears the chevron sitting in the left margin,
+   `padding-right` (matching `.pm-slide-editor-root`'s own
+   `--divider-margin`) clears the demote button hanging in the right one,
+   same reserved-strip idea the dividers above already use. */
 .pm-slide-editor-root section {
-  margin: 2px 0;
+  position: relative;
+  margin: 4px 0;
+  padding: 0 var(--divider-margin) 0 22px;
 }
 
 .pm-slide-editor-root section section {
-  padding-left: 18px;
+  margin-left: 10px;
+}
+
+.pm-slide-editor-root section > .section-chevron {
+  position: absolute;
+  left: 0;
+  top: 0.15em;
+}
+
+.pm-slide-editor-root section > .section-demote {
+  position: absolute;
+  right: calc(-1 * var(--divider-margin));
+  top: 0.15em;
+}
+
+.pm-slide-editor-root section.collapsed > .slide-section-body > :not(:first-child) {
+  display: none;
 }
 
 .pm-slide-editor-root h2.slide-section-title {

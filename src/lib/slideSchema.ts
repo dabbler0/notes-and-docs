@@ -63,12 +63,27 @@ const nodes: Record<string, NodeSpec> = {
     content: 'block+',
   },
 
-  /** Same recursive shape as `pmSchema.ts`'s own `section` — see this file's own doc comment on why it exists here at all (driving auto-titling, not visual nesting). */
+  /**
+   * Same recursive shape as `pmSchema.ts`'s own `section` — see this
+   * file's own doc comment on why it exists here at all (driving
+   * auto-titling, not visual nesting) — now editable with the essay
+   * editor's own section tools wholesale (`pmSlideNodeViews.ts`'s
+   * `SlideSectionView`, `slideCommands.ts`'s own `demoteSectionAt`):
+   * collapse/expand and "demote" (fold back into the parent section,
+   * right after it — the way to turn a section nested one level too deep
+   * into a sibling of whatever it's currently nested inside, by demoting
+   * it until it's at the depth you actually want).
+   *
+   * `collapsed` is session-only UI state, same convention and same
+   * reason as `pmSchema.ts`'s own identical attr: `SlideDeckEditor.tsx`'s
+   * own `stripCollapsedAttrs` resets it on the way into persisted storage,
+   * so a fold never syncs to another device or outlives a reload.
+   */
   section: {
     content: 'section_title block+',
     group: 'block',
     defining: true,
-    attrs: { id: { default: null } },
+    attrs: { id: { default: null }, collapsed: { default: false } },
     parseDOM: [{ tag: 'section', getAttrs: (dom) => ({ id: (dom as HTMLElement).getAttribute('data-section-id') }) }],
     toDOM(node) {
       return ['section', { 'data-section-id': node.attrs.id }, 0]

@@ -1,6 +1,6 @@
 import type { Node as PMNode } from 'prosemirror-model'
 import type { EditorView, NodeView } from 'prosemirror-view'
-import { deleteBreak, setSlideBreakLayout } from './slideCommands'
+import { deleteBreak, promoteSectionAt, setSlideBreakLayout } from './slideCommands'
 
 const LAYOUTS: { value: string; label: string }[] = [
   { value: 'content', label: 'Content' },
@@ -124,5 +124,106 @@ export class FragmentBreakView implements NodeView {
 
   stopEvent() {
     return true
+  }
+}
+
+/**
+ * A `section`'s own editing chrome — the essay editor's own collapse
+ * chevron (`pmNodeViews.ts`'s `SectionView`) imported wholesale, plus a
+ * "promote" button in the same spot its own demote button sits, but with
+ * different mechanics underneath (`slideCommands.ts`'s own
+ * `promoteSectionAt` — see its own doc comment for exactly why this
+ * isn't just essay's `demoteSectionAt` reused as-is): the fix for "I
+ * can't make a sibling section after the current one," since a brand-new
+ * section can only ever be created as a *child* of wherever the cursor
+ * is (`slideCommands.ts`'s own `insertSection`) — promoting it afterward
+ * moves it bodily out to become a sibling of whatever used to contain
+ * it, keeping its own title and section-ness intact. No section-number
+ * label, unlike the essay version this is based on — numbered chapters
+ * don't read as a meaningful convention for a slide deck's own
+ * organizational sections the way they do for an essay's.
+ */
+export class SlideSectionView implements NodeView {
+  dom: HTMLElement
+  contentDOM: HTMLElement
+  node: PMNode
+  view: EditorView
+  getPos: () => number | undefined
+  private chevron: HTMLButtonElement
+  private promoteBtn: HTMLButtonElement
+
+  constructor(node: PMNode, view: EditorView, getPos: () => number | undefined) {
+    this.node = node
+    this.view = view
+    this.getPos = getPos
+    this.dom = document.createElement('section')
+    this.dom.dataset.sectionId = node.attrs.id ?? ''
+
+    const chevron = document.createElement('button')
+    chevron.type = 'button'
+    chevron.className = 'section-chevron'
+    chevron.contentEditable = 'false'
+    chevron.textContent = '▾'
+    chevron.addEventListener('mousedown', (e) => e.preventDefault())
+    chevron.addEventListener('click', (e) => {
+      e.preventDefault()
+      e.stopPropagation()
+      this.toggle()
+    })
+    this.dom.appendChild(chevron)
+    this.chevron = chevron
+
+    const promoteBtn = document.createElement('button')
+    promoteBtn.type = 'button'
+    promoteBtn.className = 'divider-delete section-demote'
+    promoteBtn.contentEditable = 'false'
+    promoteBtn.title = "Promote: move this section out of its own parent, as a sibling right after it — repeat to move it further up"
+    promoteBtn.textContent = '⤴'
+    promoteBtn.addEventListener('mousedown', (e) => e.preventDefault())
+    promoteBtn.addEventListener('click', (e) => {
+      e.preventDefault()
+      e.stopPropagation()
+      const pos = this.getPos()
+      if (pos != null) promoteSectionAt(this.view, pos)
+    })
+    this.dom.appendChild(promoteBtn)
+    this.promoteBtn = promoteBtn
+
+    this.contentDOM = document.createElement('div')
+    this.contentDOM.className = 'slide-section-body'
+    this.dom.appendChild(this.contentDOM)
+    this.syncCollapsed()
+  }
+
+  private toggle() {
+    const pos = this.getPos()
+    if (pos == null) return
+    const tr = this.view.state.tr.setNodeMarkup(pos, undefined, { ...this.node.attrs, collapsed: !this.node.attrs.collapsed })
+    this.view.dispatch(tr)
+  }
+
+  private syncCollapsed() {
+    const collapsed = !!this.node.attrs.collapsed
+    this.dom.classList.toggle('collapsed', collapsed)
+    this.chevron.classList.toggle('collapsed', collapsed)
+    this.chevron.title = collapsed ? 'Expand this section' : 'Collapse this section'
+  }
+
+  update(node: PMNode) {
+    if (node.type.name !== 'section') return false
+    this.node = node
+    this.dom.dataset.sectionId = node.attrs.id ?? ''
+    this.syncCollapsed()
+    return true
+  }
+
+  stopEvent(event: Event) {
+    const target = event.target
+    if (!(target instanceof Node)) return false
+    return this.chevron.contains(target) || this.promoteBtn.contains(target)
+  }
+
+  ignoreMutation(record: MutationRecord | { type: string; target: EventTarget | null }) {
+    return !this.contentDOM.contains(record.target as Node)
   }
 }

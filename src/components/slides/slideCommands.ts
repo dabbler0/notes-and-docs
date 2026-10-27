@@ -154,3 +154,58 @@ export function insertSection(view: EditorView): boolean {
   view.focus()
   return true
 }
+
+/**
+ * "Promote": moves a section bodily out of its own parent, landing it as
+ * a sibling right after that former parent — a brand-new section can
+ * only ever be *created* nested one level deeper than wherever the
+ * cursor already was (`insertSection`, above), so this is the other half
+ * of "I can't make a sibling section after the current one": make the
+ * new section as a child first, then promote it out until it's a
+ * sibling of whatever used to contain it.
+ *
+ * Deliberately *not* `pmCommands.ts`'s own `demoteSectionAt`, even though
+ * that's the essay editor's own "move a section" tool and the obvious
+ * thing to reach for first — essay's version discards the moved
+ * section's own title and flattens its body into the parent as plain
+ * content, which solves a different problem (essay: "undo turning this
+ * into its own subsection") than this one (slides: "this section is
+ * nested one level too deep — move it up, keeping its own title and its
+ * own section-ness intact, as a real sibling"). A section promoted all
+ * the way out to the top level (no parent section left, only the
+ * document itself) can't be promoted any further — there's nothing
+ * shallower than a deck's own top-level sections (see `slideSchema.ts`'s
+ * own doc comment on why those are already siblings, not nested inside
+ * one implicit whole-deck wrapper the way an essay's root section is).
+ */
+export function promoteSectionAt(view: EditorView, pos: number): boolean {
+  const { state } = view
+  const $pos = state.doc.resolve(pos + 1)
+  const sectionDepth = $pos.depth
+  const parentDepth = sectionDepth - 1
+  if (sectionDepth < 1 || parentDepth < 1) return false
+  const parentNode = $pos.node(parentDepth)
+  const sectionNode = $pos.node(sectionDepth)
+  let tr = state.tr
+  const insertAfterParent = $pos.after(parentDepth)
+  let start = $pos.before(sectionDepth)
+  let end = $pos.after(sectionDepth)
+  // If this section is its own parent's only body content (title + this
+  // section, nothing else), removing it outright would leave the parent
+  // violating its own `section_title block+` content requirement —
+  // transiently invalid mid-transaction, not just in the end result,
+  // which confirmed live sent ProseMirror's own schema-repair machinery
+  // into infinite recursion trying to auto-fill it back to validity. A
+  // plain empty paragraph left behind first keeps every intermediate step
+  // valid on its own.
+  if (parentNode.childCount === 2) {
+    tr = tr.insert(start, slideSchema.nodes.paragraph.create())
+    start = tr.mapping.map(start, 1)
+    end = tr.mapping.map(end)
+  }
+  tr = tr.delete(start, end)
+  tr.insert(tr.mapping.map(insertAfterParent), sectionNode)
+  view.dispatch(tr)
+  view.focus()
+  return true
+}

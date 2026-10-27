@@ -9,10 +9,29 @@ import { inputRules, wrappingInputRule } from 'prosemirror-inputrules'
 import { Node as PMNode } from 'prosemirror-model'
 import { slideSchema } from '../../lib/slideSchema'
 import { saveSlideshow } from '../../models/slideshowsRepo'
-import { SlideBreakView, FragmentBreakView } from './pmSlideNodeViews'
+import { SlideBreakView, FragmentBreakView, SlideSectionView } from './pmSlideNodeViews'
 import { createSlideCitationView } from './pmSlideCitationView'
 import { insertSlideBreak, insertFragmentBreak } from './slideCommands'
 import type { Slideshow, Source } from '../../models/types'
+
+/**
+ * A section's own `collapsed` attr is session-only UI state (see
+ * `slideSchema.ts`'s own doc comment) — reset to `false` on the way into
+ * persisted storage, same convention and same reason as
+ * `PMEssayEditor.tsx`'s own identical `stripCollapsedAttrs`.
+ */
+function stripCollapsedAttrs(node: unknown): unknown {
+  if (node === null || typeof node !== 'object') return node
+  const obj = node as Record<string, unknown>
+  const next: Record<string, unknown> = { ...obj }
+  if (next.type === 'section' && next.attrs && typeof next.attrs === 'object') {
+    next.attrs = { ...(next.attrs as Record<string, unknown>), collapsed: false }
+  }
+  if (Array.isArray(next.content)) {
+    next.content = next.content.map(stripCollapsedAttrs)
+  }
+  return next
+}
 
 /**
  * The slide-deck counterpart of `PMEssayEditor.tsx` — same "mount/tear down
@@ -54,7 +73,7 @@ export function SlideDeckEditor({
     function scheduleSave(newDoc: PMNode) {
       window.clearTimeout(saveTimer)
       saveTimer = window.setTimeout(() => {
-        deck.doc = newDoc.toJSON()
+        deck.doc = stripCollapsedAttrs(newDoc.toJSON())
         saveSlideshow(deck)
       }, 500)
     }
@@ -116,6 +135,7 @@ export function SlideDeckEditor({
       nodeViews: {
         slide_break: (node, v, getPos) => new SlideBreakView(node, v, getPos as () => number | undefined),
         fragment_break: (node, v, getPos) => new FragmentBreakView(node, v, getPos as () => number | undefined),
+        section: (node, v, getPos) => new SlideSectionView(node, v, getPos as () => number | undefined),
         citation: (node) => new (createSlideCitationView(sources))(node),
       },
       dispatchTransaction(tr) {
@@ -140,5 +160,5 @@ export function SlideDeckEditor({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [deck.id])
 
-  return <div className="pm-editor-root pm-slide-editor-root" ref={containerRef} />
+  return <div className="pm-slide-editor-root" ref={containerRef} />
 }
