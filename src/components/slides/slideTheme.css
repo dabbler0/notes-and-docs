@@ -88,26 +88,48 @@
   margin: 0 0 28px;
 }
 
-.slide-body {
+/**
+ * `.slide-body-wrap` is the flexible region between the title rule and the
+ * citation footer (if any) — `flex: 1` so it claims whatever vertical room
+ * the slide actually has left, `min-height: 0` so it's clamped to that
+ * room rather than growing to fit an overflowing child (a plain flex
+ * item's default `min-height: auto` would do exactly that, which would
+ * silently defeat both the centering below *and* `autosizeSlideBody.ts`'s
+ * own "how much room is actually available" measurement). Centering
+ * `.slide-body` inside it here, in CSS, rather than sizing/positioning it
+ * from JS, is what keeps it fragmentation-safe for free: reveal.js's own
+ * `.fragment` elements reserve their real layout space (`visibility:
+ * hidden`, never `display: none`) from the moment a slide mounts, so
+ * `.slide-body`'s own natural height — and so its centered position — is
+ * already final before any fragment is ever revealed, and never moves as
+ * later ones are.
+ */
+.slide-body-wrap {
   flex: 1;
-  font-size: 24px;
-  line-height: 1.45;
+  min-height: 0;
   display: flex;
   flex-direction: column;
+  justify-content: center;
+}
+
+/** Font-size starts here (also `autosizeSlideBody.ts`'s own floor/ceiling bounds' starting point) and is overwritten per-slide, once, by that same script — see its own doc comment. */
+.slide-body {
+  font-size: 24px;
+  line-height: 1.45;
 }
 
 .slide-body p {
-  margin: 0 0 16px;
+  margin: 0 0 0.65em;
 }
 
 .slide-body ul,
 .slide-body ol {
-  margin: 0 0 16px;
+  margin: 0 0 0.65em;
   padding-left: 1.3em;
 }
 
 .slide-body li {
-  margin: 0 0 8px;
+  margin: 0 0 0.35em;
 }
 
 .slide-body ul li::marker {
@@ -129,8 +151,17 @@
   color: var(--slide-muted);
 }
 
+/**
+ * A sibling of `.slide-body-wrap`, not a child of `.slide-body` inside it
+ * — deliberately kept out of the centered block (`slideSerializer.ts`'s
+ * own `renderSlide`/`RenderedBody` split it out for exactly this reason):
+ * an attribution line belongs pinned to the slide's own bottom edge, not
+ * swept up and centered along with the rest of the body text. `.slide-
+ * body-wrap`'s own `flex: 1` already claims all the room above it, so
+ * ordinary flow alone — no `margin-top: auto` needed — puts this right at
+ * the bottom.
+ */
 .slide-citation-footer {
-  margin-top: auto;
   padding-top: 16px;
   text-align: right;
   font-size: 0.6em;
@@ -177,7 +208,7 @@
 }
 
 .bibliography-entry {
-  margin: 0 0 14px;
+  margin: 0 0 0.6em;
 }
 
 /* ---- Reveal.js chrome: footer-style deck title + page number, matching the Beamer deck's own corner footer ---- */

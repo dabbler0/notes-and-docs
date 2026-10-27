@@ -2,6 +2,7 @@ import { useEffect, useRef } from 'preact/hooks'
 import type { Node as PMNode } from 'prosemirror-model'
 import Reveal from 'reveal.js'
 import { serializeDeck } from './slideSerializer'
+import { autosizeSlideBody } from './autosizeSlideBody'
 import type { Source } from '../../models/types'
 
 /**
@@ -52,7 +53,23 @@ export function SlidePresenter({
       transition: 'fade',
       keyboard: true,
     })
-    deck.initialize()
+    // Each slide's own text is autosized to fill its available vertical
+    // room (`autosizeSlideBody`'s own doc comment) — but a slide only has
+    // real layout while reveal.js is actually showing it (every other
+    // slide sits `display: none`, reveal.css's own default), so this can't
+    // run for every slide up front at mount time; it runs lazily, once per
+    // slide, the moment each one first becomes current. `deck.initialize()`
+    // itself doesn't fire `slidechanged` for the slide it opens on — that
+    // event is only for subsequent navigation — so the very first slide is
+    // sized explicitly once initialization resolves.
+    deck.initialize().then(() => {
+      const current = deck.getCurrentSlide()
+      if (current) autosizeSlideBody(current)
+    })
+    deck.on('slidechanged', (event) => {
+      const currentSlide = (event as unknown as { currentSlide?: Element }).currentSlide
+      if (currentSlide) autosizeSlideBody(currentSlide)
+    })
 
     function onKeyDown(e: KeyboardEvent) {
       if (e.key === 'Escape') onClose()

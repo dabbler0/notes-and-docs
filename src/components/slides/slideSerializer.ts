@@ -126,8 +126,14 @@ interface BodyEntry {
   fragmentIndex: number
 }
 
-/** Renders a slide's own body — ordinary flow, except: a trailing citation-only paragraph (see above) renders separately as `.slide-citation-footer` so the theme CSS can pin it to the slide's bottom regardless of how much content sits above it; and consecutive entries sharing the same (non–`-1`) `fragmentIndex` are grouped into one `.fragment` wrapper, so everything typed between two fragment breaks reveals together as a single step. */
-function renderBody(entries: BodyEntry[], sources: Map<string, Source>): string {
+/** A slide's own rendered body, split into the part that gets vertically centered (`html`) and a trailing citation-only paragraph, if any (`footer`) — kept separate so `renderSlide`/`renderBibliographySlide` can place `footer` as its own sibling, pinned to the slide's bottom by ordinary flow (nothing further above it reserves space for it) rather than inside the centered block itself, where it would get centered right along with everything else. */
+interface RenderedBody {
+  html: string
+  footer: string
+}
+
+/** Renders a slide's own body — ordinary flow, except: a trailing citation-only paragraph (see above) is pulled out into `footer` instead of `html` (see `RenderedBody`'s own doc comment); and consecutive entries sharing the same (non–`-1`) `fragmentIndex` are grouped into one `.fragment` wrapper, so everything typed between two fragment breaks reveals together as a single step. */
+function renderBody(entries: BodyEntry[], sources: Map<string, Source>): RenderedBody {
   let html = ''
   let footer = ''
   let i = 0
@@ -152,8 +158,7 @@ function renderBody(entries: BodyEntry[], sources: Map<string, Source>): string 
     }
     html += `<div class="fragment" data-fragment-index="${fragmentIndex}">${group}</div>`
   }
-  if (footer) html += `<div class="slide-citation-footer">${footer}</div>`
-  return html
+  return { html, footer }
 }
 
 function toRoman(n: number): string {
@@ -218,7 +223,9 @@ function renderBibliographySlide(citedIds: string[], sources: Map<string, Source
       <div class="slide-eyebrow"></div>
       <h2 class="slide-title-display">References</h2>
       <hr class="title-rule-thin" />
-      <div class="slide-body bibliography-body">${entries || '<p class="muted">No sources cited in this deck yet.</p>'}</div>
+      <div class="slide-body-wrap">
+        <div class="slide-body bibliography-body">${entries || '<p class="muted">No sources cited in this deck yet.</p>'}</div>
+      </div>
     </div>`,
     notes: '',
   }
@@ -233,12 +240,16 @@ interface SlideAccumulator {
 }
 
 function renderSlide(acc: SlideAccumulator, sources: Map<string, Source>): SerializedSlide {
+  const body = renderBody(acc.body, sources)
   return {
     html: `<div class="slide-inner slide-layout-content">
       <div class="slide-eyebrow">${escapeHtml(acc.eyebrow)}</div>
       <h2 class="slide-title-display">${escapeHtml(acc.title)}</h2>
       <hr class="title-rule-thin" />
-      <div class="slide-body">${renderBody(acc.body, sources)}</div>
+      <div class="slide-body-wrap">
+        <div class="slide-body">${body.html}</div>
+      </div>
+      ${body.footer ? `<div class="slide-citation-footer">${body.footer}</div>` : ''}
     </div>`,
     notes: '',
   }
