@@ -9,7 +9,7 @@ import { Node as PMNode } from 'prosemirror-model'
 import { essaySchema } from '../../lib/pmSchema'
 import { saveEssay } from '../../models/essaysRepo'
 import { createCitationView, SectionView, FootnoteView, createMathView, SlideBreakView, FragmentBreakView } from './pmNodeViews'
-import { splitIntoSection, preventJoinIntoSectionTitle, dedupeSectionIds } from './pmCommands'
+import { splitIntoSection, preventJoinIntoSectionTitle, dedupeSectionIds, pasteFlatSectionsFromHtml } from './pmCommands'
 import { createCommentPlugin } from './pmCommentPlugin'
 import { createCitationArrowPlugin } from './pmCitationArrowPlugin'
 import { createActiveSectionPlugin } from './pmActiveSectionPlugin'
@@ -242,6 +242,29 @@ export function PMEssayEditor({
         math_block: (node, v, getPos) => new (createMathView(true))(node, v, getPos as () => number | undefined),
         slide_break: (node, v, getPos) => new SlideBreakView(node, v, getPos as () => number | undefined),
         fragment_break: (node, v, getPos) => new FragmentBreakView(node, v, getPos as () => number | undefined),
+      },
+      handleDOMEvents: {
+        // Pasting HTML whose own headings were never wrapped in a real
+        // `<section>` (content copied from outside this app) needs its
+        // own handling — see `pasteFlatSectionsFromHtml`'s own doc
+        // comment for the ProseMirror parsing quirk its default fallback
+        // hits otherwise. Deliberately `handleDOMEvents.paste` (the raw
+        // DOM event, fired before ProseMirror's own default clipboard
+        // handling ever touches it) rather than the higher-level
+        // `handlePaste` prop — confirmed live: `handlePaste` itself
+        // already runs *after* ProseMirror's own internal clipboard-read
+        // pipeline has had a first pass at the pasted HTML, which hit the
+        // very same crash this exists to avoid before `handlePaste`'s own
+        // callback ever got a chance to run. `preventDefault()` is what
+        // actually stops that default pipeline from running at all once
+        // this decides to handle the paste itself.
+        paste(v, event) {
+          const html = (event as ClipboardEvent).clipboardData?.getData('text/html')
+          if (!html) return false
+          const handled = pasteFlatSectionsFromHtml(v, html)
+          if (handled) event.preventDefault()
+          return handled
+        },
       },
       dispatchTransaction(tr) {
         const newState = view.state.apply(tr)

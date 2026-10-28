@@ -344,6 +344,134 @@ export function moveSectionTo(view: EditorView, draggedId: string, targetId: str
   return true
 }
 
+const HEADING_TAGS = new Set(['H1', 'H2', 'H3', 'H4', 'H5', 'H6'])
+
+/** Parses a run of plain DOM child nodes (never containing a heading — every caller below only ever hands this the content strictly *between* two headings, or before the first one) into a PM `Fragment` via a flexible, not-top-node-constrained parse — same `parseSlice` technique `insertHtmlAtSelection`, above, already uses for the same reason: `essaySchema`'s own `doc` node requires exactly one `section` at the top level, which a plain parse (`DOMParser.parse`) would enforce and a bare run of paragraphs can't satisfy. */
+function parseHtmlFragmentToPmFragment(nodes: ChildNode[]): Fragment {
+  if (nodes.length === 0) return Fragment.empty
+  const wrapper = document.createElement('div')
+  for (const n of nodes) wrapper.appendChild(n.cloneNode(true))
+  return PMDOMParser.fromSchema(essaySchema).parseSlice(wrapper, { preserveWhitespace: true }).content
+}
+
+/**
+ * Pasting plain HTML from *outside* this app whose own headings
+ * (`<h1>`–`<h6>`) were never wrapped in a real `<section>` — unlike
+ * pasting a copy of this app's own content, where every heading already
+ * sits inside a real `<section data-section-id>` (the ordinary default
+ * paste path handles that fine; `dedupeSectionIds`/`pmSectionIdPlugin.ts`
+ * cover any id collision it might carry) — hits a real, confirmed-live
+ * ProseMirror parsing quirk: a bare `<h2>` with no enclosing `<section>`
+ * still matches `section_title`'s own `parseDOM` (`pmSchema.ts`), but
+ * `section_title` only has meaning *inside* a `section`'s own content
+ * model, so ProseMirror's default parser auto-wraps it in a
+ * freshly-synthesized `section` node of its own (`findWrapping`, its
+ * usual "what ancestor would make this orphan fit" fallback) — with no
+ * real DOM element behind that synthesized wrapper for `section`'s own
+ * `getAttrs` to read an id from, so it's born with `id: null`
+ * (`dedupeSectionIds` also treats that as needing a fresh one, but by
+ * then the *structure* is already wrong). Worse, once auto-created, that
+ * synthesized section stays the parser's own current insertion context
+ * for everything parsed after it, so a *second* bare heading right after
+ * the first gets wrapped *inside* the first section instead of becoming
+ * its own sibling — confirmed live: pasting several flat, same-level
+ * `<h2>`s produced an ever-deepening nest of subsections, not the flat
+ * sequence the source HTML actually had.
+ *
+ * Bypasses that default parsing for exactly this case: splits the pasted
+ * HTML on every heading — deliberately flat regardless of heading level
+ * (h1 vs. h2 vs. h3), matching the source's own flat structure rather
+ * than guessing a nesting depth from it — and builds one real `section`
+ * node per heading by hand, each with its own freshly-minted id
+ * (`lib/id.ts`, same as every other section-creating command in this
+ * file) and the heading's own text as its title; everything up to the
+ * next heading becomes that section's body. Plain content before the
+ * first heading (if any) is inserted as-is, un-wrapped.
+ *
+ * Returns `false` — meaning "did nothing, handled the content the
+ * default way" — when the pasted HTML has no heading tag outside of a
+ * real `<section>` at all, which covers both plain prose paste and a
+ * copy of this app's own content unchanged; the caller (`handlePaste`,
+ * `PMEssayEditor.tsx`) falls back to ProseMirror's own default paste
+ * handling in that case.
+ */
+export function pasteFlatSectionsFromHtml(view: EditorView, html: string): boolean {
+  const container = document.createElement('div')
+  container.innerHTML = html
+  const isOrphanHeading = (n: ChildNode): n is HTMLElement => n.nodeType === 1 && HEADING_TAGS.has((n as HTMLElement).tagName) && !(n as HTMLElement).closest('section')
+  const children = Array.from(container.childNodes)
+  if (!children.some(isOrphanHeading)) return false
+
+  const topNodes: PMNode[] = []
+  let i = 0
+  const preNodes: ChildNode[] = []
+  while (i < children.length && !isOrphanHeading(children[i])) {
+    preNodes.push(children[i])
+    i++
+  }
+  parseHtmlFragmentToPmFragment(preNodes).forEach((n) => topNodes.push(n))
+
+  while (i < children.length) {
+    const headingEl = children[i] as HTMLElement
+    const title = headingEl.textContent?.trim() ?? ''
+    i++
+    const bodyNodes: ChildNode[] = []
+    while (i < children.length && !isOrphanHeading(children[i])) {
+      bodyNodes.push(children[i])
+      i++
+    }
+    let bodyContent = parseHtmlFragmentToPmFragment(bodyNodes)
+    if (bodyContent.childCount === 0) bodyContent = Fragment.from(essaySchema.nodes.paragraph.create())
+    const titleNode = essaySchema.nodes.section_title.create(null, title ? essaySchema.text(title) : undefined)
+    topNodes.push(essaySchema.nodes.section.create({ id: id() }, Fragment.from(titleNode).append(bodyContent)))
+  }
+
+  if (topNodes.length === 0) return false
+  // Plain `delete` (only when there's an actual selection to replace) +
+  // sequential `insert` at a clean block-boundary position, not
+  // `replaceSelection`/`replaceRange` — confirmed live: handing a
+  // multi-top-level-node `Slice` to `replaceSelection` crashed with a
+  // stack overflow, the same `ContentMatch` fragility noted elsewhere in
+  // this codebase (`promoteSectionAt`'s own doc comment); `replaceRange`'s
+  // own boundary-fitting heuristics (deciding how much of the surrounding
+  // structure to absorb into the replacement) exercise that same
+  // machinery. The insertion point itself is "after the current top-level
+  // block of the nearest enclosing section" — same landing spot
+  // `insertDivider`'s own doc comment explains, and for the same reason:
+  // a raw cursor position can sit *inside* an existing paragraph's own
+  // inline content, which isn't a valid place to insert a block-level
+  // `section`/`paragraph` sibling at all (confirmed live: using the raw,
+  // unmapped selection position here threw an out-of-range position
+  // error on the second insert, once the first had already shifted
+  // everything after it).
+  const { state } = view
+  let tr = state.tr
+  if (!state.selection.empty) tr = tr.delete(state.selection.from, state.selection.to)
+  const $from = tr.doc.resolve(tr.mapping.map(state.selection.from))
+  const containerDepth = nearestSectionDepth($from)
+  const pos = $from.after(containerDepth + 1)
+  // Insert a throwaway placeholder paragraph first (a plain, content-less
+  // insert — safe, same as every divider/section-creating command
+  // elsewhere in this file), then immediately `replaceWith` that exact
+  // range with the real content — `splitIntoSection`'s own
+  // proven-reliable technique for landing a brand-new `section` node,
+  // rather than a bare `tr.insert(pos, content)` of one directly:
+  // confirmed live, inserting a `section` node that way at this kind of
+  // position (right after an existing non-empty paragraph) crashed with a
+  // stack overflow inside ProseMirror's own `ContentMatch.fillBefore`/
+  // `createAndFill` — a real fragility in how this schema's
+  // self-referential `block` group (`section` can contain more
+  // `section`s) interacts with a plain zero-length insert's own
+  // content-fitting search; replacing a *real*, non-empty range doesn't
+  // hit it.
+  const placeholder = essaySchema.nodes.paragraph.create()
+  tr = tr.insert(pos, placeholder)
+  tr = tr.replaceWith(pos, pos + placeholder.nodeSize, Fragment.from(topNodes))
+  view.dispatch(tr)
+  view.focus()
+  return true
+}
+
 /**
  * Reassigns a fresh id to every `section` beyond the first (document
  * order, pre-order — same traversal `findSectionById`/`doc.descendants`
@@ -352,6 +480,15 @@ export function moveSectionTo(view: EditorView, draggedId: string, targetId: str
  * ever changes. Returns `doc` itself, unchanged (`===`), when nothing was
  * duplicated — the overwhelmingly common case — so callers can cheaply
  * tell whether anything needed fixing without a separate equality check.
+ *
+ * Treats a missing id (`null`/empty — `!currentId`) exactly like a
+ * collision: also confirmed live, pasting plain HTML from *outside* this
+ * app whose own headings were never wrapped in a real `<section>` at all
+ * (`pasteFlatSectionsFromHtml`'s own doc comment covers the main fix for
+ * that path) can still reach here with `id: null` by some other route —
+ * nothing downstream can treat a `null` id as "this section's own
+ * identity" any more than it could treat a duplicate one that way, so
+ * both get a fresh one here, uniformly.
  *
  * Exists because of a real, confirmed-live corruption path: pasting any
  * content that includes a `section` carries its own `data-section-id`
@@ -385,11 +522,12 @@ export function dedupeSectionIds(doc: PMNode): PMNode {
     let selfChanged = false
     if (node.type.name === 'section') {
       const currentId = node.attrs.id as string | null
-      if (currentId && seen.has(currentId)) {
+      if (!currentId || seen.has(currentId)) {
         attrs = { ...node.attrs, id: id() }
         selfChanged = true
         changed = true
-      } else if (currentId) {
+        seen.add(attrs.id as string)
+      } else {
         seen.add(currentId)
       }
     }
