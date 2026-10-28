@@ -9,10 +9,11 @@ import { Node as PMNode } from 'prosemirror-model'
 import { essaySchema } from '../../lib/pmSchema'
 import { saveEssay } from '../../models/essaysRepo'
 import { createCitationView, SectionView, FootnoteView, createMathView, SlideBreakView, FragmentBreakView } from './pmNodeViews'
-import { splitIntoSection, preventJoinIntoSectionTitle } from './pmCommands'
+import { splitIntoSection, preventJoinIntoSectionTitle, dedupeSectionIds } from './pmCommands'
 import { createCommentPlugin } from './pmCommentPlugin'
 import { createCitationArrowPlugin } from './pmCitationArrowPlugin'
 import { createActiveSectionPlugin } from './pmActiveSectionPlugin'
+import { createSectionIdDedupePlugin } from './pmSectionIdPlugin'
 import { createMathInputRules, createListInputRules } from './pmInputRules'
 import type { Essay, Source } from '../../models/types'
 
@@ -150,7 +151,14 @@ export function PMEssayEditor({
 
   useEffect(() => {
     if (!containerRef.current) return
-    const doc = PMNode.fromJSON(essaySchema, record.doc)
+    const parsedDoc = PMNode.fromJSON(essaySchema, record.doc)
+    // Repairs a record whose own stored `doc` *already* has duplicate
+    // section ids (see `dedupeSectionIds`'s own doc comment, pmCommands.ts,
+    // for the real paste-driven corruption path and its confusing
+    // symptoms) the moment it's opened — `pmSectionIdPlugin.ts`'s own
+    // `appendTransaction` plugin, registered below, only ever catches a
+    // *future* transaction introducing one, not whatever's already there.
+    const doc = dedupeSectionIds(parsedDoc)
     let saveTimer: number | undefined
 
     function scheduleSave(newDoc: PMNode) {
@@ -161,6 +169,10 @@ export function PMEssayEditor({
         ;(onSaveRef.current ?? ((r) => saveEssay(r as Essay)))(record)
       }, 500)
     }
+    // Persists the repair above, so a corrupted record only ever needs
+    // fixing once rather than silently re-repairing itself in memory on
+    // every future open.
+    if (doc !== parsedDoc) scheduleSave(doc)
 
     const state = EditorState.create({
       doc,
@@ -205,6 +217,7 @@ export function PMEssayEditor({
         createListInputRules(),
         createCommentPlugin(commentsHolder, (commentId) => onAnchorClickRef.current?.(commentId)),
         createActiveSectionPlugin(),
+        createSectionIdDedupePlugin(),
       ],
     })
 

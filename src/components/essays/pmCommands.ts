@@ -344,6 +344,72 @@ export function moveSectionTo(view: EditorView, draggedId: string, targetId: str
   return true
 }
 
+/**
+ * Reassigns a fresh id to every `section` beyond the first (document
+ * order, pre-order — same traversal `findSectionById`/`doc.descendants`
+ * already use) that shares an id with an earlier one — the section's own
+ * content/title/nesting is left completely untouched, only `attrs.id`
+ * ever changes. Returns `doc` itself, unchanged (`===`), when nothing was
+ * duplicated — the overwhelmingly common case — so callers can cheaply
+ * tell whether anything needed fixing without a separate equality check.
+ *
+ * Exists because of a real, confirmed-live corruption path: pasting any
+ * content that includes a `section` carries its own `data-section-id`
+ * straight through ProseMirror's default paste parsing (`pmSchema.ts`'s
+ * own `section.parseDOM`) — nothing mints a fresh one — so pasting a copy
+ * of existing content (even from later in the very same document)
+ * duplicates its section ids exactly. Since `id` is how
+ * `findSectionById`/`toggleSectionCollapsed` above, `NodeTree.tsx`'s own
+ * drag-and-drop target lookup, and `SectionView`'s own
+ * `dom.dataset.sectionId` all identify "which section is this," a
+ * collision makes every one of them treat two (or more) different
+ * sections as if they were the same one — confirmed live as "this
+ * section won't drag" (`moveSectionTo`'s own id lookup silently resolves
+ * to the *other*, earlier section sharing that id) and "every section
+ * sharing this id highlights as the drop target at once."
+ *
+ * Used two ways (`PMEssayEditor.tsx`): once, directly, against a record's
+ * own `doc` right after parsing it — repairs an *already* corrupted essay
+ * the moment it's opened, not just from here on — and continuously, via
+ * `pmSectionIdPlugin.ts`'s `appendTransaction` plugin, which calls this
+ * after every doc-changing transaction so a *future* paste (or any other
+ * way a duplicate might sneak in) gets caught and fixed immediately,
+ * folded into the same state update the user sees — never a visible,
+ * separate follow-up edit.
+ */
+export function dedupeSectionIds(doc: PMNode): PMNode {
+  const seen = new Set<string>()
+  let changed = false
+  function fix(node: PMNode): PMNode {
+    let attrs = node.attrs
+    let selfChanged = false
+    if (node.type.name === 'section') {
+      const currentId = node.attrs.id as string | null
+      if (currentId && seen.has(currentId)) {
+        attrs = { ...node.attrs, id: id() }
+        selfChanged = true
+        changed = true
+      } else if (currentId) {
+        seen.add(currentId)
+      }
+    }
+    let content = node.content
+    let contentChanged = false
+    const mapped: PMNode[] = []
+    node.forEach((child) => {
+      const next = fix(child)
+      if (next !== child) contentChanged = true
+      mapped.push(next)
+    })
+    if (contentChanged) content = Fragment.from(mapped)
+    if (selfChanged) return node.type.create(attrs, content, node.marks)
+    if (contentChanged) return node.copy(content)
+    return node
+  }
+  const fixed = fix(doc)
+  return changed ? fixed : doc
+}
+
 /** Serializes a document slice to plain HTML via the schema's own `toDOM` — `pmSchema.ts` already defines exactly this for every node/mark, so no separate HTML-rendering logic is needed here. Used by "Send to graveyard," which keeps its own storage format (`GraveyardFragment.html`) unchanged regardless of what model the live editor uses. */
 export function sliceToHtml(slice: { content: Fragment }): string {
   const serializer = DOMSerializer.fromSchema(essaySchema)
