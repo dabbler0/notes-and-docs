@@ -95,18 +95,25 @@ export async function setEssayCommentResolved(essay: Essay, commentId: string, r
 
 /**
  * Switches a top-level, `'text'`-anchored comment between margin and
- * inline display — see `Comment.displayMode`'s own doc comment. Unlike
- * the old per-node model, there's nothing to splice/remove in the stored
- * document itself: which widget a comment renders through (a positioned
- * margin card, or a small inline preview right after its anchor) is
- * decided fresh, every render, purely from this one flag — see
- * `pmCommentPlugin.ts`. No-op for a comment that isn't a top-level
- * `'text'` comment, same restriction the old model had.
+ * inline display, together with the `body` that goes with each: an inline
+ * comment's own body lives as real, directly-editable document content
+ * (a `comment_text`-marked span right after its anchor — see
+ * `pmSchema.ts`'s own doc comment on that mark), so converting *to* inline
+ * clears the stored `body` (nothing left to keep here once it's live doc
+ * content) and converting *to* margin is handed the body extracted back
+ * out of the document. Pure data either way — actually moving the content
+ * into or out of the live document is the caller's job
+ * (`essayCommentActions.ts`'s `convertEssayCommentDisplayMode`, which has
+ * `view` access), same division of labor every other document-touching
+ * action in this module already follows. No-op for a comment that isn't a
+ * top-level `'text'` comment, same restriction the old model had.
  */
-export async function setEssayCommentDisplayMode(essay: Essay, commentId: string, mode: 'margin' | 'inline'): Promise<void> {
+export async function setEssayCommentBodyAndMode(essay: Essay, commentId: string, mode: 'margin' | 'inline', body: string): Promise<void> {
   const comment = findEssayCommentById(essay, commentId)
   if (!comment || comment.anchorKind !== 'text' || comment.parentId !== null) return
   comment.displayMode = mode
+  comment.body = body
+  comment.updatedAt = Date.now()
   await saveEssay(essay)
 }
 

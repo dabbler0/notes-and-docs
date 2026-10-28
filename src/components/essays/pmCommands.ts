@@ -648,6 +648,156 @@ export function insertHtmlAtSelection(view: EditorView, html: string): void {
   view.dispatch(view.state.tr.replaceSelection(slice))
 }
 
+/** The zero-width space `insertInlineCommentBody`/`insertCommentAnchorMark` use as a placeholder for an otherwise-empty marked range — same character, same reason (see `insertCommentAnchorMark`'s own doc comment): a mark can't apply to a genuinely zero-length range, and a real cursor needs *something* to land on. */
+const ZERO_WIDTH_SPACE = '​'
+
+/** Every `(from, to, mark, text)` hit for `commentId`'s own `comment_text` mark — the body-text counterpart to `findCommentAnchorHits`, above, same reasoning (a mark can span more than one adjacent text run). */
+function findCommentTextHits(doc: PMNode, commentId: string): { from: number; to: number; mark: Mark; text: string }[] {
+  const hits: { from: number; to: number; mark: Mark; text: string }[] = []
+  doc.descendants((node, pos) => {
+    if (!node.isText) return
+    const mark = node.marks.find((m) => m.type.name === 'comment_text' && m.attrs.commentId === commentId)
+    if (mark) hits.push({ from: pos, to: pos + node.nodeSize, mark, text: node.text ?? '' })
+  })
+  return hits
+}
+
+/** The full `{from, to}` span of `commentId`'s own `comment_text` mark in the live document — spanning every text run it touches — or `null` if it isn't anchored anywhere (no inline body has ever been created for this comment, or it's since been extracted to the margin). Exported for `pmCommentPlugin.ts`'s own action-widget placement and for `CommentsPanel.tsx`'s margin-positioning fallback. */
+export function commentTextRange(doc: PMNode, commentId: string): { from: number; to: number } | null {
+  const hits = findCommentTextHits(doc, commentId)
+  if (!hits.length) return null
+  return { from: Math.min(...hits.map((h) => h.from)), to: Math.max(...hits.map((h) => h.to)) }
+}
+
+/**
+ * Inserts a `comment_text`-marked placeholder at `pos` (right after a
+ * freshly-created inline comment's own anchor — see `EssayWorkspace.tsx`'s
+ * `beginComment`) and places the cursor right inside it, ready to type
+ * immediately: the whole point of this feature — a comment's own body is
+ * real, directly-editable document content, not a separate popup. Seeded
+ * with one zero-width space for the same reason `insertCommentAnchorMark`'s
+ * own empty-selection case is: a mark can't apply to nothing, and an
+ * inline, non-textblock position needs *some* character there for the
+ * browser to actually land a cursor on. `comment_text`'s own `toDOM`
+ * carries no `inclusive: false` (`pmSchema.ts`), so typing right after this
+ * placeholder naturally keeps extending the mark, the same way it would for
+ * bold/italic.
+ */
+export function insertInlineCommentBody(view: EditorView, commentId: string, pos: number): void {
+  // A plain `insertText` here would be wrong: `Transaction.insertText`
+  // (`prosemirror-state`) inherits whatever marks are active right at
+  // `pos` for the new text — which, landing right after the anchor's own
+  // inclusive `comment_anchor` mark, confirmed live meant the placeholder
+  // came out carrying *both* marks, nesting `comment-text` inside
+  // `comment-anchor` in the rendered DOM. Building the text node directly
+  // with exactly the one mark we want sidesteps that inheritance
+  // entirely.
+  const mark = essaySchema.marks.comment_text.create({ commentId })
+  const textNode = essaySchema.text(ZERO_WIDTH_SPACE, [mark])
+  const tr = view.state.tr.insert(pos, textNode)
+  tr.setSelection(TextSelection.create(tr.doc, pos + 1))
+  view.dispatch(tr)
+  view.focus()
+}
+
+/**
+ * Removes `commentId`'s own `comment_text` mark from wherever it sits in
+ * the live document, deleting the range outright — used when a comment is
+ * deleted (its own body has nothing left to keep) or extracted to the
+ * margin (`extractInlineCommentBody`, below, which needs the HTML *before*
+ * deleting — this function alone is for the simpler "just discard it"
+ * case). A no-op if the comment has no live `comment_text` span at all
+ * (e.g. it's a margin comment, or was already extracted).
+ */
+export function deleteInlineCommentBody(view: EditorView, commentId: string): void {
+  const range = commentTextRange(view.state.doc, commentId)
+  if (!range) return
+  view.dispatch(view.state.tr.delete(range.from, range.to))
+}
+
+/**
+ * Strips `commentId`'s own `comment_text` mark, keeping the text itself in
+ * place as ordinary prose — the "promote" counterpart to
+ * `deleteInlineCommentBody`'s "discard": used when an inline comment is
+ * dissolved into permanent prose (`essayCommentActions.ts`'s
+ * `promoteEssayComment`), where the whole point is that the typed text
+ * *stays*, just without the mark (and the comment record itself) any more.
+ * A run that's nothing but the zero-width-space placeholder (never actually
+ * typed into) is deleted outright instead, same as
+ * `removeCommentAnchorMark` already does for an anchor in the same state.
+ */
+export function removeCommentTextMark(view: EditorView, commentId: string): void {
+  const hits = findCommentTextHits(view.state.doc, commentId)
+  if (!hits.length) return
+  let tr = view.state.tr
+  for (let i = hits.length - 1; i >= 0; i--) {
+    const h = hits[i]
+    if (new RegExp(`^${ZERO_WIDTH_SPACE}+$`).test(h.text)) {
+      tr = tr.delete(h.from, h.to)
+      continue
+    }
+    // A hit with *some* real typed content can still carry
+    // `insertInlineCommentBody`'s own leading placeholder character —
+    // stripping the mark alone would leave that invisible character
+    // baked into the now-permanent prose. `removeMark` first (it never
+    // shifts positions, so `h`'s own coordinates stay valid for the
+    // `delete` right after — safe within one hit precisely because hits
+    // are processed in reverse, so no *other* hit's positions have
+    // shifted yet either).
+    tr = tr.removeMark(h.from, h.to, h.mark)
+    const leading = h.text.match(new RegExp(`^${ZERO_WIDTH_SPACE}+`))?.[0].length ?? 0
+    if (leading > 0) tr = tr.delete(h.from, h.from + leading)
+  }
+  view.dispatch(tr)
+}
+
+/**
+ * Removes `commentId`'s own `comment_text` range from the live document
+ * (like `deleteInlineCommentBody`) but first serializes it to HTML
+ * (`sliceToHtml`, above) and returns that — "extract to margin"
+ * (`essayCommentActions.ts`'s `convertEssayCommentDisplayMode`), which
+ * needs the comment's own typed content to become its `Comment.body`
+ * *before* removing it from the document. Strips the leading placeholder
+ * zero-width space (never real content) out of the returned HTML — a
+ * comment extracted before its author ever typed anything returns `''`.
+ * Returns `''` with no document change at all if the comment has no live
+ * `comment_text` span (already extracted, or never an inline comment to
+ * begin with).
+ */
+export function extractInlineCommentBody(view: EditorView, commentId: string): string {
+  const range = commentTextRange(view.state.doc, commentId)
+  if (!range) return ''
+  const slice = view.state.doc.slice(range.from, range.to)
+  const html = sliceToHtml(slice).replace(new RegExp(ZERO_WIDTH_SPACE, 'g'), '')
+  view.dispatch(view.state.tr.delete(range.from, range.to))
+  return html
+}
+
+/**
+ * The inverse of `extractInlineCommentBody` — "send to inline"
+ * (`convertEssayCommentDisplayMode`'s other direction): parses `html` (a
+ * margin comment's own stored `body`) wrapped in a synthetic
+ * `<comment-text data-comment-id>` tag, so `comment_text`'s own `parseDOM`
+ * rule (`pmSchema.ts`) applies the mark to every bit of it during parsing —
+ * the same "wrap first, let `parseDOM` do the work" technique
+ * `pasteFlatSectionsFromHtml` already relies on — and inserts the result at
+ * `pos` (right after the comment's own anchor). An empty/whitespace-only
+ * `html` (a margin comment nobody ever wrote anything into) falls back to
+ * `insertInlineCommentBody`'s own placeholder instead of inserting nothing
+ * — there still needs to be *something* marked for the comment to remain
+ * anchored to, and for its author to be able to click into and start typing.
+ */
+export function insertInlineCommentBodyFromHtml(view: EditorView, commentId: string, pos: number, html: string): void {
+  if (!html.trim()) {
+    insertInlineCommentBody(view, commentId, pos)
+    return
+  }
+  const dom = document.createElement('div')
+  dom.innerHTML = `<comment-text data-comment-id="${commentId}">${html}</comment-text>`
+  const slice = PMDOMParser.fromSchema(essaySchema).parseSlice(dom, { preserveWhitespace: true })
+  view.dispatch(view.state.tr.insert(pos, slice.content))
+}
+
 /** The depth of the nearest enclosing `section` around `$pos` — always ≥1 (the essay/slideshow document's own single root section, at depth 1) since, unlike a plain `doc`, `pmSchema.ts`'s `doc` content expression (`"section"`) guarantees every position is inside at least that one. Shared by `insertDivider` below: a `slide_break`/`fragment_break` always lands as a direct child of this container, never nested any deeper inside a list/blockquote the cursor happened to be in, and never lifted out past it — `slideSerializer.ts` reads a slide's own title off of exactly whichever section(s) enclose its own divider. */
 function nearestSectionDepth($pos: ResolvedPos): number {
   for (let d = $pos.depth; d >= 1; d--) {

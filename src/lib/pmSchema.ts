@@ -365,6 +365,28 @@ const marks: Record<string, MarkSpec> = {
       return ['comment-anchor', { 'data-comment-id': mark.attrs.commentId }]
     },
   },
+  /**
+   * A top-level, inline-displayed comment's own body — unlike `comment_anchor`
+   * (which marks the *original prose being commented on*), this marks the
+   * comment's *own* reply text, living directly in the document right after
+   * its anchor: an ordinary run of real, typable content, distinguished from
+   * plain prose only in being extractable into the margin
+   * (`pmCommands.ts`'s `extractInlineCommentBody`) and in never being
+   * rendered in export (`lib/export.ts`'s own `inlineLeafToMarkdownPm`/
+   * `inlineLeafToLatexPm` skip any text carrying this mark outright). No
+   * `inclusive: false` here, deliberately — typing right after the end of a
+   * `comment_text` range should keep extending it, the same way bold/italic
+   * already behave, so a comment's own body grows the normal way as its
+   * author keeps typing.
+   */
+  comment_text: {
+    attrs: { commentId: {} },
+    excludes: '',
+    parseDOM: [{ tag: 'comment-text', getAttrs: (dom) => ({ commentId: (dom as HTMLElement).getAttribute('data-comment-id') }) }],
+    toDOM(mark) {
+      return ['comment-text', { 'data-comment-id': mark.attrs.commentId }]
+    },
+  },
 }
 
 export const essaySchema = new Schema({ nodes, marks })

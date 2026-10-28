@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'preact/hooks'
 import type { Node as PMNode } from 'prosemirror-model'
 import { essayCommentChildren, topLevelEssayComments, updateEssayCommentBody, addEssayComment, setEssayCommentResolved } from '../../models/essayCommentsRepo'
-import { deleteEssayComment, toggleEssayCommentDisplayMode } from './essayCommentActions'
+import { deleteEssayComment, convertEssayCommentDisplayMode } from './essayCommentActions'
 import { id } from '../../lib/id'
 import { confirmDialog } from '../../lib/confirm'
 import { Icon } from '../Icon'
@@ -100,9 +100,10 @@ export function CommentsPanel({
       if (comment.displayMode === 'inline' && essayCommentChildren(essay, comment.id).length === 0) continue
       // A 'node' (whole-section) comment has no mark to look for at all —
       // it always anchors to the section's own heading. A 'text' comment
-      // anchored inline positions off its own rendered preview chip
-      // (guaranteed visible/sized whenever displayMode is 'inline'); a
-      // margin one positions off its anchor mark instead, falling back the
+      // anchored inline positions off its own live `comment_text` span
+      // (guaranteed to exist whenever displayMode is 'inline' — see
+      // `pmSchema.ts`'s own doc comment on that mark); a margin one
+      // positions off its anchor mark instead, falling back the
       // same way if that mark is collapsed out of view (its own section,
       // or an ancestor, toggled closed) — getBoundingClientRect() on
       // anything inside a `display: none` subtree returns all zeroes,
@@ -111,7 +112,7 @@ export function CommentsPanel({
       const mark =
         comment.anchorKind === 'text'
           ? comment.displayMode === 'inline'
-            ? (scrollEl.querySelector(`.inline-comment-preview[data-comment-id="${cssEscape(comment.id)}"]`) as HTMLElement | null)
+            ? (scrollEl.querySelector(`comment-text[data-comment-id="${cssEscape(comment.id)}"]`) as HTMLElement | null)
             : (scrollEl.querySelector(`comment-anchor[data-comment-id="${cssEscape(comment.id)}"]`) as HTMLElement | null)
           : null
       const anchorEl = isVisible(mark) ? mark : nearestVisibleSectionHeader(scrollEl, comment.sectionId)
@@ -173,7 +174,7 @@ export function CommentsPanel({
   }
 
   async function handleToggleDisplayMode(commentId: string, target: 'margin' | 'inline') {
-    await toggleEssayCommentDisplayMode(essay, commentId, target)
+    await convertEssayCommentDisplayMode(essay, view, commentId, target)
     onChanged()
   }
 
@@ -190,7 +191,7 @@ export function CommentsPanel({
             {row.comment.displayMode === 'inline' ? (
               <InlineTopLevelThread essay={essay} comment={row.comment} onChanged={onChanged} onDelete={handleDelete} />
             ) : (
-              <CommentCard essay={essay} comment={row.comment} depth={0} onChanged={onChanged} onDelete={handleDelete} onToggleDisplayMode={handleToggleDisplayMode} onPromote={undefined} />
+              <CommentCard essay={essay} comment={row.comment} depth={0} onChanged={onChanged} onDelete={handleDelete} onToggleDisplayMode={handleToggleDisplayMode} />
             )}
           </div>
         ))}
@@ -211,7 +212,7 @@ export function CommentsPanel({
               {row.comment.displayMode === 'inline' ? (
                 <InlineTopLevelThread essay={essay} comment={row.comment} onChanged={onChanged} onDelete={handleDelete} />
               ) : (
-                <CommentCard essay={essay} comment={row.comment} depth={0} onChanged={onChanged} onDelete={handleDelete} onToggleDisplayMode={handleToggleDisplayMode} onPromote={undefined} />
+                <CommentCard essay={essay} comment={row.comment} depth={0} onChanged={onChanged} onDelete={handleDelete} onToggleDisplayMode={handleToggleDisplayMode} />
               )}
             </div>
           ))}
@@ -221,13 +222,14 @@ export function CommentsPanel({
 }
 
 /**
- * An inline top-level comment's own body doesn't render here at all — it's
- * a small preview chip in the document itself (`pmCommentPlugin.ts`),
- * expanding into the same `CommentCard` editor as a floating popover on
- * click (`EssayWorkspace.tsx`'s own `openInlineCommentId`). This only ever
- * shows once it has at least one reply or comment-on-it (the row-filtering
- * above skips it entirely otherwise), rendering just that nested thread,
- * indented under a small label rather than a full card of its own.
+ * An inline top-level comment's own body doesn't render here at all any
+ * more — it's real, directly-editable content right in the document
+ * itself (`pmCommentPlugin.ts`/`pmSchema.ts`'s own `comment_text` mark),
+ * with its own action buttons (resolve/extract/promote/delete) sitting
+ * right next to it there. This only ever shows once the comment has at
+ * least one reply or comment-on-it (the row-filtering above skips it
+ * entirely otherwise), rendering just that nested thread, indented under a
+ * small label rather than a full card of its own.
  */
 function InlineTopLevelThread({
   essay,
@@ -244,7 +246,7 @@ function InlineTopLevelThread({
   return (
     <div className="comment-children inline-thread-children">
       {children.map((child) => (
-        <CommentCard key={child.id} essay={essay} comment={child} depth={1} onChanged={onChanged} onDelete={onDelete} onToggleDisplayMode={undefined} onPromote={undefined} />
+        <CommentCard key={child.id} essay={essay} comment={child} depth={1} onChanged={onChanged} onDelete={onDelete} onToggleDisplayMode={undefined} />
       ))}
     </div>
   )
@@ -269,7 +271,11 @@ function InlineTopLevelThread({
  * Renders its own children (`essayCommentChildren`) recursively
  * underneath, indented — a whole thread lives inside the one positioned
  * top-level card, rather than each reply trying to claim its own spot in
- * the margin.
+ * the margin. "Promote to permanent prose" lives elsewhere now — an
+ * inline comment's own in-document action buttons
+ * (`pmCommentPlugin.ts`/`EssayWorkspace.tsx`'s `handleInlineCommentAction`)
+ * — since a margin comment's own body was never real document content to
+ * promote into in the first place.
  */
 export function CommentCard({
   essay,
@@ -278,7 +284,6 @@ export function CommentCard({
   onChanged,
   onDelete,
   onToggleDisplayMode,
-  onPromote,
 }: {
   essay: Essay
   comment: Comment
@@ -287,8 +292,6 @@ export function CommentCard({
   onDelete: (commentId: string) => void
   /** Only present for a top-level `'text'` comment — lets it flip between margin and inline display. Undefined for a nested comment (that field only ever applies to a top-level comment in the first place). */
   onToggleDisplayMode: ((commentId: string, target: 'margin' | 'inline') => void) | undefined
-  /** Only present when this card is rendered inside an inline comment's own open popover (`EssayWorkspace.tsx`'s `openInlineCommentId`) — dissolves the comment into ordinary prose. Undefined everywhere else (a margin card, or a nested reply/comment-on-a-comment, has no "paper text" to promote into). */
-  onPromote: ((commentId: string) => void) | undefined
 }) {
   const bodyRef = useRef<HTMLDivElement>(null)
   const savedRangeRef = useRef<Range | null>(null)
@@ -407,15 +410,6 @@ export function CommentCard({
             →▤
           </button>
         )}
-        {onPromote && (
-          <button
-            className="icon-btn"
-            title="Promote to regular paper text (comments on this comment move up to comments on the section itself)"
-            onClick={() => onPromote(comment.id)}
-          >
-            ⇧¶
-          </button>
-        )}
         <button className="icon-btn" title="Delete this comment (and anything nested under it)" onClick={() => onDelete(comment.id)}>
           ×
         </button>
@@ -437,7 +431,7 @@ export function CommentCard({
       {children.length > 0 && (
         <div className="comment-children">
           {children.map((child) => (
-            <CommentCard key={child.id} essay={essay} comment={child} depth={depth + 1} onChanged={onChanged} onDelete={onDelete} onToggleDisplayMode={undefined} onPromote={undefined} />
+            <CommentCard key={child.id} essay={essay} comment={child} depth={depth + 1} onChanged={onChanged} onDelete={onDelete} onToggleDisplayMode={undefined} />
           ))}
         </div>
       )}

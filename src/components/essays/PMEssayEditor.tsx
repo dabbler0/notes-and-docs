@@ -11,6 +11,7 @@ import { saveEssay } from '../../models/essaysRepo'
 import { createCitationView, SectionView, FootnoteView, createMathView, SlideBreakView, FragmentBreakView } from './pmNodeViews'
 import { splitIntoSection, preventJoinIntoSectionTitle, dedupeSectionIds, pasteFlatSectionsFromHtml } from './pmCommands'
 import { createCommentPlugin } from './pmCommentPlugin'
+import type { InlineCommentAction } from './pmCommentPlugin'
 import { createCitationArrowPlugin } from './pmCitationArrowPlugin'
 import { createActiveSectionPlugin } from './pmActiveSectionPlugin'
 import { createSectionIdDedupePlugin } from './pmSectionIdPlugin'
@@ -102,6 +103,7 @@ export function PMEssayEditor({
   sources,
   commentsHolder,
   onAnchorClick,
+  onInlineAction,
   onCiteShortcut,
   editable = true,
   onViewReady,
@@ -114,8 +116,10 @@ export function PMEssayEditor({
   sources: Map<string, Source>
   /** A stable holder for the live essay (same "never replaced, always re-pointed at the current object" shape as `sources` above) — closed over once by `pmCommentPlugin.ts`'s own decorations, which need `essay.comments` fresh on every rebuild, not whatever it was the moment this `EditorView` first mounted. Left permanently `null` for a non-essay `record` (a slideshow) — there's no comment feature for those, so the plugin's own anchor lookups just never find anything to decorate. */
   commentsHolder: { current: Essay | null }
-  /** A `comment_anchor` mark (margin) or an inline comment's own preview chip was clicked — see `pmCommentPlugin.ts`'s own doc comment for why this is the one place both route through. */
+  /** A margin comment's own `comment_anchor` mark was clicked, anywhere in the main text — see `pmCommentPlugin.ts`'s own doc comment. */
   onAnchorClick?: (commentId: string) => void
+  /** One of an inline comment's own action buttons (resolve/extract/promote/delete) was clicked — see `pmCommentPlugin.ts`'s own doc comment. */
+  onInlineAction?: (commentId: string, action: InlineCommentAction) => void
   /** Mod-Shift-K pressed inside the editor — `EssayWorkspace.tsx`'s own keyboard-shortcut counterpart to clicking the "Cite a source" toolbar button. */
   onCiteShortcut?: () => void
   editable?: boolean
@@ -143,6 +147,8 @@ export function PMEssayEditor({
   // were no comments yet).
   const onAnchorClickRef = useRef(onAnchorClick)
   onAnchorClickRef.current = onAnchorClick
+  const onInlineActionRef = useRef(onInlineAction)
+  onInlineActionRef.current = onInlineAction
   const onCiteShortcutRef = useRef(onCiteShortcut)
   onCiteShortcutRef.current = onCiteShortcut
 
@@ -215,7 +221,11 @@ export function PMEssayEditor({
         keymap(baseKeymap),
         createMathInputRules(),
         createListInputRules(),
-        createCommentPlugin(commentsHolder, (commentId) => onAnchorClickRef.current?.(commentId)),
+        createCommentPlugin(
+          commentsHolder,
+          (commentId) => onAnchorClickRef.current?.(commentId),
+          (commentId, action) => onInlineActionRef.current?.(commentId, action),
+        ),
         createActiveSectionPlugin(),
         createSectionIdDedupePlugin(),
       ],

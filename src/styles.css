@@ -2134,59 +2134,6 @@ select {
   border-left: none;
 }
 
-/* --- inline comments — a live component (`InlineCommentBody`, portal-
-   mounted into a plain, empty `.inline-comment-marker` sitting inside one
-   *unsplit* text segment, the same "non-editable island in editable prose"
-   shape a citation chip or footnote marker already uses) rendered directly
-   in the document's own text flow. See childMarkers.ts's own doc comment
-   for why the marker specifically has to stay a non-segment-boundary plain
-   element rather than a live split point. --- */
-
-.inline-comment-preview {
-  color: var(--ink-dim);
-  font-style: italic;
-  cursor: pointer;
-  border-bottom: 1px dotted var(--border);
-}
-
-.inline-comment-preview:hover {
-  border-bottom-color: var(--ink-dim);
-}
-
-.inline-comment-preview:empty::before {
-  content: '(empty inline comment — click to write)';
-}
-
-/* Expanding an inline comment (click its preview) switches its marker from
-   plain inline text to this small floating card, right where the marker
-   sits — a block-level child inside an inline `.inline-comment-marker`
-   `<span>` is unusual nesting, but browsers handle it fine (it just forces
-   a line break around it, same as any inline-to-block transition), and
-   nothing here ever asks a `Range` to split the surrounding paragraph the
-   way the segment-boundary approach this replaced did. */
-.inline-comment-editor {
-  display: block;
-  background: var(--yellow);
-  border-radius: var(--radius-md);
-  box-shadow: var(--shadow-soft);
-  padding: 10px 12px;
-  margin: 6px 0;
-  font-size: 13.5px;
-  max-width: 420px;
-}
-
-.inline-comment-editor .comment-item {
-  background: none;
-  box-shadow: none;
-  padding: 0;
-}
-
-.inline-comment-collapse {
-  margin-top: 8px;
-  display: flex;
-  justify-content: flex-end;
-}
-
 .comment-item.resolved {
   background: var(--surface-2);
   opacity: 0.7;
@@ -3557,23 +3504,58 @@ select {
   cursor: default;
 }
 
-/* The inline-preview chip `pmCommentPlugin.ts` renders right after an
-   inline-displayed top-level comment's own anchor — reuses the old
-   model's own `.inline-comment-preview` look (italic, muted, a dotted
-   underline) unchanged; only the mechanism producing it (a PM widget
-   decoration instead of a literal marker element) is new. */
-.pm-editor-root .ProseMirror .inline-comment-preview:empty::before {
-  content: '(click to view)';
+/* `comment_text` (pmSchema.ts) — an inline comment's own body, typed
+   directly into the document. A distinct color from `comment_anchor`'s
+   pink (above) on purpose: the anchor marks the *original prose being
+   commented on*, this marks the *comment's own reply text* right after
+   it, and the two need to read as different things at a glance. */
+.pm-editor-root .ProseMirror comment-text {
+  background: var(--yellow);
+  border-radius: 3px;
 }
 
-/* The inline comment's own popover (EssayWorkspace.tsx's `openInlineComment`)
-   reuses `.inline-comment-editor`'s card look (background/shadow/padding —
-   see its own rule, above) but floats over the page instead of sitting
-   in the document's own flow, the same `position: fixed` + viewport-
-   relative placement `commentWidgetStyle` already gives the pending-
-   comment composer (`.comment-widget`). */
-.inline-comment-popover {
-  z-index: 40;
+/* `.comment-text`/`.comment-text-resolved` (plain classes, not the
+   `comment-text` element above) are the resolved-state decoration
+   `pmCommentPlugin.ts` applies — a `Decoration.inline` wraps its own
+   `<span>` around the marked text rather than setting attributes on the
+   `comment-text` element itself, so the resolved look is styled off of
+   that span, not the element. */
+.pm-editor-root .ProseMirror .comment-text.comment-text-resolved {
+  background: none;
+  opacity: 0.6;
+  text-decoration: line-through;
+}
+
+/* The always-visible resolve/extract/promote/delete cluster
+   `pmCommentPlugin.ts` renders right after an inline comment's own
+   `comment_text` span — plain, non-editable chrome (`contenteditable:
+   false` on the wrapper), not part of the document's own text flow. */
+.inline-comment-controls {
+  display: inline-flex;
+  gap: 2px;
+  margin-left: 2px;
+  vertical-align: middle;
+}
+
+.inline-comment-control-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: none;
+  border-radius: 3px;
+  background: var(--surface-2);
+  color: var(--ink-dim);
+  font-size: 11px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.inline-comment-control-btn:hover {
+  background: var(--border);
+  color: var(--ink);
 }
 
 /* `footnote` (pmSchema.ts) — `pmNodeViews.ts`'s own `FootnoteView`.
