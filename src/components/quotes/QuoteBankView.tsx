@@ -1,9 +1,10 @@
 import { useEffect, useState } from 'preact/hooks'
-import { deleteQuoteFromBank, listQuoteBank, matchesQuoteQuery } from '../../models/quoteBankRepo'
+import { deleteQuoteFromBank, listQuoteBank, matchesQuoteQuery, updateQuotePage } from '../../models/quoteBankRepo'
 import { hasQuotableText, listSources } from '../../models/sourcesRepo'
 import { citationLabel, citationPage, displayAuthors, displayTitle } from '../../lib/bibtex'
 import { onSyncApplied } from '../../sync/syncEvents'
 import { confirmDialog } from '../../lib/confirm'
+import { promptDialog } from '../../lib/prompt'
 import type { QuoteBankEntry, Source } from '../../models/types'
 import { SourceWorkspace } from '../sources/SourceWorkspace'
 import { Icon } from '../Icon'
@@ -56,6 +57,16 @@ export function QuoteBankView() {
     reload()
   }
 
+  /** Only offered where the page was typed by hand in the first place — see `updateQuotePage`'s own doc comment. */
+  async function handleEditPage(entry: QuoteBankEntry) {
+    const input = await promptDialog('Page number for this quote?', { defaultValue: entry.page > 0 ? String(entry.page) : '', placeholder: 'e.g. 42' })
+    if (input === null) return
+    const page = parseInt(input.trim(), 10)
+    if (!Number.isFinite(page) || page <= 0) return
+    await updateQuotePage(entry, page)
+    reload()
+  }
+
   const filtered = entries.filter((e) => {
     const source = sources.get(e.sourceId)
     const label = source ? `${displayTitle(source.bibtex)} ${displayAuthors(source.bibtex)}` : ''
@@ -88,7 +99,7 @@ export function QuoteBankView() {
                   {source ? citationLabel(source.bibtex, citationPage(source, e.page) ? `p. ${citationPage(source, e.page)}` : undefined) : '(source no longer available)'}
                 </div>
                 <div className="quote-bank-actions">
-                  {source && hasQuotableText(source) && (
+                  {source && hasQuotableText(source) ? (
                     <button
                       type="button"
                       className="btn btn-ghost btn-sm"
@@ -98,6 +109,20 @@ export function QuoteBankView() {
                       }}
                     >
                       View in source
+                    </button>
+                  ) : (
+                    // No PDF/text to jump back to and sync the page against —
+                    // this quote's own page was typed by hand (or its source
+                    // is gone entirely), so it's safe to correct directly.
+                    <button
+                      type="button"
+                      className="btn btn-ghost btn-sm"
+                      onClick={(ev) => {
+                        ev.stopPropagation()
+                        handleEditPage(e)
+                      }}
+                    >
+                      Edit page
                     </button>
                   )}
                   <button

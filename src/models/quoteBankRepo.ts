@@ -88,6 +88,24 @@ export async function updateQuoteAnnotation(entry: QuoteBankEntry, annotation: s
   await backend.docs.put(COLLECTION, entry)
 }
 
+/**
+ * Corrects a quote's own `page` after the fact — meant for an entry whose
+ * page was typed by hand in the first place (`SourceWorkspace.tsx`'s own
+ * `manualPage`, used whenever a source has nothing to highlight a real
+ * selection on — see `hasQuotableText`), where there's no PDF/text
+ * location it's tied to and a typo is otherwise permanent. Nothing stops
+ * calling this on a PDF-derived quote too — `page` is the only location
+ * `QuoteBankEntry` ever stores (`ReaderMode.tsx`'s own highlighting
+ * re-matches `quoteText` against whichever page this says, rather than
+ * any separately-stored coordinates) — but `QuoteBankView.tsx` only
+ * exposes the edit control where there's no source viewer to desync from.
+ */
+export async function updateQuotePage(entry: QuoteBankEntry, page: number): Promise<void> {
+  entry.page = page
+  entry.updatedAt = Date.now()
+  await backend.docs.put(COLLECTION, entry)
+}
+
 /** Tombstones the entry — see the matching note on sourcesRepo.deleteSource. */
 export async function deleteQuoteFromBank(entryId: string): Promise<void> {
   const entry = await getQuoteBankEntry(entryId)
