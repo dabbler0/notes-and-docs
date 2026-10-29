@@ -1,4 +1,4 @@
-import { Fragment, DOMSerializer, DOMParser as PMDOMParser } from 'prosemirror-model'
+import { Fragment, Slice, DOMSerializer, DOMParser as PMDOMParser } from 'prosemirror-model'
 import { TextSelection } from 'prosemirror-state'
 import type { EditorState, Transaction } from 'prosemirror-state'
 import type { EditorView } from 'prosemirror-view'
@@ -6,7 +6,7 @@ import type { Node as PMNode, Mark, ResolvedPos } from 'prosemirror-model'
 import { essaySchema } from '../../lib/pmSchema'
 import { pageNote } from '../../lib/bibtex'
 import { id } from '../../lib/id'
-import type { Source } from '../../models/types'
+import type { Comment, Source } from '../../models/types'
 
 /** Walks up from `$pos` to the nearest enclosing `section` — shared by "Send to graveyard" (`sendSelectionToGraveyard`, EssayWorkspace.tsx), comment-anchor insertion below, and the Word Count dialog's own "this section" row, each of which needs "which section does this position belong to" as a best-effort reference (`id`/`title`; never dereferenced structurally — a section can be renamed/moved/deleted without anything here needing to follow it) or, for word count specifically, the actual live `node` to pull text out of. */
 export function findEnclosingSection($pos: ResolvedPos): { id: string; title: string; node: PMNode } | null {
@@ -796,6 +796,71 @@ export function insertInlineCommentBodyFromHtml(view: EditorView, commentId: str
   dom.innerHTML = `<comment-text data-comment-id="${commentId}">${html}</comment-text>`
   const slice = PMDOMParser.fromSchema(essaySchema).parseSlice(dom, { preserveWhitespace: true })
   view.dispatch(view.state.tr.insert(pos, slice.content))
+}
+
+/**
+ * Repairs a real, confirmed-live gap left by the move to live, in-document
+ * inline comments: every inline top-level comment created *before* that
+ * feature shipped has its own body sitting inertly in `Comment.body` HTML,
+ * with no `comment_text` span ever inserted for it (nothing ever did that
+ * migration) — and the current rendering has nothing left that falls back
+ * to showing a comment's `body` directly any more (the old static preview
+ * chip this replaced is gone; `pmCommentPlugin.ts` only ever decorates a
+ * *live* `comment_text` range, and `CommentsPanel.tsx`'s own margin-row
+ * filter deliberately skips a reply-less inline comment, trusting its body
+ * to already be live in the document). The net effect, confirmed live: the
+ * comment's own `comment_anchor` span still renders fine (that part was
+ * never affected), but the comment's own written content is reachable
+ * nowhere at all — not in the document, not in the margin.
+ *
+ * Run once, moments after a record is opened (`PMEssayEditor.tsx`'s mount
+ * effect, alongside `dedupeSectionIds`' own repair-on-open), the same
+ * "fix whatever's already wrong, going forward nothing can introduce this
+ * again" shape that fix already established: for every top-level,
+ * `'inline'`-displayed `'text'` comment with a real `body` but no live
+ * `comment_text` range yet, this inserts one (same technique
+ * `insertInlineCommentBodyFromHtml` uses, just operating on a plain `Node`
+ * rather than a live `view` — nothing here needs an `EditorView` to exist
+ * yet) right after the comment's own anchor, and clears the now-redundant
+ * `Comment.body` to `''` to match every comment created after the live-
+ * inline-comment feature shipped. No-op, returning the same `doc`/`comments`
+ * references unchanged, for an essay with nothing to repair — the
+ * overwhelming majority, once this has run once per affected essay.
+ */
+export function repairMissingInlineCommentBodies(doc: PMNode, comments: Comment[]): { doc: PMNode; comments: Comment[]; changed: boolean } {
+  let currentDoc = doc
+  let changed = false
+  const repairedComments = comments.map((c) => {
+    if (c.parentId !== null || c.anchorKind !== 'text' || c.displayMode !== 'inline') return c
+    if (!c.body || !c.body.trim()) return c
+    if (commentTextRange(currentDoc, c.id)) return c // already migrated
+    const pos = commentAnchorEndPos(currentDoc, c.id)
+    if (pos == null) return c // no anchor either — nothing to anchor a repaired span to
+    try {
+      const dom = document.createElement('div')
+      dom.innerHTML = `<comment-text data-comment-id="${c.id}">${c.body}</comment-text>`
+      const slice = PMDOMParser.fromSchema(essaySchema).parseSlice(dom, { preserveWhitespace: true })
+      currentDoc = currentDoc.replace(pos, pos, new Slice(slice.content, 0, 0))
+      changed = true
+      return { ...c, body: '' }
+    } catch (err) {
+      // A legacy inline comment's own body was always plain text (typed
+      // into the old composer's plain `<textarea>`, never rich HTML) —
+      // this shouldn't normally fail. But `comment_text` is a mark, not a
+      // node: it can only ever apply to genuinely inline content, and an
+      // insertion position right after an anchor is itself inline (inside
+      // an existing paragraph's own content) — if `body` somehow contains
+      // block-level markup (a `<p>`/`<ul>`/…, the way a *margin* comment's
+      // own rich-HTML body legitimately can), parsing it this way produces
+      // block nodes that don't fit there at all, and `Node.replace` throws
+      // rather than silently losing or corrupting anything. Left unrepaired
+      // (same as "no anchor to attach to," above) rather than letting one
+      // comment's own unusual body crash this essay's entire load.
+      console.error(`repairMissingInlineCommentBodies: failed migrating comment ${c.id}'s own body into the document`, err)
+      return c
+    }
+  })
+  return { doc: currentDoc, comments: changed ? repairedComments : comments, changed }
 }
 
 /** The depth of the nearest enclosing `section` around `$pos` — always ≥1 (the essay/slideshow document's own single root section, at depth 1) since, unlike a plain `doc`, `pmSchema.ts`'s `doc` content expression (`"section"`) guarantees every position is inside at least that one. Shared by `insertDivider` below: a `slide_break`/`fragment_break` always lands as a direct child of this container, never nested any deeper inside a list/blockquote the cursor happened to be in, and never lifted out past it — `slideSerializer.ts` reads a slide's own title off of exactly whichever section(s) enclose its own divider. */

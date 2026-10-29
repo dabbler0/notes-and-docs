@@ -9,7 +9,7 @@ import { Node as PMNode } from 'prosemirror-model'
 import { essaySchema } from '../../lib/pmSchema'
 import { saveEssay } from '../../models/essaysRepo'
 import { createCitationView, SectionView, FootnoteView, createMathView, SlideBreakView, FragmentBreakView } from './pmNodeViews'
-import { splitIntoSection, preventJoinIntoSectionTitle, dedupeSectionIds, pasteFlatSectionsFromHtml } from './pmCommands'
+import { splitIntoSection, preventJoinIntoSectionTitle, dedupeSectionIds, pasteFlatSectionsFromHtml, repairMissingInlineCommentBodies } from './pmCommands'
 import { createCommentPlugin } from './pmCommentPlugin'
 import type { InlineCommentAction } from './pmCommentPlugin'
 import { createCitationArrowPlugin } from './pmCitationArrowPlugin'
@@ -164,7 +164,29 @@ export function PMEssayEditor({
     // symptoms) the moment it's opened — `pmSectionIdPlugin.ts`'s own
     // `appendTransaction` plugin, registered below, only ever catches a
     // *future* transaction introducing one, not whatever's already there.
-    const doc = dedupeSectionIds(parsedDoc)
+    let doc = dedupeSectionIds(parsedDoc)
+    // Same "fix it the moment this record is opened" shape, for a second,
+    // unrelated gap: an inline top-level comment created before the live-
+    // inline-comment feature shipped has its own body sitting inertly in
+    // `Comment.body`, with no `comment_text` span ever inserted for it —
+    // see `repairMissingInlineCommentBodies`'s own doc comment for the
+    // real, confirmed-live symptom (the comment's own anchor still shows
+    // fine; its written content is reachable nowhere at all, not in the
+    // document, not in the margin). `commentsHolder.current` is the same
+    // object as `record` for an essay (set during `EssayWorkspace.tsx`'s
+    // own render, before this effect ever runs) — mutating its `comments`
+    // field in place is what makes `onSave` below, a few lines down,
+    // persist the repaired bodies together with the repaired doc as one
+    // atomic fix, and what makes `CommentsPanel`'s own next render (forced
+    // by `onDocChanged`, right after this effect, if the doc itself also
+    // changed) see them.
+    if (commentsHolder.current?.comments?.length) {
+      const repaired = repairMissingInlineCommentBodies(doc, commentsHolder.current.comments)
+      if (repaired.changed) {
+        doc = repaired.doc
+        commentsHolder.current.comments = repaired.comments
+      }
+    }
     let saveTimer: number | undefined
 
     function scheduleSave(newDoc: PMNode) {
