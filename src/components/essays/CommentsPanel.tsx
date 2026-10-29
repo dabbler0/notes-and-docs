@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'preact/hooks'
 import type { Node as PMNode } from 'prosemirror-model'
 import { essayCommentChildren, topLevelEssayComments, updateEssayCommentBody, addEssayComment, setEssayCommentResolved } from '../../models/essayCommentsRepo'
 import { deleteEssayComment, convertEssayCommentDisplayMode } from './essayCommentActions'
+import { commentTextRange } from './pmCommands'
 import { id } from '../../lib/id'
 import { confirmDialog } from '../../lib/confirm'
 import { Icon } from '../Icon'
@@ -26,6 +27,23 @@ function sectionTitleFor(doc: PMNode, essayTitle: string, sectionId: string | nu
     return true
   })
   return title ?? 'Untitled section'
+}
+
+/**
+ * A top-level inline comment normally has nowhere to show in the margin
+ * because its content already lives in the document itself (its own
+ * `comment_text` span) — that's what the margin render's own filter below
+ * is skipping. But nothing stops that span from being deleted by ordinary
+ * editing (selecting across it, cutting, retyping) without going through
+ * "Delete this comment" or "Move to the margin" — nothing in the document
+ * model cascades a `Comment` record's own deletion to that. When that
+ * happens, the comment keeps counting toward `openCount` (nothing marks it
+ * resolved or removes it) while having no live content anywhere — true
+ * "exists in the count, invisible everywhere" — unless this is checked and
+ * a fallback card shown instead of silently excluding it.
+ */
+function isOrphanedInlineComment(doc: PMNode, essay: Essay, comment: Comment): boolean {
+  return comment.displayMode === 'inline' && essayCommentChildren(essay, comment.id).length === 0 && !commentTextRange(doc, comment.id)
 }
 
 /**
@@ -95,9 +113,10 @@ export function CommentsPanel({
     const raw: { id: string; top: number }[] = []
     for (const { comment } of rows) {
       // Inline top-level comments only ever show a margin row when they
-      // have replies/comments-on-them (see the render below) — nothing to
+      // have replies/comments-on-them, or have lost their own live content
+      // (see `isOrphanedInlineComment`/the render below) — nothing to
       // position otherwise.
-      if (comment.displayMode === 'inline' && essayCommentChildren(essay, comment.id).length === 0) continue
+      if (comment.displayMode === 'inline' && essayCommentChildren(essay, comment.id).length === 0 && !isOrphanedInlineComment(doc, essay, comment)) continue
       // A 'node' (whole-section) comment has no mark to look for at all —
       // it always anchors to the section's own heading. A 'text' comment
       // anchored inline positions off its own live `comment_text` span
@@ -189,7 +208,11 @@ export function CommentsPanel({
               {sectionTitleFor(doc, essayTitle, row.comment.sectionId)}
             </div>
             {row.comment.displayMode === 'inline' ? (
-              <InlineTopLevelThread essay={essay} comment={row.comment} onChanged={onChanged} onDelete={handleDelete} />
+              isOrphanedInlineComment(doc, essay, row.comment) ? (
+                <OrphanedInlineComment comment={row.comment} onDelete={handleDelete} />
+              ) : (
+                <InlineTopLevelThread essay={essay} comment={row.comment} onChanged={onChanged} onDelete={handleDelete} />
+              )
             ) : (
               <CommentCard essay={essay} comment={row.comment} depth={0} onChanged={onChanged} onDelete={handleDelete} onToggleDisplayMode={handleToggleDisplayMode} />
             )}
@@ -205,18 +228,43 @@ export function CommentsPanel({
       {rows.length === 0 && <p className="muted margin-comments-empty">No comments yet. Select some text (or use the Comment button with nothing selected) to leave one.</p>}
       <div className="margin-comments-inner" ref={innerRef} style={{ height: canvasHeight, transform: `translateY(${-scrollTop}px)` }}>
         {rows
-          .filter((row) => row.comment.displayMode !== 'inline' || essayCommentChildren(essay, row.comment.id).length > 0)
+          .filter((row) => row.comment.displayMode !== 'inline' || essayCommentChildren(essay, row.comment.id).length > 0 || isOrphanedInlineComment(doc, essay, row.comment))
           .map((row) => (
             <div className="comment-thread-root" key={row.comment.id} data-comment-thread-id={row.comment.id} style={{ top: positions.get(row.comment.id) ?? 0 }}>
               {row.comment.anchorKind === 'node' && <div className="comment-section-label">{sectionTitleFor(doc, essayTitle, row.comment.sectionId)}</div>}
               {row.comment.displayMode === 'inline' ? (
-                <InlineTopLevelThread essay={essay} comment={row.comment} onChanged={onChanged} onDelete={handleDelete} />
+                isOrphanedInlineComment(doc, essay, row.comment) ? (
+                  <OrphanedInlineComment comment={row.comment} onDelete={handleDelete} />
+                ) : (
+                  <InlineTopLevelThread essay={essay} comment={row.comment} onChanged={onChanged} onDelete={handleDelete} />
+                )
               ) : (
                 <CommentCard essay={essay} comment={row.comment} depth={0} onChanged={onChanged} onDelete={handleDelete} onToggleDisplayMode={handleToggleDisplayMode} />
               )}
             </div>
           ))}
       </div>
+    </div>
+  )
+}
+
+/**
+ * Fallback for a top-level inline comment caught by `isOrphanedInlineComment`
+ * — its own `comment_text` span (the only place its content ever lived) is
+ * gone from the document, through ordinary editing that had nothing to do
+ * with comments, with no replies to show instead. There's nothing left to
+ * display, but showing *this* rather than silently excluding the row (the
+ * old behavior) is the whole fix: the comment stays visible, and deletable,
+ * instead of permanently counting toward "N open" while being unreachable
+ * anywhere in the UI.
+ */
+function OrphanedInlineComment({ comment, onDelete }: { comment: Comment; onDelete: (commentId: string) => void }) {
+  return (
+    <div className="comment-item orphaned-inline-comment">
+      <p className="muted">This comment’s own text was removed from the document (e.g. by editing over it) — there’s nothing left to show.</p>
+      <button className="icon-btn" title="Delete this comment" onClick={() => onDelete(comment.id)}>
+        Delete
+      </button>
     </div>
   )
 }

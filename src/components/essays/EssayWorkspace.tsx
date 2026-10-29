@@ -247,15 +247,22 @@ export function EssayWorkspace({
 
   async function submitComment(body: string) {
     if (!pendingComment || !essay) return
+    // Closes (unmounts) the composer immediately, before the `await` below
+    // — not just for responsiveness, but so a second trigger of this same
+    // handler (a rapid double-click on "Add comment" before the first
+    // `addEssayComment` call has resolved) finds `pendingComment` already
+    // cleared and bails out above, rather than re-submitting the exact same
+    // `commentId` and appending a duplicate `Comment` record.
+    const pending = pendingComment
+    setPendingComment(null)
     await addEssayComment(essay, {
       anchorKind: 'text',
-      anchorText: pendingComment.text,
+      anchorText: pending.text,
       body,
-      commentId: pendingComment.commentId,
+      commentId: pending.commentId,
       displayMode: 'margin',
-      sectionId: pendingComment.sectionId,
+      sectionId: pending.sectionId,
     })
-    setPendingComment(null)
     notifyCommentsChanged()
   }
 
