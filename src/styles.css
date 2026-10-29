@@ -3639,12 +3639,16 @@ select {
   outline: none;
 }
 
-/* `comment_thread`/`comment_entry` (pmSchema.ts) — `pmNodeViews.ts`'s own
-   `CommentThreadView`. The marker is always present (so `CommentsPanel.tsx`
-   can position against it regardless of display mode); the entries
-   wrapper only actually shows for `displayMode: 'inline'` (see that
-   NodeView's own doc comment) — a margin-displayed thread's entries render
-   into the margin panel instead, so this stays hidden here. */
+/* `comment_thread` (pmSchema.ts) — `pmNodeViews.ts`'s own
+   `CommentThreadView`. A *top-level* comment's marker is always present
+   (so `CommentsPanel.tsx` can position against it regardless of display
+   mode); a nested one (reply, comment-on-a-span) hides its own marker
+   entirely (it's never independently positioned — see that NodeView's own
+   doc comment). The content wrapper only actually shows for `displayMode:
+   'inline'` on a top-level comment, or for any nested comment (which
+   always renders in place within its parent) — a margin-displayed
+   top-level comment's content renders into the margin panel instead, so
+   this stays hidden here. */
 .pm-editor-root .ProseMirror .pm-comment-thread-marker {
   display: inline-block;
   width: 6px;
@@ -3664,11 +3668,8 @@ select {
   margin-left: 2px;
 }
 
-.pm-editor-root .ProseMirror comment-entry {
-  display: inline;
-}
-
-.pm-editor-root .ProseMirror comment-entry + comment-entry {
+.pm-editor-root .ProseMirror comment-thread comment-thread {
+  display: inline-block;
   margin-left: 6px;
   padding-left: 6px;
   border-left: 1px solid var(--border);

@@ -4,9 +4,9 @@ import { essaySchema } from '../../../lib/pmSchema'
 import {
   findCommentThread,
   insertCommentThreadNode,
-  addCommentThreadEntryNode,
-  setCommentEntryResolvedNode,
-  deleteCommentEntryNode,
+  commentThreadContentEndPos,
+  setCommentThreadResolvedNode,
+  setCommentThreadDisplayModeNode,
   deleteCommentThreadNode,
 } from '../pmCommands'
 
@@ -28,128 +28,144 @@ function parse(json: unknown): PMNode {
 }
 
 /**
- * Unit coverage for the `comment_thread`/`comment_entry` mutators in
- * `pmCommands.ts` — the pure, headless-safe half of the fix for a comment's
- * full thread (body + replies) living as real document content instead of
- * a separate side array (see `pmSchema.ts`'s own doc comment). Each test
- * exercises the plain `Node`-returning function directly, matching the
- * style already established by `repairMissingInlineCommentBodies`'s own
- * tests (`pmCommands.test.ts`) — no live `EditorView` needed.
+ * Unit coverage for the `comment_thread` mutators in `pmCommands.ts` — the
+ * pure, headless-safe half of the fix for a comment (its own body, plus
+ * every reply and comment-on-a-span nested inside it) living as real
+ * document content instead of a separate side array (see `pmSchema.ts`'s
+ * own doc comment). A reply is modeled as just another `comment_thread`
+ * nested inside its parent's own content — there is no separate "entry"
+ * concept, so these tests exercise that directly: inserting a reply is the
+ * exact same `insertCommentThreadNode` call as inserting a top-level
+ * comment, just targeting a position inside an existing thread.
  */
-describe('comment_thread / comment_entry mutators', () => {
-  it('insertCommentThreadNode splices a new thread (one entry) right at the given position', () => {
+describe('comment_thread mutators', () => {
+  it('insertCommentThreadNode splices a new top-level comment in at the given position', () => {
     const doc = parse(docJson([paragraph('hello world')]))
     const pos = doc.content.size - 1 // end of the paragraph's own text
     const result = insertCommentThreadNode(doc, pos, 'c1', 'margin', 1000, 'a real comment')
 
     const found = findCommentThread(result, 'c1')
     expect(found).not.toBeNull()
-    expect(found!.node.attrs.displayMode).toBe('margin')
-    expect(found!.node.childCount).toBe(1)
-    expect(found!.node.firstChild!.attrs).toMatchObject({ id: 'c1', resolved: false, createdAt: 1000, updatedAt: 1000 })
+    expect(found!.node.attrs).toMatchObject({ id: 'c1', displayMode: 'margin', resolved: false, createdAt: 1000, updatedAt: 1000 })
     expect(found!.node.textContent).toBe('a real comment')
   })
 
-  it('insertCommentThreadNode seeds an empty entry with a zero-width placeholder, not truly empty content', () => {
+  it('insertCommentThreadNode seeds an empty comment with a zero-width placeholder, not truly empty content', () => {
     const doc = parse(docJson([paragraph('hi')]))
     const result = insertCommentThreadNode(doc, doc.content.size - 1, 'c1', 'inline', 1000)
     const found = findCommentThread(result, 'c1')!
-    expect(found.node.firstChild!.textContent.length).toBeGreaterThan(0)
+    expect(found.node.textContent.length).toBeGreaterThan(0)
   })
 
-  it('findCommentThread returns null when no thread with that id exists', () => {
+  it('findCommentThread returns null when no comment with that id exists', () => {
     const doc = parse(docJson([paragraph('hi')]))
     expect(findCommentThread(doc, 'missing')).toBeNull()
   })
 
-  it('addCommentThreadEntryNode appends a reply as the thread\'s second entry', () => {
+  it('a reply is just another comment_thread nested at the end of its parent\'s own content', () => {
     const doc = parse(docJson([paragraph('hi')]))
-    const withThread = insertCommentThreadNode(doc, doc.content.size - 1, 'c1', 'margin', 1000, 'original')
-    const result = addCommentThreadEntryNode(withThread, 'c1', 'reply-1', 2000, 'a reply')
+    const withComment = insertCommentThreadNode(doc, doc.content.size - 1, 'c1', 'margin', 1000, 'original')
+    const replyPos = commentThreadContentEndPos(withComment, 'c1')!
+    const result = insertCommentThreadNode(withComment, replyPos, 'reply-1', 'margin', 2000, 'a reply')
 
-    expect(result).not.toBeNull()
-    const found = findCommentThread(result!, 'c1')!
-    expect(found.node.childCount).toBe(2)
-    expect(found.node.child(0).attrs.id).toBe('c1')
-    expect(found.node.child(1)).toMatchObject({ attrs: expect.objectContaining({ id: 'reply-1', createdAt: 2000 }) })
-    expect(found.node.child(1).textContent).toBe('a reply')
+    const parent = findCommentThread(result, 'c1')!
+    expect(parent.node.textContent).toBe('original' + 'a reply')
+    const reply = findCommentThread(result, 'reply-1')
+    expect(reply).not.toBeNull()
+    expect(reply!.node.textContent).toBe('a reply')
   })
 
-  it('addCommentThreadEntryNode returns null for a thread that no longer exists', () => {
+  it('"comment on a span within this comment" is the same operation, anchored partway through the parent\'s own text', () => {
     const doc = parse(docJson([paragraph('hi')]))
-    expect(addCommentThreadEntryNode(doc, 'missing', 'reply-1', 2000)).toBeNull()
-  })
-
-  it('setCommentEntryResolvedNode toggles resolved on the top-level entry without touching others', () => {
-    const doc = parse(docJson([paragraph('hi')]))
-    const withThread = insertCommentThreadNode(doc, doc.content.size - 1, 'c1', 'margin', 1000, 'original')
-    const withReply = addCommentThreadEntryNode(withThread, 'c1', 'reply-1', 2000, 'a reply')!
-    const result = setCommentEntryResolvedNode(withReply, 'c1', true, 3000)!
-
-    const found = findCommentThread(result, 'c1')!
-    expect(found.node.child(0).attrs).toMatchObject({ resolved: true, updatedAt: 3000 })
-    expect(found.node.child(1).attrs).toMatchObject({ resolved: false })
-  })
-
-  it('setCommentEntryResolvedNode can resolve a reply independently of its thread\'s top-level entry', () => {
-    const doc = parse(docJson([paragraph('hi')]))
-    const withThread = insertCommentThreadNode(doc, doc.content.size - 1, 'c1', 'margin', 1000, 'original')
-    const withReply = addCommentThreadEntryNode(withThread, 'c1', 'reply-1', 2000, 'a reply')!
-    const result = setCommentEntryResolvedNode(withReply, 'reply-1', true, 3000)!
-
-    const found = findCommentThread(result, 'c1')!
-    expect(found.node.child(0).attrs.resolved).toBe(false)
-    expect(found.node.child(1).attrs.resolved).toBe(true)
-  })
-
-  it('deleteCommentEntryNode removes just the reply when the thread has others left', () => {
-    const doc = parse(docJson([paragraph('hi')]))
-    const withThread = insertCommentThreadNode(doc, doc.content.size - 1, 'c1', 'margin', 1000, 'original')
-    const withReply = addCommentThreadEntryNode(withThread, 'c1', 'reply-1', 2000, 'a reply')!
-    const result = deleteCommentEntryNode(withReply, 'reply-1')!
-
-    const found = findCommentThread(result, 'c1')!
-    expect(found.node.childCount).toBe(1)
-    expect(found.node.child(0).attrs.id).toBe('c1')
-  })
-
-  it('deleteCommentEntryNode removes the whole thread when deleting its only (top-level) entry', () => {
-    const doc = parse(docJson([paragraph('hi')]))
-    const withThread = insertCommentThreadNode(doc, doc.content.size - 1, 'c1', 'margin', 1000, 'original')
-    const result = deleteCommentEntryNode(withThread, 'c1')!
-
-    expect(findCommentThread(result, 'c1')).toBeNull()
-  })
-
-  it('deleteCommentThreadNode removes every entry, replies included, in one go', () => {
-    const doc = parse(docJson([paragraph('hi')]))
-    const withThread = insertCommentThreadNode(doc, doc.content.size - 1, 'c1', 'margin', 1000, 'original')
-    const withReply = addCommentThreadEntryNode(withThread, 'c1', 'reply-1', 2000, 'a reply')!
-    const result = deleteCommentThreadNode(withReply, 'c1')!
-
-    expect(findCommentThread(result, 'c1')).toBeNull()
-    expect(result.textContent).not.toContain('a reply')
-  })
-
-  it('deleteCommentThreadNode/deleteCommentEntryNode return null for an id that no longer exists, rather than throwing', () => {
-    const doc = parse(docJson([paragraph('hi')]))
-    expect(deleteCommentThreadNode(doc, 'missing')).toBeNull()
-    expect(deleteCommentEntryNode(doc, 'missing')).toBeNull()
-  })
-
-  it('a comment_thread can nest inside another entry\'s own content (comment on a span within a comment)', () => {
-    const doc = parse(docJson([paragraph('hi')]))
-    const withThread = insertCommentThreadNode(doc, doc.content.size - 1, 'c1', 'margin', 1000, 'original text')
-    const entry = findCommentThread(withThread, 'c1')!.node.firstChild!
-    // Position right at the end of the top-level entry's own text — a
-    // stand-in for "right after a comment_anchor mark placed inside this
-    // entry's body," which is how the real UI will reach this position.
-    const entryTextEnd = findCommentThread(withThread, 'c1')!.pos + 1 + entry.nodeSize - 1
-    const result = insertCommentThreadNode(withThread, entryTextEnd, 'nested-1', 'margin', 2000, 'a note on that comment')
+    const withComment = insertCommentThreadNode(doc, doc.content.size - 1, 'c1', 'margin', 1000, 'some original text')
+    const parent = findCommentThread(withComment, 'c1')!
+    // Land the nested comment partway through the parent's own text, not
+    // just at the very end — confirming nesting isn't limited to
+    // append-only replies.
+    const midPos = parent.pos + 1 + 4
+    const result = insertCommentThreadNode(withComment, midPos, 'nested-1', 'margin', 2000, 'a note on that')
 
     expect(findCommentThread(result, 'c1')).not.toBeNull()
     const nested = findCommentThread(result, 'nested-1')
     expect(nested).not.toBeNull()
-    expect(nested!.node.textContent).toBe('a note on that comment')
+    expect(nested!.node.textContent).toBe('a note on that')
+  })
+
+  it('commentThreadContentEndPos returns null for a comment that no longer exists', () => {
+    const doc = parse(docJson([paragraph('hi')]))
+    expect(commentThreadContentEndPos(doc, 'missing')).toBeNull()
+  })
+
+  it('setCommentThreadResolvedNode toggles resolved on one comment without touching a nested reply', () => {
+    const doc = parse(docJson([paragraph('hi')]))
+    const withComment = insertCommentThreadNode(doc, doc.content.size - 1, 'c1', 'margin', 1000, 'original')
+    const replyPos = commentThreadContentEndPos(withComment, 'c1')!
+    const withReply = insertCommentThreadNode(withComment, replyPos, 'reply-1', 'margin', 2000, 'a reply')
+    const result = setCommentThreadResolvedNode(withReply, 'c1', true, 3000)!
+
+    expect(findCommentThread(result, 'c1')!.node.attrs).toMatchObject({ resolved: true, updatedAt: 3000 })
+    expect(findCommentThread(result, 'reply-1')!.node.attrs.resolved).toBe(false)
+  })
+
+  it('setCommentThreadResolvedNode can resolve a reply independently of its parent comment', () => {
+    const doc = parse(docJson([paragraph('hi')]))
+    const withComment = insertCommentThreadNode(doc, doc.content.size - 1, 'c1', 'margin', 1000, 'original')
+    const replyPos = commentThreadContentEndPos(withComment, 'c1')!
+    const withReply = insertCommentThreadNode(withComment, replyPos, 'reply-1', 'margin', 2000, 'a reply')
+    const result = setCommentThreadResolvedNode(withReply, 'reply-1', true, 3000)!
+
+    expect(findCommentThread(result, 'c1')!.node.attrs.resolved).toBe(false)
+    expect(findCommentThread(result, 'reply-1')!.node.attrs.resolved).toBe(true)
+  })
+
+  it('setCommentThreadResolvedNode returns null for a comment that no longer exists', () => {
+    const doc = parse(docJson([paragraph('hi')]))
+    expect(setCommentThreadResolvedNode(doc, 'missing', true, 1000)).toBeNull()
+  })
+
+  it('setCommentThreadDisplayModeNode toggles margin/inline on the matching comment only', () => {
+    const doc = parse(docJson([paragraph('hi')]))
+    const withComment = insertCommentThreadNode(doc, doc.content.size - 1, 'c1', 'margin', 1000, 'original')
+    const result = setCommentThreadDisplayModeNode(withComment, 'c1', 'inline')!
+    expect(findCommentThread(result, 'c1')!.node.attrs.displayMode).toBe('inline')
+  })
+
+  it('deleteCommentThreadNode removes a leaf comment with no replies', () => {
+    const doc = parse(docJson([paragraph('hi')]))
+    const withComment = insertCommentThreadNode(doc, doc.content.size - 1, 'c1', 'margin', 1000, 'original')
+    const result = deleteCommentThreadNode(withComment, 'c1')!
+    expect(findCommentThread(result, 'c1')).toBeNull()
+  })
+
+  it('deleteCommentThreadNode on a parent removes its nested replies too (subtree deletion, for free)', () => {
+    const doc = parse(docJson([paragraph('hi')]))
+    const withComment = insertCommentThreadNode(doc, doc.content.size - 1, 'c1', 'margin', 1000, 'original')
+    const replyPos = commentThreadContentEndPos(withComment, 'c1')!
+    const withReply = insertCommentThreadNode(withComment, replyPos, 'reply-1', 'margin', 2000, 'a reply')
+    const result = deleteCommentThreadNode(withReply, 'c1')!
+
+    expect(findCommentThread(result, 'c1')).toBeNull()
+    expect(findCommentThread(result, 'reply-1')).toBeNull()
+    expect(result.textContent).not.toContain('a reply')
+  })
+
+  it('deleteCommentThreadNode on a reply only removes that reply, leaving its parent and siblings intact', () => {
+    const doc = parse(docJson([paragraph('hi')]))
+    const withComment = insertCommentThreadNode(doc, doc.content.size - 1, 'c1', 'margin', 1000, 'original')
+    const reply1Pos = commentThreadContentEndPos(withComment, 'c1')!
+    const withReply1 = insertCommentThreadNode(withComment, reply1Pos, 'reply-1', 'margin', 2000, 'first reply')
+    const reply2Pos = commentThreadContentEndPos(withReply1, 'c1')!
+    const withReply2 = insertCommentThreadNode(withReply1, reply2Pos, 'reply-2', 'margin', 3000, 'second reply')
+
+    const result = deleteCommentThreadNode(withReply2, 'reply-1')!
+
+    expect(findCommentThread(result, 'c1')).not.toBeNull()
+    expect(findCommentThread(result, 'reply-1')).toBeNull()
+    expect(findCommentThread(result, 'reply-2')).not.toBeNull()
+  })
+
+  it('deleteCommentThreadNode returns null for a comment that no longer exists, rather than throwing', () => {
+    const doc = parse(docJson([paragraph('hi')]))
+    expect(deleteCommentThreadNode(doc, 'missing')).toBeNull()
   })
 })

@@ -312,60 +312,48 @@ const nodes: Record<string, NodeSpec> = {
   },
 
   /**
-   * A comment's full thread — its own body plus every reply — as real
-   * document content, the same move already made for `footnote` (see this
-   * file's own top doc comment): no separate side array, no independent
-   * merge path, nothing that can go out of sync with the document it
-   * actually lives in. Lands as ordinary inline content right after the
-   * `comment_anchor` mark it belongs to (or nested inside another
-   * `comment_entry`'s own content, for "comment on a span within a
-   * comment" — `inline*` content already allows that recursively, the
-   * same way a footnote can sit inside a paragraph). `displayMode`
-   * controls only how `pmNodeViews.ts`'s `CommentThreadView` renders it
-   * (inline, right here, vs. collapsed with its entries mirrored into the
-   * margin panel) — never a different storage shape. A thread's own
-   * identity is its *first* entry's `id` (see `comment_entry` below) —
-   * the same id the matching `comment_anchor` mark's own `commentId`
-   * carries; no separate id of its own to ever drift out of sync with that
-   * mark.
+   * One comment — real document content, the same move already made for
+   * `footnote` (see this file's own top doc comment): no separate side
+   * array, no independent merge path, nothing that can go out of sync with
+   * the document it actually lives in. Lands as ordinary inline content
+   * right after the `comment_anchor` mark it belongs to. `content:
+   * "inline*"`, same reasoning as `footnote`'s own body: real typed
+   * content, bold/italic/underline only, no block structure — *including*
+   * further nested `comment_thread`s, since `inline*` already matches this
+   * node's own `group: "inline"` the same way it would for a footnote
+   * nested inside a paragraph. That recursion is deliberate, not an
+   * accident of the content expression: a reply, and "comment on a span
+   * within this comment's own body," are both just another `comment_thread`
+   * nested inside this one's content (confirmed against the live app's own
+   * `CommentCard`, which lets *any* comment, at any depth, be replied to or
+   * commented-on-within — a real tree, not a flat reply list) —
+   * `pmCommands.ts`'s insert/reply commands are deliberately the same
+   * generic "insert a thread at this position" operation whether that
+   * position is in the main document or inside another thread's own
+   * content, with no separate "entry" concept needed. Deleting a thread
+   * (`deleteCommentThreadNode`) deletes its own entire subtree for free, the
+   * same way deleting any other node deletes its descendants — matching the
+   * old model's own "delete cascades to children" behavior with no special
+   * cascade logic required.
+   *
+   * `displayMode` only ever matters for a *top-level* thread (nothing
+   * encloses it) — `pmNodeViews.ts`'s `CommentThreadView` reads it to
+   * decide whether to render its own content right here (`'inline'`) or
+   * hand rendering to `CommentsPanel.tsx`'s own margin mirror (`'margin'`,
+   * the default). A nested thread (reply, or comment-on-a-span) ignores its
+   * own `displayMode` entirely and always renders in place within its
+   * parent's own card — matching the old model, where a child comment never
+   * carried its own `displayMode` at all.
    */
   comment_thread: {
     inline: true,
     group: 'inline',
-    content: 'comment_entry+',
-    defining: true,
-    attrs: { displayMode: { default: 'margin' } },
-    parseDOM: [{ tag: 'comment-thread', getAttrs: (dom) => ({ displayMode: (dom as HTMLElement).getAttribute('data-display-mode') || 'margin' }) }],
-    toDOM(node) {
-      return ['comment-thread', { 'data-display-mode': node.attrs.displayMode }, 0]
-    },
-  },
-
-  /**
-   * One entry in a `comment_thread` — the thread's first entry is the
-   * original comment, every entry after it a reply (flat, never nested
-   * under another reply — confirmed against the live app: a reply or a
-   * "comment on a span within this body" is always anchored under the
-   * *top-level* comment, never under another reply, so there's no real
-   * thread shape this flattens away). `content: "inline*"`, same
-   * reasoning as `footnote`'s own body: real typed content, bold/italic/
-   * underline only, no block structure.
-   */
-  comment_entry: {
     content: 'inline*',
     defining: true,
-    // `id` has a default (unlike, say, `citation`'s `sourceId`) purely so
-    // this node counts as "generatable" for PM's own schema validation
-    // (`comment_entry+` is a *required* part of `comment_thread`'s content
-    // expression — see https://prosemirror.net/docs/guide/#generatable) —
-    // every real entry still always gets a real id explicitly, from
-    // `pmCommands.ts`'s own insert/reply commands, the same way every real
-    // `citation` always gets a real `sourceId` despite that attr having no
-    // default either.
-    attrs: { id: { default: '' }, resolved: { default: false }, createdAt: { default: 0 }, updatedAt: { default: 0 } },
+    attrs: { id: { default: '' }, resolved: { default: false }, createdAt: { default: 0 }, updatedAt: { default: 0 }, displayMode: { default: 'margin' } },
     parseDOM: [
       {
-        tag: 'comment-entry',
+        tag: 'comment-thread',
         getAttrs(dom) {
           const el = dom as HTMLElement
           return {
@@ -373,14 +361,21 @@ const nodes: Record<string, NodeSpec> = {
             resolved: el.getAttribute('data-resolved') === 'true',
             createdAt: Number(el.getAttribute('data-created-at') || 0),
             updatedAt: Number(el.getAttribute('data-updated-at') || 0),
+            displayMode: el.getAttribute('data-display-mode') || 'margin',
           }
         },
       },
     ],
     toDOM(node) {
       return [
-        'comment-entry',
-        { 'data-id': node.attrs.id, 'data-resolved': String(node.attrs.resolved), 'data-created-at': String(node.attrs.createdAt), 'data-updated-at': String(node.attrs.updatedAt) },
+        'comment-thread',
+        {
+          'data-id': node.attrs.id,
+          'data-resolved': String(node.attrs.resolved),
+          'data-created-at': String(node.attrs.createdAt),
+          'data-updated-at': String(node.attrs.updatedAt),
+          'data-display-mode': node.attrs.displayMode,
+        },
         0,
       ]
     },

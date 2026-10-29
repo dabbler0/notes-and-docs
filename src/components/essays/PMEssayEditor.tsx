@@ -270,7 +270,7 @@ export function PMEssayEditor({
         citation: (node, v, getPos) => new (createCitationView(sources))(node, v, getPos as () => number | undefined),
         section: (node, v, getPos) => new SectionView(node, v, getPos as () => number | undefined, sectionViews),
         footnote: (node) => new FootnoteView(node),
-        comment_thread: (node) => new CommentThreadView(node),
+        comment_thread: (node, v, getPos) => new CommentThreadView(node, v, getPos as () => number | undefined),
         math_inline: (node, v, getPos) => new (createMathView(false))(node, v, getPos as () => number | undefined),
         math_block: (node, v, getPos) => new (createMathView(true))(node, v, getPos as () => number | undefined),
         slide_break: (node, v, getPos) => new SlideBreakView(node, v, getPos as () => number | undefined),

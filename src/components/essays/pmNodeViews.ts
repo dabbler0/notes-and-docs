@@ -570,29 +570,40 @@ export class FootnoteView implements NodeView {
 }
 
 /**
- * A comment thread's own `NodeView` — the `comment_thread`/`comment_entry`
- * counterpart to `FootnoteView` just above (see `pmSchema.ts`'s own doc
- * comment on why a comment's full thread, body plus every reply, is real
- * document content now rather than a side array: nothing here can go out
- * of sync with the document, because there's only one document). Always
- * renders a small marker element with the thread's own identity
- * (`data-comment-id` — its *first* entry's own `id`, see `pmSchema.ts`)
- * right in the main text flow, for `CommentsPanel.tsx`'s own
- * position-tracking, regardless of display mode. `displayMode: 'inline'`
- * shows the thread's own entries right there, directly editable, exactly
- * like a footnote's body; `displayMode: 'margin'` hides them here (the
- * same `display: none` toggle `FootnoteView` already uses for its own
- * collapsed state) — `CommentsPanel.tsx` renders its own mirror of the same
- * entries into the margin instead, writing back through PM transactions
- * rather than a side array.
+ * One comment's own `NodeView` — the `comment_thread` counterpart to
+ * `FootnoteView` just above (see `pmSchema.ts`'s own doc comment on why a
+ * comment is real document content now rather than a side array: nothing
+ * here can go out of sync with the document, because there's only one
+ * document — and why a reply/comment-on-a-span is just another
+ * `comment_thread` nested inside this one's own content, not a separate
+ * concept). Always renders a small marker element with this comment's own
+ * `id` (`data-comment-id`) right in the main text flow, for
+ * `CommentsPanel.tsx`'s own position-tracking — but only when this
+ * `comment_thread` is actually top-level (`getPos`'s own resolved position
+ * has no enclosing `comment_thread` ancestor); a nested one (reply,
+ * comment-on-a-span) never needs independent positioning of its own, since
+ * it only ever renders inside its parent's own card. `displayMode: 'inline'`
+ * shows this comment's own content right there, directly editable, exactly
+ * like a footnote's body — but *only* for a top-level thread; a nested one
+ * always renders in place regardless of its own stored `displayMode` (see
+ * `pmSchema.ts`'s own doc comment on why that attr is meaningless below the
+ * top level). `displayMode: 'margin'` (top-level only) hides this
+ * comment's own content here (the same `display: none` toggle
+ * `FootnoteView` already uses for its own collapsed state) —
+ * `CommentsPanel.tsx` renders its own mirror into the margin instead,
+ * writing back through PM transactions rather than a side array.
  */
 export class CommentThreadView implements NodeView {
   dom: HTMLElement
   contentDOM: HTMLElement
   private wrapper: HTMLElement
   private marker: HTMLElement
+  private getPos: () => number | undefined
+  private view: EditorView
 
-  constructor(node: PMNode) {
+  constructor(node: PMNode, view: EditorView, getPos: () => number | undefined) {
+    this.getPos = getPos
+    this.view = view
     this.dom = document.createElement('comment-thread')
     this.dom.className = 'pm-comment-thread'
     this.marker = document.createElement('span')
@@ -607,11 +618,23 @@ export class CommentThreadView implements NodeView {
     this.sync(node)
   }
 
+  private isTopLevel(): boolean {
+    const pos = this.getPos()
+    if (pos == null) return true
+    const $pos = this.view.state.doc.resolve(pos)
+    for (let d = $pos.depth; d >= 0; d--) {
+      if ($pos.node(d).type.name === 'comment_thread') return false
+    }
+    return true
+  }
+
   private sync(node: PMNode) {
-    this.marker.dataset.commentId = (node.firstChild?.attrs.id as string | undefined) ?? ''
-    const inline = node.attrs.displayMode === 'inline'
+    this.marker.dataset.commentId = node.attrs.id ?? ''
+    const topLevel = this.isTopLevel()
+    this.marker.style.display = topLevel ? '' : 'none'
+    const inline = !topLevel || node.attrs.displayMode === 'inline'
     this.wrapper.style.display = inline ? 'inline' : 'none'
-    this.dom.classList.toggle('pm-comment-thread-margin', !inline)
+    this.dom.classList.toggle('pm-comment-thread-margin', topLevel && !inline)
   }
 
   update(node: PMNode) {
