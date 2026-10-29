@@ -1,4 +1,5 @@
 import { Fragment, Slice, DOMSerializer, DOMParser as PMDOMParser } from 'prosemirror-model'
+import { Transform } from 'prosemirror-transform'
 import { TextSelection } from 'prosemirror-state'
 import type { EditorState, Transaction } from 'prosemirror-state'
 import type { EditorView } from 'prosemirror-view'
@@ -861,6 +862,143 @@ export function repairMissingInlineCommentBodies(doc: PMNode, comments: Comment[
     }
   })
   return { doc: currentDoc, comments: changed ? repairedComments : comments, changed }
+}
+
+// ---- comment_thread / comment_entry — a comment's full thread as real
+// document content (see `pmSchema.ts`'s own doc comment). Every mutator
+// below comes in two forms: a pure `...Node` function taking and returning
+// a plain `Node` (built on `prosemirror-transform`'s own `Transform` class,
+// the same escape hatch `repairMissingInlineCommentBodies` above already
+// uses via `Node.replace` — no `EditorView` required, so these are safe to
+// call from a headless migration too), and a thin `EditorView`-dispatching
+// counterpart with the same name minus "Node", which computes and applies
+// the identical targeted steps directly against `view.state.doc` so the
+// user's own selection elsewhere in the document maps through normally
+// (a whole-document replace would otherwise reset it on every comment
+// action, however small).
+
+/** The zero-width space new, empty entries are seeded with — same reasoning as `insertFootnote`'s own placeholder: a genuinely empty inline-ish node gives the browser nothing to land a cursor on. */
+function buildCommentEntry(entryId: string, now: number, text?: string): PMNode {
+  return essaySchema.nodes.comment_entry.create({ id: entryId, resolved: false, createdAt: now, updatedAt: now }, essaySchema.text(text && text.length > 0 ? text : ZERO_WIDTH_SPACE))
+}
+
+/** Builds a brand-new `comment_thread` node with a single entry — the thread's own identity *is* that entry's `id` (see `pmSchema.ts`'s own doc comment), the same id the matching `comment_anchor` mark's own `commentId` carries. */
+function buildCommentThreadNode(commentId: string, displayMode: 'margin' | 'inline', now: number, text?: string): PMNode {
+  return essaySchema.nodes.comment_thread.create({ displayMode }, buildCommentEntry(commentId, now, text))
+}
+
+/** Locates `commentId`'s own `comment_thread` node anywhere in `doc` — recurses into nested threads too ("comment on a span within a comment" lands inside another entry's own content, and `descendants` already walks the whole tree regardless of depth) — or `null` if none exists yet, or not any more. */
+export function findCommentThread(doc: PMNode, commentId: string): { pos: number; node: PMNode } | null {
+  let found: { pos: number; node: PMNode } | null = null
+  doc.descendants((node, pos) => {
+    if (found) return false
+    if (node.type.name === 'comment_thread' && node.firstChild?.attrs.id === commentId) {
+      found = { pos, node }
+      return false
+    }
+    return true
+  })
+  return found
+}
+
+/** One `comment_entry` by its own `id`, anywhere in `doc` (a thread's first entry, or any reply) — the per-entry counterpart to `findCommentThread`. */
+function findCommentEntry(doc: PMNode, entryId: string): { pos: number; node: PMNode } | null {
+  let found: { pos: number; node: PMNode } | null = null
+  doc.descendants((node, pos) => {
+    if (found) return false
+    if (node.type.name === 'comment_entry' && node.attrs.id === entryId) {
+      found = { pos, node }
+      return false
+    }
+    return true
+  })
+  return found
+}
+
+/** A `comment_entry`'s own enclosing thread, plus the entry itself — the one extra bit `deleteCommentEntryNode`/`deleteCommentEntry` need beyond `findCommentEntry` alone, to decide whether deleting this entry should remove just it or the whole (now-empty) thread. */
+function findCommentEntryWithThread(doc: PMNode, entryId: string): { thread: { pos: number; node: PMNode }; entry: { pos: number; node: PMNode } } | null {
+  let result: { thread: { pos: number; node: PMNode }; entry: { pos: number; node: PMNode } } | null = null
+  doc.descendants((node, pos) => {
+    if (result) return false
+    if (node.type.name === 'comment_thread') {
+      node.forEach((child, offset) => {
+        if (!result && child.type.name === 'comment_entry' && child.attrs.id === entryId) {
+          result = { thread: { pos, node }, entry: { pos: pos + 1 + offset, node: child } }
+        }
+      })
+      return false
+    }
+    return true
+  })
+  return result
+}
+
+/** Splices a brand-new comment thread into `doc` right after its own anchor's end position (see `commentAnchorEndPos`) — pure, headless-safe (see this section's own doc comment). */
+export function insertCommentThreadNode(doc: PMNode, pos: number, commentId: string, displayMode: 'margin' | 'inline', now: number, text?: string): PMNode {
+  return new Transform(doc).insert(pos, buildCommentThreadNode(commentId, displayMode, now, text)).doc
+}
+
+/** Live-view counterpart to `insertCommentThreadNode` — same insertion, dispatched as a real transaction. */
+export function insertCommentThread(view: EditorView, pos: number, commentId: string, displayMode: 'margin' | 'inline', text?: string): void {
+  view.dispatch(view.state.tr.insert(pos, buildCommentThreadNode(commentId, displayMode, Date.now(), text)))
+}
+
+/** Appends a new reply (or the start of a "comment on a span within this body," given a highlighted `text`) to `commentId`'s own thread. `null`/no-op if that thread no longer exists (already deleted). Pure, headless-safe. */
+export function addCommentThreadEntryNode(doc: PMNode, commentId: string, entryId: string, now: number, text?: string): PMNode | null {
+  const thread = findCommentThread(doc, commentId)
+  if (!thread) return null
+  return new Transform(doc).insert(thread.pos + thread.node.nodeSize - 1, buildCommentEntry(entryId, now, text)).doc
+}
+
+export function addCommentThreadEntry(view: EditorView, commentId: string, entryId: string, text?: string): void {
+  const thread = findCommentThread(view.state.doc, commentId)
+  if (!thread) return
+  view.dispatch(view.state.tr.insert(thread.pos + thread.node.nodeSize - 1, buildCommentEntry(entryId, Date.now(), text)))
+}
+
+/** Toggles one entry's own `resolved` flag (the thread's first entry, or any reply — each resolves independently, same as today). `null`/no-op if that entry no longer exists. Pure, headless-safe. */
+export function setCommentEntryResolvedNode(doc: PMNode, entryId: string, resolved: boolean, now: number): PMNode | null {
+  const entry = findCommentEntry(doc, entryId)
+  if (!entry) return null
+  return new Transform(doc).setNodeMarkup(entry.pos, null, { ...entry.node.attrs, resolved, updatedAt: now }).doc
+}
+
+export function setCommentEntryResolved(view: EditorView, entryId: string, resolved: boolean): void {
+  const entry = findCommentEntry(view.state.doc, entryId)
+  if (!entry) return
+  view.dispatch(view.state.tr.setNodeMarkup(entry.pos, null, { ...entry.node.attrs, resolved, updatedAt: Date.now() }))
+}
+
+/** Deletes one entry from its thread — deleting a thread's *only* remaining entry removes the whole (now-pointless) `comment_thread` node instead, rather than leaving an empty thread behind. `null`/no-op if that entry no longer exists. Pure, headless-safe. */
+export function deleteCommentEntryNode(doc: PMNode, entryId: string): PMNode | null {
+  const found = findCommentEntryWithThread(doc, entryId)
+  if (!found) return null
+  const { thread, entry } = found
+  const tr = new Transform(doc)
+  if (thread.node.childCount <= 1) tr.delete(thread.pos, thread.pos + thread.node.nodeSize)
+  else tr.delete(entry.pos, entry.pos + entry.node.nodeSize)
+  return tr.doc
+}
+
+export function deleteCommentEntry(view: EditorView, entryId: string): void {
+  const found = findCommentEntryWithThread(view.state.doc, entryId)
+  if (!found) return
+  const { thread, entry } = found
+  if (thread.node.childCount <= 1) view.dispatch(view.state.tr.delete(thread.pos, thread.pos + thread.node.nodeSize))
+  else view.dispatch(view.state.tr.delete(entry.pos, entry.pos + entry.node.nodeSize))
+}
+
+/** Deletes `commentId`'s entire thread — every entry, replies included (e.g. "Delete this comment," acting on the top-level entry). Pure, headless-safe. */
+export function deleteCommentThreadNode(doc: PMNode, commentId: string): PMNode | null {
+  const thread = findCommentThread(doc, commentId)
+  if (!thread) return null
+  return new Transform(doc).delete(thread.pos, thread.pos + thread.node.nodeSize).doc
+}
+
+export function deleteCommentThread(view: EditorView, commentId: string): void {
+  const thread = findCommentThread(view.state.doc, commentId)
+  if (!thread) return
+  view.dispatch(view.state.tr.delete(thread.pos, thread.pos + thread.node.nodeSize))
 }
 
 /** The depth of the nearest enclosing `section` around `$pos` — always ≥1 (the essay/slideshow document's own single root section, at depth 1) since, unlike a plain `doc`, `pmSchema.ts`'s `doc` content expression (`"section"`) guarantees every position is inside at least that one. Shared by `insertDivider` below: a `slide_break`/`fragment_break` always lands as a direct child of this container, never nested any deeper inside a list/blockquote the cursor happened to be in, and never lifted out past it — `slideSerializer.ts` reads a slide's own title off of exactly whichever section(s) enclose its own divider. */

@@ -310,6 +310,81 @@ const nodes: Record<string, NodeSpec> = {
       return ['fragment-break', { 'data-id': node.attrs.id }]
     },
   },
+
+  /**
+   * A comment's full thread — its own body plus every reply — as real
+   * document content, the same move already made for `footnote` (see this
+   * file's own top doc comment): no separate side array, no independent
+   * merge path, nothing that can go out of sync with the document it
+   * actually lives in. Lands as ordinary inline content right after the
+   * `comment_anchor` mark it belongs to (or nested inside another
+   * `comment_entry`'s own content, for "comment on a span within a
+   * comment" — `inline*` content already allows that recursively, the
+   * same way a footnote can sit inside a paragraph). `displayMode`
+   * controls only how `pmNodeViews.ts`'s `CommentThreadView` renders it
+   * (inline, right here, vs. collapsed with its entries mirrored into the
+   * margin panel) — never a different storage shape. A thread's own
+   * identity is its *first* entry's `id` (see `comment_entry` below) —
+   * the same id the matching `comment_anchor` mark's own `commentId`
+   * carries; no separate id of its own to ever drift out of sync with that
+   * mark.
+   */
+  comment_thread: {
+    inline: true,
+    group: 'inline',
+    content: 'comment_entry+',
+    defining: true,
+    attrs: { displayMode: { default: 'margin' } },
+    parseDOM: [{ tag: 'comment-thread', getAttrs: (dom) => ({ displayMode: (dom as HTMLElement).getAttribute('data-display-mode') || 'margin' }) }],
+    toDOM(node) {
+      return ['comment-thread', { 'data-display-mode': node.attrs.displayMode }, 0]
+    },
+  },
+
+  /**
+   * One entry in a `comment_thread` — the thread's first entry is the
+   * original comment, every entry after it a reply (flat, never nested
+   * under another reply — confirmed against the live app: a reply or a
+   * "comment on a span within this body" is always anchored under the
+   * *top-level* comment, never under another reply, so there's no real
+   * thread shape this flattens away). `content: "inline*"`, same
+   * reasoning as `footnote`'s own body: real typed content, bold/italic/
+   * underline only, no block structure.
+   */
+  comment_entry: {
+    content: 'inline*',
+    defining: true,
+    // `id` has a default (unlike, say, `citation`'s `sourceId`) purely so
+    // this node counts as "generatable" for PM's own schema validation
+    // (`comment_entry+` is a *required* part of `comment_thread`'s content
+    // expression — see https://prosemirror.net/docs/guide/#generatable) —
+    // every real entry still always gets a real id explicitly, from
+    // `pmCommands.ts`'s own insert/reply commands, the same way every real
+    // `citation` always gets a real `sourceId` despite that attr having no
+    // default either.
+    attrs: { id: { default: '' }, resolved: { default: false }, createdAt: { default: 0 }, updatedAt: { default: 0 } },
+    parseDOM: [
+      {
+        tag: 'comment-entry',
+        getAttrs(dom) {
+          const el = dom as HTMLElement
+          return {
+            id: el.getAttribute('data-id'),
+            resolved: el.getAttribute('data-resolved') === 'true',
+            createdAt: Number(el.getAttribute('data-created-at') || 0),
+            updatedAt: Number(el.getAttribute('data-updated-at') || 0),
+          }
+        },
+      },
+    ],
+    toDOM(node) {
+      return [
+        'comment-entry',
+        { 'data-id': node.attrs.id, 'data-resolved': String(node.attrs.resolved), 'data-created-at': String(node.attrs.createdAt), 'data-updated-at': String(node.attrs.updatedAt) },
+        0,
+      ]
+    },
+  },
 }
 
 const marks: Record<string, MarkSpec> = {

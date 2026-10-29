@@ -3639,6 +3639,41 @@ select {
   outline: none;
 }
 
+/* `comment_thread`/`comment_entry` (pmSchema.ts) — `pmNodeViews.ts`'s own
+   `CommentThreadView`. The marker is always present (so `CommentsPanel.tsx`
+   can position against it regardless of display mode); the entries
+   wrapper only actually shows for `displayMode: 'inline'` (see that
+   NodeView's own doc comment) — a margin-displayed thread's entries render
+   into the margin panel instead, so this stays hidden here. */
+.pm-editor-root .ProseMirror .pm-comment-thread-marker {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--yellow);
+  margin: 0 2px;
+  vertical-align: middle;
+}
+
+.pm-editor-root .ProseMirror .pm-comment-thread-wrapper {
+  font-size: 13px;
+  color: var(--ink-dim);
+  background: var(--surface-2);
+  border-radius: 4px;
+  padding: 0 5px;
+  margin-left: 2px;
+}
+
+.pm-editor-root .ProseMirror comment-entry {
+  display: inline;
+}
+
+.pm-editor-root .ProseMirror comment-entry + comment-entry {
+  margin-left: 6px;
+  padding-left: 6px;
+  border-left: 1px solid var(--border);
+}
+
 /* `math_inline`/`math_block` (pmSchema.ts) render as real custom elements
    now (`<math-inline>`/`<math-block>`, `pmNodeViews.ts`'s own `MathView`)
    rather than the old model's `<span class="math-inline/math-block">` —

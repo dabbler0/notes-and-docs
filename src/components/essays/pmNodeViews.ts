@@ -570,6 +570,62 @@ export class FootnoteView implements NodeView {
 }
 
 /**
+ * A comment thread's own `NodeView` — the `comment_thread`/`comment_entry`
+ * counterpart to `FootnoteView` just above (see `pmSchema.ts`'s own doc
+ * comment on why a comment's full thread, body plus every reply, is real
+ * document content now rather than a side array: nothing here can go out
+ * of sync with the document, because there's only one document). Always
+ * renders a small marker element with the thread's own identity
+ * (`data-comment-id` — its *first* entry's own `id`, see `pmSchema.ts`)
+ * right in the main text flow, for `CommentsPanel.tsx`'s own
+ * position-tracking, regardless of display mode. `displayMode: 'inline'`
+ * shows the thread's own entries right there, directly editable, exactly
+ * like a footnote's body; `displayMode: 'margin'` hides them here (the
+ * same `display: none` toggle `FootnoteView` already uses for its own
+ * collapsed state) — `CommentsPanel.tsx` renders its own mirror of the same
+ * entries into the margin instead, writing back through PM transactions
+ * rather than a side array.
+ */
+export class CommentThreadView implements NodeView {
+  dom: HTMLElement
+  contentDOM: HTMLElement
+  private wrapper: HTMLElement
+  private marker: HTMLElement
+
+  constructor(node: PMNode) {
+    this.dom = document.createElement('comment-thread')
+    this.dom.className = 'pm-comment-thread'
+    this.marker = document.createElement('span')
+    this.marker.className = 'pm-comment-thread-marker'
+    this.marker.title = 'A comment is attached here'
+    this.wrapper = document.createElement('span')
+    this.wrapper.className = 'pm-comment-thread-wrapper'
+    this.contentDOM = document.createElement('span')
+    this.contentDOM.className = 'pm-comment-thread-entries'
+    this.wrapper.appendChild(this.contentDOM)
+    this.dom.append(this.marker, this.wrapper)
+    this.sync(node)
+  }
+
+  private sync(node: PMNode) {
+    this.marker.dataset.commentId = (node.firstChild?.attrs.id as string | undefined) ?? ''
+    const inline = node.attrs.displayMode === 'inline'
+    this.wrapper.style.display = inline ? 'inline' : 'none'
+    this.dom.classList.toggle('pm-comment-thread-margin', !inline)
+  }
+
+  update(node: PMNode) {
+    if (node.type.name !== 'comment_thread') return false
+    this.sync(node)
+    return true
+  }
+
+  ignoreMutation() {
+    return true
+  }
+}
+
+/**
  * `math_inline`/`math_block` NodeView — the real-KaTeX, click-to-edit
  * upgrade the prototype's own `mathView` (which just prompted for raw
  * LaTeX text) deferred to the actual migration. Reuses `renderMathHtml`

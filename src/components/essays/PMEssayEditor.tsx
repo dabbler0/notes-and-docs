@@ -8,7 +8,7 @@ import { splitListItem, sinkListItem } from 'prosemirror-schema-list'
 import { Node as PMNode } from 'prosemirror-model'
 import { essaySchema } from '../../lib/pmSchema'
 import { saveEssay } from '../../models/essaysRepo'
-import { createCitationView, SectionView, FootnoteView, createMathView, SlideBreakView, FragmentBreakView } from './pmNodeViews'
+import { createCitationView, SectionView, FootnoteView, CommentThreadView, createMathView, SlideBreakView, FragmentBreakView } from './pmNodeViews'
 import { splitIntoSection, preventJoinIntoSectionTitle, dedupeSectionIds, pasteFlatSectionsFromHtml, repairMissingInlineCommentBodies } from './pmCommands'
 import { createCommentPlugin } from './pmCommentPlugin'
 import type { InlineCommentAction } from './pmCommentPlugin'
@@ -270,6 +270,7 @@ export function PMEssayEditor({
         citation: (node, v, getPos) => new (createCitationView(sources))(node, v, getPos as () => number | undefined),
         section: (node, v, getPos) => new SectionView(node, v, getPos as () => number | undefined, sectionViews),
         footnote: (node) => new FootnoteView(node),
+        comment_thread: (node) => new CommentThreadView(node),
         math_inline: (node, v, getPos) => new (createMathView(false))(node, v, getPos as () => number | undefined),
         math_block: (node, v, getPos) => new (createMathView(true))(node, v, getPos as () => number | undefined),
         slide_break: (node, v, getPos) => new SlideBreakView(node, v, getPos as () => number | undefined),
