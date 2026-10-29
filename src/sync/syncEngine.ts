@@ -92,7 +92,11 @@ import { b64ToBuf, bufToB64, decryptBytes, decryptJson, encryptBytes, encryptJso
 import { backend } from '../storage'
 import { clearPendingBlobDeletions, loadPendingBlobDeletions } from '../storage/pendingBlobDeletions'
 import { notifySyncApplied } from './syncEvents'
-import type { Source } from '../models/types'
+import type { Essay, Source } from '../models/types'
+import { mergeEssayContent, deepEqual, type EssayMergeSnapshot } from '../lib/essayMerge'
+import { addToGraveyard } from '../models/graveyardRepo'
+import { essaySchema } from '../lib/pmSchema'
+import { Node as PMNode, Fragment, DOMSerializer } from 'prosemirror-model'
 
 // How long a single Firestore round trip gets before this gives up on it —
 // long enough that a genuinely slow connection still succeeds, short enough
@@ -743,6 +747,172 @@ function createFirestoreDocStore(db: Firestore, uid: string, cryptoKey: CryptoKe
   }
 }
 
+// ---- Essays: three-way merge instead of plain last-write-wins -----------
+//
+// Every other synced collection (including essays themselves, for anything
+// this section doesn't take over — a not-yet-migrated essay, or one side
+// missing entirely) still goes through the generic push/pull loops' own
+// whole-document last-write-wins below. For a *migrated* essay that both
+// this device and the remote account already have a copy of, that's not
+// good enough on its own: two devices editing different parts of the same
+// essay between syncs used to mean whichever synced second clobbered the
+// other's entire essay, not just the parts that actually conflicted. This
+// section reconciles those essays with a real three-way merge
+// (`lib/essayMerge.ts`) instead, using the last content this device and
+// the remote account were known to agree on (`essaySyncBases`, below) as
+// the merge base — then lets the generic loops run completely unchanged
+// afterward, since every essay this section actually resolves ends up with
+// *identical* `updatedAt` on both sides, which is exactly what makes the
+// generic loops' own newer-wins checks naturally skip it as already
+// converged (see this section's own placement — before either generic
+// loop runs).
+
+const ESSAY_SYNC_BASE_COLLECTION = 'essaySyncBases'
+
+/**
+ * This device's own record of the last essay content it and the remote
+ * account were known to agree on — purely local bookkeeping, never itself
+ * synced (deliberately not part of `SYNCED_COLLECTIONS`): the merge base a
+ * three-way merge needs is inherently per-device, the same way a git
+ * clone's own merge-base is relative to *that* clone's history, not a
+ * single global fact. Written every time `reconcileEssaysThreeWay` resolves
+ * an essay — including the very first time, with no prior base to compare
+ * against (see `mergeEssayContent`'s own doc comment on that bootstrap
+ * case) — so the *next* divergence always has a real base to work from.
+ */
+interface EssaySyncBase extends EssayMergeSnapshot {
+  id: string
+}
+
+/** Serializes a handful of plain PM JSON nodes (`EssayMergeConflict.nodes` — the losing side of a genuine merge conflict) to HTML via the schema's own `toDOM`, the same technique `pmCommands.ts`'s own `sliceToHtml` uses for "Send to graveyard" — kept as its own small, self-contained helper here rather than importing that one directly, which would mean this data-layer module reaching into `components/essays/` for it. */
+function conflictNodesToHtml(nodes: unknown[]): string {
+  const pmNodes = nodes.map((n) => PMNode.fromJSON(essaySchema, n))
+  const fragment = Fragment.fromArray(pmNodes)
+  const dom = DOMSerializer.fromSchema(essaySchema).serializeFragment(fragment)
+  const div = document.createElement('div')
+  div.appendChild(dom)
+  return div.innerHTML
+}
+
+function toMergeSnapshot(essay: Essay): EssayMergeSnapshot & { updatedAt: number } {
+  return { title: essay.title, doc: essay.doc, comments: essay.comments ?? [], authorNote: essay.authorNote, deleted: essay.deleted, updatedAt: essay.updatedAt }
+}
+
+/**
+ * Reconciles every essay that's dirty on either side this pass (locally
+ * since `cursors.pushedAt`, or remotely since `cursors.pulledAt`) *and*
+ * that both this device and the remote account already have a migrated
+ * (`doc`-having) copy of — the only case there's an actual divergence to
+ * merge rather than a plain push or pull. Anything else (a brand-new essay
+ * only one side has at all, or one that hasn't been migrated) is left
+ * entirely to the generic loops in `runSyncPassNow`, which already handle
+ * those correctly on their own.
+ *
+ * Returns the latest remote `updatedAt` this step itself observed (folded
+ * into the same `maxSeenRemoteUpdatedAt` the generic pull loop tracks) and
+ * any errors — collected rather than thrown, same reasoning as every other
+ * per-document failure in this module: one essay that can't be resolved
+ * (a transient network error, say) must not block every other essay, or
+ * the generic loops' own pull/push phases, from still running.
+ */
+async function reconcileEssaysThreeWay(
+  db: Firestore,
+  uid: string,
+  cryptoKey: CryptoKey,
+  cursors: Cursors,
+  result: SyncResult,
+  onProgress?: (message: string) => void,
+): Promise<{ maxRemoteUpdatedAtSeen: number; errors: Error[] }> {
+  const errors: Error[] = []
+  let maxRemoteUpdatedAtSeen = cursors.pulledAt
+
+  const localDirty = await backend.docs.listSince<Essay>('essays', cursors.pushedAt)
+  const remoteDirty = new Map<string, Essay>()
+  try {
+    const q = query(collection(db, 'accounts', uid, 'essays'), where('updatedAt', '>', cursors.pulledAt))
+    const snap = await withTimeout(getDocs(q), 'remote essays (checking for a three-way merge)')
+    for (const docSnap of snap.docs) {
+      const decoded = (await decodeFromRemote(docSnap.data(), cryptoKey, docSnap.ref)) as unknown as Essay
+      remoteDirty.set(docSnap.id, decoded)
+      const u = (docSnap.data().updatedAt as number) ?? 0
+      if (u > maxRemoteUpdatedAtSeen) maxRemoteUpdatedAtSeen = u
+    }
+  } catch (err) {
+    console.error('Sync: failed listing remote essays for three-way merge', err)
+    errors.push(err instanceof Error ? err : new Error(`Failed checking remote essays for changes to merge: ${String(err)}`))
+    return { maxRemoteUpdatedAtSeen, errors }
+  }
+
+  const candidateIds = new Set<string>([...localDirty.map((e) => e.id), ...remoteDirty.keys()])
+  let processed = 0
+  for (const id of candidateIds) {
+    processed++
+    onProgress?.(`Checking essays for changes on both sides to merge… (${processed} of ${candidateIds.size})`)
+    try {
+      const localEssay = localDirty.find((e) => e.id === id) ?? (await backend.docs.get<Essay>('essays', id))
+      let remoteEssay = remoteDirty.get(id)
+      if (!remoteEssay) {
+        const ref = doc(db, 'accounts', uid, 'essays', id)
+        const snap = await withTimeout(getDoc(ref), `${id} (checking before a three-way merge)`)
+        if (snap.exists()) remoteEssay = (await decodeFromRemote(snap.data(), cryptoKey, snap.ref)) as unknown as Essay
+      }
+      // Only a genuine divergence — both sides already have a migrated
+      // copy — is this step's job; anything else is a plain push or pull,
+      // already handled correctly by the generic loops that run right
+      // after this.
+      if (!localEssay || !remoteEssay || !localEssay.doc || !remoteEssay.doc) continue
+
+      const base = await backend.docs.get<EssaySyncBase>(ESSAY_SYNC_BASE_COLLECTION, id)
+      const baseSnapshot: EssayMergeSnapshot | null = base ? { title: base.title, doc: base.doc, comments: base.comments, authorNote: base.authorNote, deleted: base.deleted } : null
+
+      const merge = mergeEssayContent(baseSnapshot, toMergeSnapshot(localEssay), toMergeSnapshot(remoteEssay))
+      const mergedUpdatedAt = Math.max(localEssay.updatedAt, remoteEssay.updatedAt)
+      // Plain metadata this merge doesn't otherwise reconcile (archived,
+      // projectId, rootNodeId, …) just follows whichever whole essay is
+      // newer — the same rule every one of those fields was already
+      // subject to under plain last-write-wins, unaffected by this
+      // feature's own, narrower scope (title/authorNote/doc/comments/
+      // deleted — see `lib/essayMerge.ts`'s own doc comment).
+      const metadataSource = localEssay.updatedAt >= remoteEssay.updatedAt ? localEssay : remoteEssay
+      const mergedEssay: Essay = {
+        ...metadataSource,
+        title: merge.title,
+        doc: merge.doc,
+        comments: merge.comments,
+        authorNote: merge.authorNote,
+        deleted: merge.deleted,
+        updatedAt: mergedUpdatedAt,
+      }
+
+      if (!deepEqual(mergedEssay, localEssay)) {
+        await backend.docs.put('essays', mergedEssay)
+        result.pulled.essays++
+      }
+      if (!deepEqual(mergedEssay, remoteEssay)) {
+        const remoteRef = doc(db, 'accounts', uid, 'essays', id)
+        const remoteDoc = await encodeForRemote('essays', mergedEssay as unknown as LocalDoc, cryptoKey, db, remoteRef, (done, total) =>
+          onProgress?.(`Pushing merged essay… — uploading data (${done} of ${total} pieces)`),
+        )
+        await withTimeout(setDoc(remoteRef, remoteDoc), `${id} to upload (merged)`)
+        result.pushed.essays++
+      }
+
+      const newBase: EssaySyncBase = { id, title: merge.title, doc: merge.doc, comments: merge.comments, authorNote: merge.authorNote, deleted: merge.deleted }
+      await backend.docs.put(ESSAY_SYNC_BASE_COLLECTION, newBase)
+
+      for (const conflict of merge.conflicts) {
+        const html = conflictNodesToHtml(conflict.nodes)
+        await addToGraveyard(id, conflict.sectionId, conflict.sectionTitle, html)
+      }
+    } catch (err) {
+      console.error(`Sync: three-way merge failed for essays/${id}`, err)
+      errors.push(err instanceof Error ? err : new Error(`Failed merging essay ${id} between devices: ${String(err)}`))
+    }
+  }
+
+  return { maxRemoteUpdatedAtSeen, errors }
+}
+
 // ---- PDF blobs, chunked to fit Firestore's ~1MiB-per-document cap -------
 //
 // A blob is stored as one manifest doc (`accounts/{uid}/blobs/{blobId}`,
@@ -848,6 +1018,16 @@ async function runSyncPassNow(onProgress?: (message: string) => void): Promise<S
   // collected errors are reported together at the end, once nothing that
   // *could* succeed has been skipped on their account.
   const pushErrors: Error[] = []
+
+  // Reconciles any essay both this device and the remote account already
+  // have a divergent copy of via a real three-way merge, *before* the
+  // generic per-collection loops below ever look at 'essays' — see this
+  // function's own doc comment for why running it first is what lets the
+  // generic loops then run completely unmodified afterward.
+  const essayMergeOutcome = await reconcileEssaysThreeWay(db, uid, cryptoKey, cursors, result, onProgress)
+  pushErrors.push(...essayMergeOutcome.errors)
+  const maxSeenRemoteUpdatedAtFromMerge = essayMergeOutcome.maxRemoteUpdatedAtSeen
+
   for (const col of SYNCED_COLLECTIONS) {
     onProgress?.(`Checking ${col} for local changes…`)
     // listSince() (backed by an index on updatedAt — see localBackend.ts)
@@ -918,7 +1098,7 @@ async function runSyncPassNow(onProgress?: (message: string) => void): Promise<S
   // Same reasoning as the push loop above: a decode/apply failure on one
   // remote doc (or a listing failure on one collection) must not stop the
   // rest of the pull, or the blob upload/download phases after it.
-  let maxSeenRemoteUpdatedAt = cursors.pulledAt
+  let maxSeenRemoteUpdatedAt = Math.max(cursors.pulledAt, maxSeenRemoteUpdatedAtFromMerge)
   const pullErrors: Error[] = []
   for (const col of SYNCED_COLLECTIONS) {
     onProgress?.(`Checking remote ${col} for changes…`)

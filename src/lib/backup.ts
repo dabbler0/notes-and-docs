@@ -230,7 +230,7 @@ export async function restoreBackup(file: File | Blob, opts: { mode: 'merge' | '
 }
 
 async function clearAllLocalData(): Promise<void> {
-  const [essays, nodes, sources, quotes, graveyard, bookmarks, todos, essayHistory, projects, slideshows] = await Promise.all([
+  const [essays, nodes, sources, quotes, graveyard, bookmarks, todos, essayHistory, projects, slideshows, essaySyncBases] = await Promise.all([
     backend.docs.list<Essay>('essays'),
     backend.docs.list<EssayNode>('nodes'),
     backend.docs.list<Source>('sources'),
@@ -241,6 +241,16 @@ async function clearAllLocalData(): Promise<void> {
     backend.docs.list<EssayCommitEntry>('essayHistory'),
     backend.docs.list<Project>('projects'),
     backend.docs.list<Slideshow>('slideshows'),
+    // Not itself a backed-up/restored collection (see `syncEngine.ts`'s
+    // own doc comment on `essaySyncBases` — purely local, per-device sync
+    // bookkeeping) — but a stale entry left behind by a 'replace' restore
+    // would be actively wrong afterward, not just useless: it'd still
+    // describe whatever this device and the remote account last agreed on
+    // *before* the restore, which the restore has nothing to do with, and
+    // a three-way merge computed against it on the next sync could reach
+    // the wrong answer. Wiped here for the same reason real cursors are
+    // effectively reset by a restore too.
+    backend.docs.list<{ id: string }>('essaySyncBases'),
   ])
   for (const e of essays) await backend.docs.delete('essays', e.id)
   for (const n of nodes) await backend.docs.delete('nodes', n.id)
@@ -280,6 +290,7 @@ async function clearAllLocalData(): Promise<void> {
   for (const g of graveyard) await backend.docs.delete('graveyard', g.id)
   for (const b of bookmarks) await backend.docs.delete('bookmarks', b.id)
   for (const t of todos) await backend.docs.delete('todos', t.id)
+  for (const eb of essaySyncBases) await backend.docs.delete('essaySyncBases', eb.id)
 }
 
 export function backupFileName(): string {

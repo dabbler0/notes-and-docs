@@ -12,6 +12,64 @@ import { createEssayWithRootNode, newDevice, newDeviceSignedIn, type Device } fr
 import { __failNextWriteTo, __getFakeCloud, __resetFakeCloud } from '../../test/fakeFirestore'
 import { generateKeyBundle, isKeyBundle } from '../../lib/crypto'
 
+function paragraph(text: string) {
+  return { type: 'paragraph', content: text ? [{ type: 'text', text }] : [] }
+}
+
+function section(id: string, title: string, children: unknown[]) {
+  return { type: 'section', attrs: { id, collapsed: false }, content: [{ type: 'section_title', content: title ? [{ type: 'text', text: title }] : [] }, ...children] }
+}
+
+/** The root section's own content array, as `createEssay` leaves it — one `section_title` child (index 0) plus everything after. */
+function rootSectionContent(doc: unknown): unknown[] {
+  return ((doc as { content: { content: unknown[] }[] }).content[0]).content
+}
+
+function paragraphText(node: unknown): string {
+  return (((node as { content?: { text?: string }[] }).content ?? [])[0]?.text ?? '')
+}
+
+/**
+ * Gets a three-way merge *base* recorded for `essayId` on both devices —
+ * every test below that wants to see an actual three-way merge (rather
+ * than the bootstrap, pick-the-newer-side fallback — see
+ * `lib/essayMerge.ts`'s own doc comment on why there's no real merge
+ * benefit on the very first divergence between two devices) calls this
+ * once, right after creating the essay it cares about, before introducing
+ * any divergent edits.
+ *
+ * A plain extra round of syncs with nothing new to send does *not* do
+ * this, even though it might look like it should: `syncEngine.ts`'s own
+ * pull-cursor bookkeeping advances a device's `pulledAt` watermark for
+ * *anything* it observes on a pass — including a document that device
+ * just pushed itself — so after one ordinary push-then-pull round trip,
+ * neither side's cursor ever again considers the essay "changed since I
+ * last checked," and `reconcileEssaysThreeWay` (`syncEngine.ts`) has
+ * nothing to process a second time. What actually triggers it is a real
+ * (if content-identical) *dirty* flag on at least one side: bumping the
+ * essay's own `updatedAt` with no other change gives device A's next sync
+ * a locally-dirty essay to resolve (recording A's own base via the
+ * trivial, content-equal case), and device B's *next* sync sees a
+ * remotely-dirty essay for the same reason (recording B's base too).
+ */
+async function establishMergeBase(a: Device, b: Device, essayId: string): Promise<void> {
+  await a.sync() // push the essay's initial content
+  await b.sync() // and pull it, so B has a local copy to touch below
+
+  // A plain, real Date.now() — no future offset. Pushing this essay here
+  // also advances *this device's own* pull cursor to match it (the same
+  // self-observation mechanism noted below), and any artificial offset
+  // would carry that inflation forward into every later sync in whatever
+  // test calls this, which can make a *subsequent*, genuinely-real-
+  // timestamped record (anything not created through this same offset
+  // trick — a graveyard fragment from a real conflict resolution, say)
+  // look falsely "older than what's already been seen" and get skipped.
+  const onA = (await a.getEssay(essayId))!
+  await a.putEssayRaw({ ...onA, updatedAt: Date.now() }) // content-identical "touch"
+  await a.sync() // A's own first both-sides-present encounter — records A's base
+  await b.sync() // B's own first both-sides-present encounter — records B's base
+}
+
 beforeEach(() => {
   __resetFakeCloud()
 })
@@ -789,5 +847,173 @@ describe('orphaned remote blob cleanup', () => {
       const syncResult = await a.sync()
       expect(syncResult.deletedBlobs).toBe(0) // nothing left to redo
     })
+  })
+})
+
+describe('essay three-way merge (not plain last-write-wins)', () => {
+  it('keeps edits two devices made to two different sections of the same essay, instead of one clobbering the other', async () => {
+    const { a, b } = await pairedDevices()
+    const essay = await a.createEssay('Shared essay')
+    // `createEssay` seeds the root section with one empty paragraph
+    // (index 1, right after its own title at index 0) — replaced here
+    // with the two named sections this test actually wants to edit.
+    ;(rootSectionContent(essay.doc) as unknown[]).splice(1, 1, section('sec-a', 'Section A', [paragraph('original A')]), section('sec-b', 'Section B', [paragraph('original B')]))
+    await a.saveEssay(essay)
+    await establishMergeBase(a, b, essay.id)
+
+    // Explicit, comfortably-separated timestamps (putEssayRaw, not
+    // saveEssay — see the matching note on the conflict test below) rather
+    // than relying on natural call-order Date.now() progression: this
+    // whole test suite runs fast enough that two `saveEssay` calls a few
+    // `await`s apart can land in the same millisecond, which would make
+    // the remote-essay "changed since my last pull" query below miss a
+    // genuinely-newer edit by coincidence, not by anything this feature
+    // itself gets wrong.
+    const essayOnA = (await a.getEssay(essay.id))!
+    const [, secA] = rootSectionContent(essayOnA.doc) as [unknown, { content: unknown[] }]
+    secA.content[1] = paragraph('A edited this section')
+    await a.putEssayRaw({ ...essayOnA, updatedAt: Date.now() + 100_000 })
+    await a.sync()
+
+    const essayOnB = (await b.getEssay(essay.id))!
+    const [, , secB] = rootSectionContent(essayOnB.doc) as [unknown, unknown, { content: unknown[] }]
+    secB.content[1] = paragraph('B edited this section')
+    await b.putEssayRaw({ ...essayOnB, updatedAt: Date.now() + 200_000 })
+    await b.sync()
+
+    // B's own sync just above already did the real merge work (its own
+    // local copy, holding B's edit, diverged from the shared base at the
+    // same time the just-pulled remote copy — A's already-pushed edit —
+    // did too); this final sync on A is just a clean fast-forward pull of
+    // that already-merged result, confirming it actually reached A.
+    await a.sync()
+
+    const merged = (await a.getEssay(essay.id))!
+    const children = rootSectionContent(merged.doc)
+    const findSection = (id: string) => children.find((c) => (c as { type: string }).type === 'section' && (c as { attrs: { id: string } }).attrs.id === id) as { content: unknown[] }
+    const mergedSecA = findSection('sec-a')
+    const mergedSecB = findSection('sec-b')
+    expect(paragraphText(mergedSecA.content[1])).toBe('A edited this section')
+    expect(paragraphText(mergedSecB.content[1])).toBe('B edited this section')
+
+    // And B, syncing afterward, converges onto that exact same merged
+    // result too — both devices end up agreeing, not just A.
+    await b.sync()
+    const mergedOnB = (await b.getEssay(essay.id))!
+    expect(mergedOnB.doc).toEqual(merged.doc)
+  })
+
+  it('keeps comments added independently by two devices to the same essay', async () => {
+    const { a, b } = await pairedDevices()
+    const essay = await a.createEssay('Essay with comments')
+    await establishMergeBase(a, b, essay.id)
+
+    const essayOnA = (await a.getEssay(essay.id))!
+    essayOnA.comments = [
+      { id: 'c-from-a', parentId: null, anchorKind: 'node', anchorText: '', body: 'a comment from A', resolved: false, createdAt: Date.now(), updatedAt: Date.now() },
+    ]
+    await a.saveEssay(essayOnA)
+    await a.sync()
+
+    const essayOnB = (await b.getEssay(essay.id))!
+    essayOnB.comments = [
+      { id: 'c-from-b', parentId: null, anchorKind: 'node', anchorText: '', body: 'a comment from B', resolved: false, createdAt: Date.now(), updatedAt: Date.now() },
+    ]
+    await b.saveEssay(essayOnB)
+    await b.sync()
+
+    await a.sync()
+    const merged = (await a.getEssay(essay.id))!
+    expect(merged.comments?.map((c) => c.id).sort()).toEqual(['c-from-a', 'c-from-b'])
+  })
+
+  it('preserves the losing side of a genuine conflict (the same paragraph edited differently on both devices) in the Graveyard instead of silently discarding it', async () => {
+    const { a, b } = await pairedDevices()
+    const essay = await a.createEssay('Conflicted essay')
+    const original = essay.doc
+    ;(rootSectionContent(original) as unknown[])[1] = paragraph('original text')
+    await a.saveEssay(essay)
+    await establishMergeBase(a, b, essay.id)
+
+    const essayOnA = (await a.getEssay(essay.id))!
+    const aContent = rootSectionContent(essayOnA.doc)
+    aContent[1] = paragraph('A changed this paragraph')
+    await a.saveEssay(essayOnA) // a plain, real, un-offset timestamp
+    await a.sync()
+
+    const essayOnB = (await b.getEssay(essay.id))!
+    const bContent = rootSectionContent(essayOnB.doc)
+    bContent[1] = paragraph('B changed the same paragraph differently')
+    // putEssayRaw with a deliberately *past* timestamp — not saveEssay,
+    // which would stamp its own real Date.now() — so B's edit is reliably
+    // the *older* of the two without ever pushing A's own timestamp into
+    // the future. Inflating A's timestamp instead (the more obvious way to
+    // make "A is newer" true) has a real, separate consequence: pushing an
+    // essay also advances *this device's own* pull cursor to match it (see
+    // `establishMergeBase`'s own doc comment on that same mechanism), and
+    // an artificially-future cursor would then make A's final sync below
+    // miss B's graveyard fragment — created with a plain, real `Date.now()`
+    // a moment later — by looking "older than what A already has."
+    await b.putEssayRaw({ ...essayOnB, updatedAt: Date.now() - 50_000 })
+    await b.sync()
+
+    await a.sync() // A pulls B's conflicting edit and resolves it
+
+    const merged = (await a.getEssay(essay.id))!
+    expect(paragraphText(rootSectionContent(merged.doc)[1])).toBe('A changed this paragraph') // A is newer, stays live
+
+    const fragments = await a.listGraveyard(essay.id)
+    expect(fragments).toHaveLength(1)
+    expect(fragments[0].html).toContain('B changed the same paragraph differently')
+
+    // The graveyard fragment itself is an ordinary synced collection — it
+    // reaches B too, on B's own next sync, the same as any other change.
+    await b.sync()
+    const fragmentsOnB = await b.listGraveyard(essay.id)
+    expect(fragmentsOnB).toHaveLength(1)
+  })
+
+  it('an edit on one device survives a concurrent delete on the other ("edit beats delete")', async () => {
+    const { a, b } = await pairedDevices()
+    const essay = await a.createEssay('Essay that almost got deleted')
+    await establishMergeBase(a, b, essay.id)
+
+    const essayOnB = (await b.getEssay(essay.id))!
+    rootSectionContent(essayOnB.doc)[1] = paragraph('B made a real edit')
+    await b.saveEssay(essayOnB)
+    await b.sync()
+
+    // A deletes its own copy without having seen B's edit yet, with a
+    // later timestamp than B's edit — under plain last-write-wins, this
+    // delete (being "newer") would win and erase B's edit along with the
+    // whole essay.
+    await a.deleteEssay(essay.id)
+    const deletedOnA = (await a.getEssay(essay.id))!
+    await a.putEssayRaw({ ...deletedOnA, updatedAt: Date.now() + 200_000 })
+    await a.sync()
+
+    const final = (await a.getEssay(essay.id))!
+    expect(final.deleted).toBeFalsy()
+    expect(paragraphText(rootSectionContent(final.doc)[1])).toBe('B made a real edit')
+  })
+
+  it('falls back to the newer whole essay on the very first divergence (no base recorded yet), same as before this feature existed', async () => {
+    const { a, b } = await pairedDevices()
+    const essay = await a.createEssay('Brand new essay')
+    await a.sync()
+    await b.sync() // B has it now, but neither side has a recorded merge base yet
+
+    const essayOnA = (await a.getEssay(essay.id))!
+    rootSectionContent(essayOnA.doc)[1] = paragraph('A edit')
+    await a.putEssayRaw({ ...essayOnA, updatedAt: Date.now() + 100_000 })
+    await a.sync()
+
+    const essayOnB = (await b.getEssay(essay.id))!
+    rootSectionContent(essayOnB.doc)[1] = paragraph('B edit')
+    await b.putEssayRaw({ ...essayOnB, updatedAt: Date.now() + 50_000 }) // older than A's edit above
+    await b.sync()
+
+    const final = (await b.getEssay(essay.id))!
+    expect(paragraphText(rootSectionContent(final.doc)[1])).toBe('A edit') // the newer whole essay wins wholesale
   })
 })
