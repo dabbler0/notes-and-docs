@@ -1,4 +1,13 @@
 :root {
+  /* Tells the browser which palette this page's own colors actually match,
+     so native, un-styled UI chrome this page doesn't draw itself — a
+     select's own dropdown panel on some browsers, checkboxes, scrollbars,
+     the text-input caret, `::placeholder` — renders in the matching
+     palette too, instead of (notably on mobile) staying light/black-on-
+     dark regardless of this page's own dark mode. Declared per theme
+     branch below, same `prefers-color-scheme`/`[data-theme]` condition as
+     every other dark-mode value on `:root`. */
+  color-scheme: light;
   --bg: #faf8f3;
   --surface: #ffffff;
   --surface-2: #f4f1ea;
@@ -25,6 +34,7 @@
    tag colors keep working as spot color on a dark surface. */
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme='light']) {
+    color-scheme: dark;
     --bg: #1c1a17;
     --surface: #262320;
     --surface-2: #302c27;
@@ -44,6 +54,7 @@
 }
 
 :root[data-theme='dark'] {
+  color-scheme: dark;
   --bg: #1c1a17;
   --surface: #262320;
   --surface-2: #302c27;
@@ -95,6 +106,16 @@ input,
 textarea,
 select {
   font: inherit;
+  /* Browsers don't inherit text color into form controls on their own —
+     an `<input>`/`<textarea>`/`<select>` with no color of its own renders
+     with the UA's default (black) text regardless of this page's own
+     `color`, which is invisible-by-contrast the moment a surrounding
+     field/surface goes dark (`--surface`/`--surface-2` already *do* go
+     dark in dark mode; only the text color was left behind). This is the
+     one place that needs fixing — every more specific input rule already
+     either sets its own `color: var(--ink)` (now redundant, harmless) or,
+     lacking one, now inherits this. */
+  color: inherit;
 }
 
 .app-shell {
