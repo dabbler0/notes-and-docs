@@ -18,6 +18,7 @@ import { confirmDialog } from '../../lib/confirm'
 import { promptDialog } from '../../lib/prompt'
 import { commitPmEssay } from '../../models/essayHistoryRepo'
 import { getAuthorName } from '../../lib/authorPreference'
+import { exposeEssayForDebug } from '../../lib/debugComments'
 import type { Essay, Source } from '../../models/types'
 import { Icon } from '../Icon'
 import { PMEssayEditor, stripCollapsedAttrs } from './PMEssayEditor'
@@ -83,6 +84,14 @@ export function EssayWorkspace({
   const [essay, setEssay] = useState<Essay | null>(null)
   const [essayTitle, setEssayTitle] = useState('')
   const [doc, setDoc] = useState<PMNode | null>(null)
+  // Lets `window.__marginalDumpComments()` in the browser console inspect
+  // this essay's comment data live — see `debugComments.ts`'s own doc
+  // comment. Kept in sync on every render of whichever essay is open (the
+  // last-mounted `EssayWorkspace` wins in split view, same as every other
+  // single-instance browser-console debug hook in this app).
+  useEffect(() => {
+    exposeEssayForDebug(essay, doc)
+  }, [essay, doc])
   // A stable Map *instance*, never replaced — `PMEssayEditor`'s `citation`
   // NodeView (`pmNodeViews.ts`'s `createCitationView`) closes over this
   // exact object once, when its `EditorView` mounts (keyed only on
