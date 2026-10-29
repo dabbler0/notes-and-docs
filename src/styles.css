@@ -1698,6 +1698,37 @@ select {
     padding: 8px 12px;
     gap: 4px;
   }
+
+  /* A list view's own top bar (EssaysView/SourcesView/QuoteBankView/
+     PdfSearchView — title, search, sort, "+ New", …) is laid out as one
+     `space-between` row with no wrapping, which is fine on desktop but
+     has no fallback at phone width: `.search-bar`'s own `flex: 1` just
+     keeps shrinking the other controls out of their own readable size
+     rather than ever giving up and wrapping, until the row quietly
+     overflows the screen and the only way to reach whatever got pushed
+     off the right edge is to scroll sideways. Wrapping is the fix, not a
+     width hack — the title goes on its own full-width line (a half-width
+     title squeezed next to a search box reads worse than one above it),
+     everything else wraps onto however many rows it actually needs.
+     `EssaysView.tsx` additionally collapses its own busier set of
+     secondary controls (sort/archived/import) into a "More" menu on
+     mobile rather than relying on wrapping alone — six separate controls
+     wrapping onto their own rows was still a lot of competing chrome for
+     a phone screen, and the task is a browsing list, not something that
+     needs every control visible at once the way an editor's toolbar does. */
+  .page-header {
+    flex-wrap: wrap;
+    row-gap: 10px;
+  }
+
+  .page-header h1 {
+    flex-basis: 100%;
+  }
+
+  .page-header .search-bar {
+    flex-basis: 100%;
+    max-width: none;
+  }
 }
 
 /* --- version history dropdown --- */

@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'preact/hooks'
+import { useIsMobile } from '../../lib/useIsMobile'
 import { archiveEssay, createEssay, deleteEssay, listEssays, unarchiveEssay } from '../../models/essaysRepo'
 import { mergeEssays } from '../../models/essayHistoryRepo'
 import { groupEssays, removeEssayFromProject } from '../../models/projectsRepo'
@@ -67,6 +68,7 @@ export function EssaysView() {
   const [openId, setOpenId] = useState<string | null>(null)
   const [openSlideshowId, setOpenSlideshowId] = useState<string | null>(null)
   const [showNewMenu, setShowNewMenu] = useState(false)
+  const [showMoreMenu, setShowMoreMenu] = useState(false)
   const [showImport, setShowImport] = useState(false)
   const [showArchived, setShowArchived] = useState(false)
   const [query, setQuery] = useState('')
@@ -81,15 +83,27 @@ export function EssaysView() {
   // there's no ordering to preserve here, only grouping).
   const [dragEssayId, setDragEssayId] = useState<string | null>(null)
   const [dragOverId, setDragOverId] = useState<string | null>(null)
-  // Which projects are currently shown collapsed (a single card-sized
-  // summary instead of the full dashed cluster) — see `EssayCard`'s own
-  // sibling, the collapsed-cluster rendering below. Starts empty: every
-  // project renders expanded until the user collapses it themselves.
-  const [collapsedProjects, setCollapsedProjects] = useState<Set<string>>(new Set())
+  // Which projects are currently shown *expanded* (the full dashed
+  // cluster, every member's own card) rather than collapsed to a single
+  // card-sized summary — see `EssayCard`'s own sibling, the
+  // collapsed-cluster rendering below. Starts empty: every project renders
+  // collapsed by default (a project is a secondary, drill-down grouping,
+  // not something that should dominate the card grid the moment two
+  // essays happen to share one) until the user expands it themselves.
+  const [expandedProjects, setExpandedProjects] = useState<Set<string>>(new Set())
   const rootRef = useRef<HTMLDivElement>(null)
+  // Below this width, the sort dropdown / "Show archived" / "Import LaTeX
+  // project" collapse into one "More" overflow menu (see the header
+  // below) rather than competing for room on the same row as the search
+  // box and the primary "+ New" button — `.page-header`'s own mobile CSS
+  // (styles.css) wraps whatever's left onto however many rows it needs,
+  // but these three are secondary enough, and numerous enough together,
+  // that wrapping them each onto their own row was still more chrome than
+  // a phone-width browsing list needed up front.
+  const isMobile = useIsMobile()
 
   function toggleProjectCollapsed(projectId: string) {
-    setCollapsedProjects((prev) => {
+    setExpandedProjects((prev) => {
       const next = new Set(prev)
       if (next.has(projectId)) next.delete(projectId)
       else next.add(projectId)
@@ -283,21 +297,66 @@ export function EssaysView() {
           <Icon name="search" className="muted-icon" />
           <input placeholder="Search by title…" value={query} onInput={(e) => setQuery((e.target as HTMLInputElement).value)} />
         </div>
-        <select className="select-pill" value={sortOrder} onChange={(e) => setSortOrder((e.target as HTMLSelectElement).value as SortOrder)} title="Sort essays by">
-          {SORT_OPTIONS.map((opt) => (
-            <option key={opt.value} value={opt.value}>
-              {opt.label}
-            </option>
-          ))}
-        </select>
-        {archivedCount > 0 && (
-          <button className="btn btn-ghost" onClick={() => setShowArchived((v) => !v)}>
-            {showArchived ? '← Back to active' : `Show archived (${archivedCount})`}
-          </button>
+        {isMobile ? (
+          <div style={{ position: 'relative' }}>
+            <button className="btn btn-ghost icon-btn-toolbar" title="More" onClick={() => setShowMoreMenu((v) => !v)}>
+              <Icon name="more" />
+            </button>
+            {showMoreMenu && (
+              <>
+                <div style={{ position: 'fixed', inset: 0, zIndex: 9 }} onClick={() => setShowMoreMenu(false)} />
+                <div className="card" style={{ position: 'absolute', left: 0, top: '100%', marginTop: 4, zIndex: 10, padding: 10, minWidth: 220, display: 'flex', flexDirection: 'column', gap: 8 }}>
+                  <select
+                    className="select-pill"
+                    style={{ width: '100%' }}
+                    value={sortOrder}
+                    onChange={(e) => setSortOrder((e.target as HTMLSelectElement).value as SortOrder)}
+                    title="Sort essays by"
+                  >
+                    {SORT_OPTIONS.map((opt) => (
+                      <option key={opt.value} value={opt.value}>
+                        {opt.label}
+                      </option>
+                    ))}
+                  </select>
+                  {archivedCount > 0 && (
+                    <button className="btn btn-ghost btn-sm" style={{ width: '100%', justifyContent: 'flex-start' }} onClick={() => setShowArchived((v) => !v)}>
+                      {showArchived ? '← Back to active' : `Show archived (${archivedCount})`}
+                    </button>
+                  )}
+                  <button
+                    className="btn btn-ghost btn-sm"
+                    style={{ width: '100%', justifyContent: 'flex-start' }}
+                    onClick={() => {
+                      setShowMoreMenu(false)
+                      setShowImport(true)
+                    }}
+                  >
+                    <Icon name="import" /> Import LaTeX project
+                  </button>
+                </div>
+              </>
+            )}
+          </div>
+        ) : (
+          <>
+            <select className="select-pill" value={sortOrder} onChange={(e) => setSortOrder((e.target as HTMLSelectElement).value as SortOrder)} title="Sort essays by">
+              {SORT_OPTIONS.map((opt) => (
+                <option key={opt.value} value={opt.value}>
+                  {opt.label}
+                </option>
+              ))}
+            </select>
+            {archivedCount > 0 && (
+              <button className="btn btn-ghost" onClick={() => setShowArchived((v) => !v)}>
+                {showArchived ? '← Back to active' : `Show archived (${archivedCount})`}
+              </button>
+            )}
+            <button className="btn btn-ghost" onClick={() => setShowImport(true)}>
+              <Icon name="import" /> Import LaTeX project
+            </button>
+          </>
         )}
-        <button className="btn btn-ghost" onClick={() => setShowImport(true)}>
-          <Icon name="import" /> Import LaTeX project
-        </button>
         <div style={{ position: 'relative' }}>
           <button className="btn btn-primary" style={{ whiteSpace: 'nowrap' }} onClick={() => setShowNewMenu((v) => !v)}>
             + New ▾
@@ -371,7 +430,7 @@ export function EssaysView() {
                   if (dragEssayId) handleDrop(dragEssayId, item.essay.id)
                 }}
               />
-            ) : collapsedProjects.has(item.projectId) ? (
+            ) : !expandedProjects.has(item.projectId) ? (
               <div
                 key={item.projectId}
                 className={`card project-cluster-collapsed${dragOverId === item.essays[0].id ? ' card-drag-over' : ''}`}
