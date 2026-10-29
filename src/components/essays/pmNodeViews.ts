@@ -3,7 +3,7 @@ import { TextSelection } from 'prosemirror-state'
 import type { EditorView, NodeView, ViewMutationRecord } from 'prosemirror-view'
 import { citationLabelOpen } from '../../lib/bibtex'
 import { renderMathHtml } from '../../lib/math'
-import { demoteSectionAt, deleteDivider } from './pmCommands'
+import { demoteSectionAt, deleteDivider, setCommentThreadResolved, replyToCommentThread, beginCommentThread, deleteCommentThread, setCommentThreadDisplayMode } from './pmCommands'
 import type { Source } from '../../models/types'
 
 /** The one thing `pmCitationArrowPlugin.ts` needs back out of a citation's own DOM — there's no public ProseMirror API to recover a NodeView instance from a position, only its DOM (`view.nodeDOM`), so `CitationView` stashes itself on its own root element for that plugin to read via `getCitationView` below. */
@@ -593,15 +593,36 @@ export class FootnoteView implements NodeView {
  * `CommentsPanel.tsx` renders its own mirror into the margin instead,
  * writing back through PM transactions rather than a side array.
  */
+function buildCommentThreadToolbarButton(glyph: string, title: string, onActivate: () => void): HTMLButtonElement {
+  const btn = document.createElement('button')
+  btn.type = 'button'
+  btn.className = 'pm-comment-thread-btn'
+  btn.title = title
+  btn.textContent = glyph
+  btn.contentEditable = 'false'
+  // Same `mousedown`-preventDefault / `click`-acts split every other
+  // toolbar button in this app already uses (`EssayWorkspace.tsx`'s own
+  // Bold/Italic/… buttons): the `mousedown` guard keeps this button from
+  // stealing focus or collapsing whatever selection the click is about to
+  // act on; the actual action only ever runs on `click`.
+  btn.addEventListener('mousedown', (e) => e.preventDefault())
+  btn.addEventListener('click', onActivate)
+  return btn
+}
+
 export class CommentThreadView implements NodeView {
   dom: HTMLElement
   contentDOM: HTMLElement
   private wrapper: HTMLElement
   private marker: HTMLElement
+  private resolveBtn: HTMLButtonElement
+  private modeBtn: HTMLButtonElement
   private getPos: () => number | undefined
   private view: EditorView
+  private node: PMNode
 
   constructor(node: PMNode, view: EditorView, getPos: () => number | undefined) {
+    this.node = node
     this.getPos = getPos
     this.view = view
     this.dom = document.createElement('comment-thread')
@@ -613,34 +634,67 @@ export class CommentThreadView implements NodeView {
     this.wrapper.className = 'pm-comment-thread-wrapper'
     this.contentDOM = document.createElement('span')
     this.contentDOM.className = 'pm-comment-thread-entries'
-    this.wrapper.appendChild(this.contentDOM)
+
+    this.resolveBtn = buildCommentThreadToolbarButton('✓', 'Mark resolved', () => {
+      setCommentThreadResolved(this.view, this.node.attrs.id, !this.node.attrs.resolved)
+    })
+    this.modeBtn = buildCommentThreadToolbarButton('→▤', 'Show this comment in the margin instead of inline', () => {
+      setCommentThreadDisplayMode(this.view, this.node.attrs.id, this.node.attrs.displayMode === 'inline' ? 'margin' : 'inline')
+    })
+    const commentOnSelectionBtn = buildCommentThreadToolbarButton('“”', 'Comment on the selected text within this comment', () => {
+      if (!this.view.state.selection.empty) beginCommentThread(this.view, 'inline')
+    })
+    const replyBtn = buildCommentThreadToolbarButton('↩', 'Reply', () => {
+      replyToCommentThread(this.view, this.node.attrs.id)
+    })
+    const deleteBtn = buildCommentThreadToolbarButton('×', 'Delete this comment (and anything nested under it)', () => {
+      deleteCommentThread(this.view, this.node.attrs.id)
+    })
+    const toolbar = document.createElement('span')
+    toolbar.className = 'pm-comment-thread-toolbar'
+    toolbar.contentEditable = 'false'
+    toolbar.append(this.resolveBtn, commentOnSelectionBtn, replyBtn, this.modeBtn, deleteBtn)
+
+    this.wrapper.append(this.contentDOM, toolbar)
     this.dom.append(this.marker, this.wrapper)
     this.sync(node)
   }
 
+  /** Whether this comment is top-level — its *direct* parent isn't itself a `comment_thread` (nesting is always one level of indirection, so checking the immediate parent alone is enough; see `pmCommands.ts`'s own `topLevelCommentThreads`, which this mirrors). */
   private isTopLevel(): boolean {
     const pos = this.getPos()
     if (pos == null) return true
     const $pos = this.view.state.doc.resolve(pos)
-    for (let d = $pos.depth; d >= 0; d--) {
-      if ($pos.node(d).type.name === 'comment_thread') return false
-    }
-    return true
+    return $pos.parent.type.name !== 'comment_thread'
   }
 
   private sync(node: PMNode) {
+    this.node = node
     this.marker.dataset.commentId = node.attrs.id ?? ''
     const topLevel = this.isTopLevel()
     this.marker.style.display = topLevel ? '' : 'none'
     const inline = !topLevel || node.attrs.displayMode === 'inline'
     this.wrapper.style.display = inline ? 'inline' : 'none'
     this.dom.classList.toggle('pm-comment-thread-margin', topLevel && !inline)
+    this.dom.classList.toggle('pm-comment-thread-resolved', !!node.attrs.resolved)
+    this.resolveBtn.textContent = node.attrs.resolved ? '↺' : '✓'
+    this.resolveBtn.title = node.attrs.resolved ? 'Mark unresolved' : 'Mark resolved'
+    // A reply/comment-on-a-span never gets its own margin/inline toggle —
+    // see `pmSchema.ts`'s own doc comment on why `displayMode` is
+    // meaningless below the top level.
+    this.modeBtn.style.display = topLevel ? '' : 'none'
+    this.modeBtn.textContent = node.attrs.displayMode === 'inline' ? '→▤' : '→¶'
+    this.modeBtn.title = node.attrs.displayMode === 'inline' ? 'Show this comment in the margin instead of inline' : 'Show this comment inline, in the text, instead of in the margin'
   }
 
   update(node: PMNode) {
     if (node.type.name !== 'comment_thread') return false
     this.sync(node)
     return true
+  }
+
+  stopEvent(event: Event) {
+    return (event.target as Node | null) !== null && this.wrapper.contains(event.target as Node) && !this.contentDOM.contains(event.target as Node)
   }
 
   ignoreMutation() {

@@ -8,6 +8,8 @@ import {
   setCommentThreadResolvedNode,
   setCommentThreadDisplayModeNode,
   deleteCommentThreadNode,
+  topLevelCommentThreads,
+  commentAnchorText,
 } from '../pmCommands'
 
 const ROOT_ID = 'root-section'
@@ -167,5 +169,52 @@ describe('comment_thread mutators', () => {
   it('deleteCommentThreadNode returns null for a comment that no longer exists, rather than throwing', () => {
     const doc = parse(docJson([paragraph('hi')]))
     expect(deleteCommentThreadNode(doc, 'missing')).toBeNull()
+  })
+
+  it('deleteCommentThreadNode also strips the comment_anchor mark over the originally-commented-on text, keeping the text itself', () => {
+    const doc = parse(docJson([paragraph('some highlighted text', [{ type: 'comment_anchor', attrs: { commentId: 'c1' } }])]))
+    const withComment = insertCommentThreadNode(doc, doc.content.size - 1, 'c1', 'margin', 1000, 'a comment')
+    const result = deleteCommentThreadNode(withComment, 'c1')!
+
+    expect(findCommentThread(result, 'c1')).toBeNull()
+    expect(result.textContent).toContain('some highlighted text')
+    let stillMarked = false
+    result.descendants((node) => {
+      if (node.isText && node.marks.some((m) => m.type.name === 'comment_anchor' && m.attrs.commentId === 'c1')) stillMarked = true
+    })
+    expect(stillMarked).toBe(false)
+  })
+
+  it('deleteCommentThreadNode removes the zero-width comment_anchor placeholder outright for an inline (nothing-selected) comment', () => {
+    const doc = parse(docJson([paragraph('​', [{ type: 'comment_anchor', attrs: { commentId: 'c1' } }])]))
+    const withComment = insertCommentThreadNode(doc, doc.content.size - 1, 'c1', 'inline', 1000, 'a comment')
+    const result = deleteCommentThreadNode(withComment, 'c1')!
+
+    expect(findCommentThread(result, 'c1')).toBeNull()
+    expect(result.textContent).not.toContain('​')
+  })
+
+  it('topLevelCommentThreads finds every top-level comment but excludes nested replies/comments-on-a-span', () => {
+    const doc = parse(docJson([paragraph('hi'), paragraph('there')]))
+    const withC1 = insertCommentThreadNode(doc, doc.content.size - 1, 'c1', 'margin', 1000, 'first')
+    const withC2 = insertCommentThreadNode(withC1, withC1.content.size - 1, 'c2', 'margin', 1500, 'second')
+    const replyPos = commentThreadContentEndPos(withC2, 'c1')!
+    const withReply = insertCommentThreadNode(withC2, replyPos, 'reply-1', 'inline', 2000, 'a reply')
+
+    const top = topLevelCommentThreads(withReply)
+    const ids = top.map((t) => t.node.attrs.id).sort()
+    expect(ids).toEqual(['c1', 'c2'])
+  })
+
+  it('commentAnchorText returns the live, current text of a real (non-empty) anchor', () => {
+    const doc = parse(docJson([paragraph('some highlighted text', [{ type: 'comment_anchor', attrs: { commentId: 'c1' } }])]))
+    expect(commentAnchorText(doc, 'c1')).toBe('some highlighted text')
+  })
+
+  it('commentAnchorText returns empty string for a zero-width (nothing-selected) anchor, and null for no anchor at all', () => {
+    const docWithEmptyAnchor = parse(docJson([paragraph('​', [{ type: 'comment_anchor', attrs: { commentId: 'c1' } }])]))
+    expect(commentAnchorText(docWithEmptyAnchor, 'c1')).toBe('')
+    const docWithNoAnchor = parse(docJson([paragraph('hi')]))
+    expect(commentAnchorText(docWithNoAnchor, 'c1')).toBeNull()
   })
 })

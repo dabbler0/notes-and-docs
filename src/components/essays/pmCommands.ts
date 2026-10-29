@@ -618,18 +618,24 @@ function findCommentAnchorHits(doc: PMNode, commentId: string): { from: number; 
  * collapsed right where the (possibly now-shorter) anchor used to end, so
  * a follow-up `insertHtmlAtSelection` call lands in exactly the right spot.
  */
+/** Mutates `tr` in place, stripping `commentId`'s own `comment_anchor` mark from wherever it sits in `tr`'s *current* doc (so this composes correctly with other edits already applied to the same `tr`/`Transform`) — the shared removal logic `removeCommentAnchorMark` (live view) and `deleteCommentThreadNode`/`deleteCommentThread` (pure and live, respectively — a deleted comment's own anchor needs the exact same cleanup) all build on. A run that's nothing but the zero-width-space placeholder `insertCommentAnchorMark` invents for an empty selection is deleted outright (nothing real to keep); a run of genuine highlighted text is just unmarked, keeping the text itself. */
+function stripCommentAnchorMark(tr: Transform, commentId: string): void {
+  const hits = findCommentAnchorHits(tr.doc, commentId)
+  for (let i = hits.length - 1; i >= 0; i--) {
+    const h = hits[i]
+    if (/^​+$/.test(h.text)) tr.delete(h.from, h.to)
+    else tr.removeMark(h.from, h.to, h.mark)
+  }
+}
+
 export function removeCommentAnchorMark(view: EditorView, commentId: string, opts: { placeCursorAfter?: boolean } = {}): void {
   const hits = findCommentAnchorHits(view.state.doc, commentId)
   if (!hits.length) return
-  let tr = view.state.tr
-  for (let i = hits.length - 1; i >= 0; i--) {
-    const h = hits[i]
-    if (/^​+$/.test(h.text)) tr = tr.delete(h.from, h.to)
-    else tr = tr.removeMark(h.from, h.to, h.mark)
-  }
+  const tr = view.state.tr
+  stripCommentAnchorMark(tr, commentId)
   if (opts.placeCursorAfter) {
     const mapped = tr.mapping.map(hits[hits.length - 1].to)
-    tr = tr.setSelection(TextSelection.create(tr.doc, mapped))
+    tr.setSelection(TextSelection.create(tr.doc, mapped))
   }
   view.dispatch(tr)
 }
@@ -882,6 +888,24 @@ function buildCommentThreadNode(commentId: string, displayMode: 'margin' | 'inli
   return essaySchema.nodes.comment_thread.create({ id: commentId, resolved: false, createdAt: now, updatedAt: now, displayMode }, essaySchema.text(text && text.length > 0 ? text : ZERO_WIDTH_SPACE))
 }
 
+/** Every top-level `comment_thread` in `doc` — one whose *direct* parent isn't itself a `comment_thread` (a reply or "comment on a span" always nests directly inside its parent's own content, one level of indirection, never deeper without an intermediate comment_thread of its own — so checking the immediate parent alone is enough; see `pmSchema.ts`'s own doc comment on why only a top-level comment gets independent margin positioning). Used by `CommentsPanel.tsx` in place of the old model's own `topLevelEssayComments`. */
+export function topLevelCommentThreads(doc: PMNode): { pos: number; node: PMNode }[] {
+  const result: { pos: number; node: PMNode }[] = []
+  doc.descendants((node, pos, parent) => {
+    if (node.type.name === 'comment_thread' && parent?.type.name !== 'comment_thread') result.push({ pos, node })
+    return true
+  })
+  return result
+}
+
+/** The current live text of `commentId`'s own `comment_anchor` mark (joined across however many runs it spans) — always fresh, unlike the old model's own frozen-at-creation `Comment.anchorText` field, since there's no separate field here to go stale. `''` for an empty (nothing-selected) anchor; `null` if this comment has no anchor mark anywhere. */
+export function commentAnchorText(doc: PMNode, commentId: string): string | null {
+  const hits = findCommentAnchorHits(doc, commentId)
+  if (!hits.length) return null
+  const text = hits.map((h) => h.text).join('')
+  return /^​+$/.test(text) ? '' : text.trim()
+}
+
 /** Locates `commentId`'s own `comment_thread` node anywhere in `doc`, at any depth (a reply or a "comment on a span" is just another `comment_thread` nested inside another's content — `descendants` already walks the whole tree regardless of depth) — or `null` if none exists yet, or not any more. */
 export function findCommentThread(doc: PMNode, commentId: string): { pos: number; node: PMNode } | null {
   let found: { pos: number; node: PMNode } | null = null
@@ -901,9 +925,41 @@ export function insertCommentThreadNode(doc: PMNode, pos: number, commentId: str
   return new Transform(doc).insert(pos, buildCommentThreadNode(commentId, displayMode, now, text)).doc
 }
 
-/** Live-view counterpart to `insertCommentThreadNode` — same insertion, dispatched as a real transaction so the user's own selection elsewhere maps through normally. Also used, unchanged, to insert a *reply* (or "comment on a span within this comment") — `pos` is then a position inside an existing thread's own content (right after a nested `comment_anchor` for the latter, or simply the end of its content for a plain reply) rather than in the main document; there is no separate "add a reply" command, since this is already the exact same operation either way. */
+/** Live-view counterpart to `insertCommentThreadNode` — same insertion, dispatched as a real transaction so the user's own selection elsewhere maps through normally, with the cursor landing right inside the new comment's own content, ready to type immediately (same idea as `insertFootnote`'s own post-insert selection). Also used, unchanged, to insert a *reply* (or "comment on a span within this comment") — `pos` is then a position inside an existing thread's own content (right after a nested `comment_anchor` for the latter, or simply the end of its content for a plain reply) rather than in the main document; there is no separate "add a reply" command, since this is already the exact same operation either way. */
 export function insertCommentThread(view: EditorView, pos: number, commentId: string, displayMode: 'margin' | 'inline', text?: string): void {
-  view.dispatch(view.state.tr.insert(pos, buildCommentThreadNode(commentId, displayMode, Date.now(), text)))
+  const tr = view.state.tr.insert(pos, buildCommentThreadNode(commentId, displayMode, Date.now(), text))
+  tr.setSelection(TextSelection.create(tr.doc, pos + 1))
+  view.dispatch(tr)
+  view.focus()
+}
+
+/**
+ * Starts a brand-new comment anchored to the current selection (marked
+ * with a real `comment_anchor`, if non-empty) or at the cursor (a
+ * zero-width anchor, if empty — same as `insertCommentAnchorMark`'s own
+ * empty-selection case) — then inserts a fresh `comment_thread` right
+ * after it, cursor landing inside, ready to type. No popup: the comment's
+ * own body is real, directly-editable document content from the moment
+ * it's created, the same way a footnote's is. Used identically for a
+ * brand-new top-level comment (`EssayWorkspace.tsx`'s own `beginComment`)
+ * and for "comment on a span within an existing comment"
+ * (`CommentThreadView`'s own toolbar) — `view.state.selection` doesn't
+ * care whether it's in the main document or nested inside another
+ * comment's own content. Returns the new comment's own id.
+ */
+export function beginCommentThread(view: EditorView, displayMode: 'margin' | 'inline'): string {
+  const commentId = id()
+  const { pos } = insertCommentAnchorMark(view, commentId)
+  insertCommentThread(view, pos, commentId, displayMode)
+  return commentId
+}
+
+/** A reply to `parentCommentId` — a zero-width-anchored comment appended right at the end of its parent's own content (collapsing the selection there first, then reusing `beginCommentThread`'s own empty-selection branch — no separate insertion logic needed). Always `'inline'` (a reply never gets its own margin/inline toggle — see `pmSchema.ts`'s own doc comment on `displayMode`). `null`/no-op if `parentCommentId` no longer exists. */
+export function replyToCommentThread(view: EditorView, parentCommentId: string): string | null {
+  const endPos = commentThreadContentEndPos(view.state.doc, parentCommentId)
+  if (endPos == null) return null
+  view.dispatch(view.state.tr.setSelection(TextSelection.create(view.state.doc, endPos)))
+  return beginCommentThread(view, 'inline')
 }
 
 /** The position right at the end of `commentId`'s own content — where a plain reply (no highlighted span) lands, via `insertCommentThread`/`insertCommentThreadNode` above. `null` if that thread no longer exists. */
@@ -939,17 +995,34 @@ export function setCommentThreadDisplayMode(view: EditorView, commentId: string,
   view.dispatch(view.state.tr.setNodeMarkup(thread.pos, null, { ...thread.node.attrs, displayMode }))
 }
 
-/** Deletes `commentId`'s entire comment — and, for free, every reply/comment-on-a-span nested inside it, since removing a node removes its whole subtree the same way deleting any other node does (no special cascade logic needed, unlike the old side-array model's own explicit `essayCommentSubtreeIds` walk). Pure, headless-safe. `null`/no-op if that comment no longer exists. */
+/**
+ * Deletes `commentId`'s entire comment — and, for free, every
+ * reply/comment-on-a-span nested inside it, since removing a node removes
+ * its whole subtree the same way deleting any other node does (no special
+ * cascade logic needed, unlike the old side-array model's own explicit
+ * `essayCommentSubtreeIds` walk). Also strips this comment's own
+ * `comment_anchor` mark from wherever it sits (`stripCommentAnchorMark`) —
+ * skipping this would leave exactly the same "anchor survives, comment
+ * gone" split this whole model change exists to close, just reached
+ * through the explicit delete path instead of an accidental one. Pure,
+ * headless-safe. `null`/no-op if that comment no longer exists.
+ */
 export function deleteCommentThreadNode(doc: PMNode, commentId: string): PMNode | null {
   const thread = findCommentThread(doc, commentId)
   if (!thread) return null
-  return new Transform(doc).delete(thread.pos, thread.pos + thread.node.nodeSize).doc
+  const tr = new Transform(doc)
+  tr.delete(thread.pos, thread.pos + thread.node.nodeSize)
+  stripCommentAnchorMark(tr, commentId)
+  return tr.doc
 }
 
 export function deleteCommentThread(view: EditorView, commentId: string): void {
   const thread = findCommentThread(view.state.doc, commentId)
   if (!thread) return
-  view.dispatch(view.state.tr.delete(thread.pos, thread.pos + thread.node.nodeSize))
+  const tr = view.state.tr
+  tr.delete(thread.pos, thread.pos + thread.node.nodeSize)
+  stripCommentAnchorMark(tr, commentId)
+  view.dispatch(tr)
 }
 
 /** The depth of the nearest enclosing `section` around `$pos` — always ≥1 (the essay/slideshow document's own single root section, at depth 1) since, unlike a plain `doc`, `pmSchema.ts`'s `doc` content expression (`"section"`) guarantees every position is inside at least that one. Shared by `insertDivider` below: a `slide_break`/`fragment_break` always lands as a direct child of this container, never nested any deeper inside a list/blockquote the cursor happened to be in, and never lifted out past it — `slideSerializer.ts` reads a slide's own title off of exactly whichever section(s) enclose its own divider. */
