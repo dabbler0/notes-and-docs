@@ -6,7 +6,7 @@ import { baseKeymap, toggleMark } from 'prosemirror-commands'
 import { keymap } from 'prosemirror-keymap'
 import { history, undo, redo } from 'prosemirror-history'
 import { essaySchema } from '../../lib/pmSchema'
-import { CommentThreadView } from './pmNodeViews'
+import { CommentThreadView, findCommentThreadMarker } from './pmNodeViews'
 import { topLevelCommentThreads, commentAnchorText, findCommentThread, deleteCommentThread } from './pmCommands'
 import { confirmDialog } from '../../lib/confirm'
 
@@ -90,12 +90,12 @@ export function CommentsPanel({
 
     const raw: { id: string; top: number }[] = []
     for (const { node } of marginRows) {
-      // A top-level comment's own marker (`comment-thread[data-comment-id]`,
-      // `pmNodeViews.ts`'s `CommentThreadView`) is always present in the
-      // main document, margin or inline display alike — there's no more
-      // separate `comment-anchor`/`comment-text` lookup, and no "nothing
-      // to position" case, since every row rendered here gets a card.
-      const mark = scrollEl.querySelector(`comment-thread[data-comment-id="${cssEscape(node.attrs.id)}"] > .pm-comment-thread-marker`) as HTMLElement | null
+      // A top-level comment's own marker (`findCommentThreadMarker`,
+      // `pmNodeViews.ts`) is always present in the main document, margin or
+      // inline display alike — there's no more separate `comment-anchor`/
+      // `comment-text` lookup, and no "nothing to position" case, since
+      // every row rendered here gets a card.
+      const mark = findCommentThreadMarker(scrollEl, node.attrs.id)
       const anchorEl = isVisible(mark) ? mark : nearestVisibleSectionHeader(scrollEl, doc)
       if (!anchorEl) continue
       const top = anchorEl.getBoundingClientRect().top - scrollRect.top + scrollEl.scrollTop + deltaTop

@@ -620,6 +620,32 @@ function buildCommentThreadToolbarButton(glyph: string, title: string, onActivat
   return btn
 }
 
+/**
+ * Finds a top-level comment's own marker (the small dot `CommentThreadView`
+ * always renders, even for a `displayMode: 'margin'` comment whose own
+ * wrapper is otherwise hidden) by its `commentId`, anywhere under `root`.
+ * The one correct way to do this lookup — `CommentsPanel.tsx`'s own
+ * `recompute()` needs it to line a margin card up with its real anchor —
+ * since the `data-comment-id` attribute lives on the marker span itself
+ * (`sync()`, below), never on the outer `<comment-thread>` tag, which
+ * carries no id attribute of its own at all. Confirmed the hard way: a
+ * selector written as if that attribute sat on the outer tag instead
+ * (`comment-thread[data-comment-id="…"] > .pm-comment-thread-marker`)
+ * silently matches nothing, for every comment, always — not a
+ * loud failure, just every margin card falling back to the same generic
+ * "nearest visible section header" anchor and clustering together near
+ * the top of the document regardless of where their own anchors actually
+ * are.
+ */
+export function findCommentThreadMarker(root: ParentNode, commentId: string): HTMLElement | null {
+  return root.querySelector(`.pm-comment-thread-marker[data-comment-id="${cssEscapeId(commentId)}"]`)
+}
+
+/** `CSS.escape`, with the same plain-string fallback `CommentsPanel.tsx`'s own (duplicate, pre-existing) `cssEscape` already uses — kept local to this module rather than importing that one, which would mean this file reaching into `components/essays/CommentsPanel.tsx` for a one-line utility. */
+function cssEscapeId(s: string): string {
+  return typeof CSS !== 'undefined' && CSS.escape ? CSS.escape(s) : s.replace(/["\\]/g, '\\$&')
+}
+
 export class CommentThreadView implements NodeView {
   dom: HTMLElement
   contentDOM: HTMLElement
