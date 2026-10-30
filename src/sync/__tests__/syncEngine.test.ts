@@ -903,30 +903,6 @@ describe('essay three-way merge (not plain last-write-wins)', () => {
     expect(mergedOnB.doc).toEqual(merged.doc)
   })
 
-  it('keeps comments added independently by two devices to the same essay', async () => {
-    const { a, b } = await pairedDevices()
-    const essay = await a.createEssay('Essay with comments')
-    await establishMergeBase(a, b, essay.id)
-
-    const essayOnA = (await a.getEssay(essay.id))!
-    essayOnA.comments = [
-      { id: 'c-from-a', parentId: null, anchorKind: 'node', anchorText: '', body: 'a comment from A', resolved: false, createdAt: Date.now(), updatedAt: Date.now() },
-    ]
-    await a.saveEssay(essayOnA)
-    await a.sync()
-
-    const essayOnB = (await b.getEssay(essay.id))!
-    essayOnB.comments = [
-      { id: 'c-from-b', parentId: null, anchorKind: 'node', anchorText: '', body: 'a comment from B', resolved: false, createdAt: Date.now(), updatedAt: Date.now() },
-    ]
-    await b.saveEssay(essayOnB)
-    await b.sync()
-
-    await a.sync()
-    const merged = (await a.getEssay(essay.id))!
-    expect(merged.comments?.map((c) => c.id).sort()).toEqual(['c-from-a', 'c-from-b'])
-  })
-
   it('preserves the losing side of a genuine conflict (the same paragraph edited differently on both devices) in the Graveyard instead of silently discarding it', async () => {
     const { a, b } = await pairedDevices()
     const essay = await a.createEssay('Conflicted essay')

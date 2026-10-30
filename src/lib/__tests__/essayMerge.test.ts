@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest'
 import { mergeEssayContent, type EssayMergeSnapshot } from '../essayMerge'
-import type { Comment } from '../../models/types'
 
 const ROOT_ID = 'root-section'
 
@@ -17,11 +16,7 @@ function doc(rootChildren: unknown[]) {
 }
 
 function snapshot(partial: Partial<EssayMergeSnapshot> & { updatedAt: number }): EssayMergeSnapshot & { updatedAt: number } {
-  return { title: 'Essay Title', doc: doc([paragraph('base text')]), comments: [], ...partial }
-}
-
-function comment(partial: Partial<Comment> & { id: string; updatedAt: number }): Comment {
-  return { parentId: null, anchorKind: 'node', anchorText: '', body: '', resolved: false, createdAt: partial.updatedAt, ...partial }
+  return { title: 'Essay Title', doc: doc([paragraph('base text')]), ...partial }
 }
 
 /** Pulls out the root section's own children (everything after its title) as a plain array, for assertions that don't care about the title node itself. */
@@ -188,74 +183,6 @@ describe('mergeEssayContent — doc (section-tree) merging', () => {
     expect(child.content[1].content?.[0]?.text).toBe('child edited locally')
     const sibling = top.find((s) => s.attrs.id === 'sibling')! as { content: { content?: { text?: string }[] }[] }
     expect(sibling.content[1].content?.[0]?.text).toBe('sibling edited remotely')
-  })
-})
-
-describe('mergeEssayContent — comments', () => {
-  it('keeps comments added independently on both sides', () => {
-    const base = snapshot({ updatedAt: 100, comments: [] })
-    const local = snapshot({ updatedAt: 200, comments: [comment({ id: 'c-local', updatedAt: 200, body: 'from local' })] })
-    const remote = snapshot({ updatedAt: 150, comments: [comment({ id: 'c-remote', updatedAt: 150, body: 'from remote' })] })
-
-    const result = mergeEssayContent(base, local, remote)
-    expect(result.comments.map((c) => c.id).sort()).toEqual(['c-local', 'c-remote'])
-  })
-
-  it('a comment edited on only one side keeps that edit', () => {
-    const shared = comment({ id: 'c1', updatedAt: 100, body: 'original' })
-    const base = snapshot({ updatedAt: 100, comments: [shared] })
-    const edited = { ...shared, body: 'edited locally', updatedAt: 200 }
-    const local = snapshot({ updatedAt: 200, comments: [edited] })
-    const remote = snapshot({ updatedAt: 150, comments: [shared] })
-
-    const result = mergeEssayContent(base, local, remote)
-    expect(result.comments).toEqual([edited])
-  })
-
-  it('an edit beats a concurrent delete of the same comment', () => {
-    const shared = comment({ id: 'c1', updatedAt: 100, body: 'original' })
-    const base = snapshot({ updatedAt: 100, comments: [shared] })
-    const local = snapshot({ updatedAt: 200, comments: [] }) // deleted locally
-    const remoteEdit = { ...shared, body: 'edited remotely', updatedAt: 150 }
-    const remote = snapshot({ updatedAt: 150, comments: [remoteEdit] })
-
-    const result = mergeEssayContent(base, local, remote)
-    expect(result.comments).toEqual([remoteEdit])
-  })
-
-  it('a comment deleted on one side and left untouched on the other is removed', () => {
-    const shared = comment({ id: 'c1', updatedAt: 100, body: 'original' })
-    const base = snapshot({ updatedAt: 100, comments: [shared] })
-    const local = snapshot({ updatedAt: 200, comments: [] })
-    const remote = snapshot({ updatedAt: 150, comments: [shared] })
-
-    const result = mergeEssayContent(base, local, remote)
-    expect(result.comments).toEqual([])
-  })
-
-  it('a comment deleted on both sides stays gone', () => {
-    const shared = comment({ id: 'c1', updatedAt: 100, body: 'original' })
-    const base = snapshot({ updatedAt: 100, comments: [shared] })
-    const local = snapshot({ updatedAt: 200, comments: [] })
-    const remote = snapshot({ updatedAt: 150, comments: [] })
-
-    const result = mergeEssayContent(base, local, remote)
-    expect(result.comments).toEqual([])
-  })
-
-  it('a comment edited differently on both sides resolves to its own newer updatedAt, not the whole essay’s', () => {
-    const shared = comment({ id: 'c1', updatedAt: 100, body: 'original' })
-    const base = snapshot({ updatedAt: 100, comments: [shared] })
-    // The whole *essay* is "older" on the local side, but this particular
-    // comment's own edit is newer than the remote's — the comment's own
-    // timestamp should win, not the essay-level one.
-    const localCommentEdit = { ...shared, body: 'local edit (comment newer)', updatedAt: 500 }
-    const local = snapshot({ updatedAt: 110, comments: [localCommentEdit] })
-    const remoteCommentEdit = { ...shared, body: 'remote edit (comment older)', updatedAt: 300 }
-    const remote = snapshot({ updatedAt: 900, comments: [remoteCommentEdit] })
-
-    const result = mergeEssayContent(base, local, remote)
-    expect(result.comments).toEqual([localCommentEdit])
   })
 })
 

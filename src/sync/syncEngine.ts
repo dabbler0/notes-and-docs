@@ -175,6 +175,13 @@ function withTimeout<T>(promise: Promise<T>, what: string): Promise<T> {
  * instead of encrypting it.
  */
 const SENSITIVE_FIELDS: Record<SyncedCollection, string[]> = {
+  // `comments` stays listed even though nothing writes it onto an `Essay`
+  // any more (comments live inside `doc` now — `pmSchema.ts`'s own
+  // `comment_thread` node) — same reasoning as `sources.pageHtmlCompressed`
+  // above: a remote account not yet through this migration could still
+  // have a doc carrying that field, and dropping its name here the moment
+  // it stopped being written would push that still-sensitive data as
+  // plaintext metadata instead of encrypting it.
   essays: ['title', 'authorNote', 'doc', 'comments'],
   nodes: ['title', 'draftContent', 'versions', 'footnotes'],
   sources: ['bibtex', 'comment', 'pdfFileName', 'pageHtmlCompressed', 'pageHtml', 'pageTexts'],
@@ -795,7 +802,7 @@ function conflictNodesToHtml(nodes: unknown[]): string {
 }
 
 function toMergeSnapshot(essay: Essay): EssayMergeSnapshot & { updatedAt: number } {
-  return { title: essay.title, doc: essay.doc, comments: essay.comments ?? [], authorNote: essay.authorNote, deleted: essay.deleted, updatedAt: essay.updatedAt }
+  return { title: essay.title, doc: essay.doc, authorNote: essay.authorNote, deleted: essay.deleted, updatedAt: essay.updatedAt }
 }
 
 /**
@@ -863,7 +870,7 @@ async function reconcileEssaysThreeWay(
       if (!localEssay || !remoteEssay || !localEssay.doc || !remoteEssay.doc) continue
 
       const base = await backend.docs.get<EssaySyncBase>(ESSAY_SYNC_BASE_COLLECTION, id)
-      const baseSnapshot: EssayMergeSnapshot | null = base ? { title: base.title, doc: base.doc, comments: base.comments, authorNote: base.authorNote, deleted: base.deleted } : null
+      const baseSnapshot: EssayMergeSnapshot | null = base ? { title: base.title, doc: base.doc, authorNote: base.authorNote, deleted: base.deleted } : null
 
       const merge = mergeEssayContent(baseSnapshot, toMergeSnapshot(localEssay), toMergeSnapshot(remoteEssay))
       const mergedUpdatedAt = Math.max(localEssay.updatedAt, remoteEssay.updatedAt)
@@ -871,14 +878,15 @@ async function reconcileEssaysThreeWay(
       // projectId, rootNodeId, …) just follows whichever whole essay is
       // newer — the same rule every one of those fields was already
       // subject to under plain last-write-wins, unaffected by this
-      // feature's own, narrower scope (title/authorNote/doc/comments/
-      // deleted — see `lib/essayMerge.ts`'s own doc comment).
+      // feature's own, narrower scope (title/authorNote/doc/deleted —
+      // see `lib/essayMerge.ts`'s own doc comment). Comments live inside
+      // `doc` now (`pmSchema.ts`'s own `comment_thread` node), not a
+      // separate field, so `merge.doc` already carries them through.
       const metadataSource = localEssay.updatedAt >= remoteEssay.updatedAt ? localEssay : remoteEssay
       const mergedEssay: Essay = {
         ...metadataSource,
         title: merge.title,
         doc: merge.doc,
-        comments: merge.comments,
         authorNote: merge.authorNote,
         deleted: merge.deleted,
         updatedAt: mergedUpdatedAt,
@@ -897,7 +905,7 @@ async function reconcileEssaysThreeWay(
         result.pushed.essays++
       }
 
-      const newBase: EssaySyncBase = { id, title: merge.title, doc: merge.doc, comments: merge.comments, authorNote: merge.authorNote, deleted: merge.deleted }
+      const newBase: EssaySyncBase = { id, title: merge.title, doc: merge.doc, authorNote: merge.authorNote, deleted: merge.deleted }
       await backend.docs.put(ESSAY_SYNC_BASE_COLLECTION, newBase)
 
       for (const conflict of merge.conflicts) {

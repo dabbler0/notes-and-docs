@@ -1,7 +1,7 @@
 /**
  * The actual three-way merge behind essay sync (`sync/syncEngine.ts`'s own
  * `reconcileEssaysThreeWay`) — pure, framework-free logic over plain JSON
- * (an essay's `title`/`authorNote`/`deleted`/`comments`/`doc`), with no
+ * (an essay's `title`/`authorNote`/`deleted`/`doc`), with no
  * knowledge of Firestore, IndexedDB, or even a live ProseMirror `Node`
  * instance. Given a `base` (the content as of the last point this device
  * and the remote account were known to agree — see `syncEngine.ts`'s own
@@ -16,11 +16,6 @@
  * Granularity, deliberately scoped rather than a full operational-
  * transform/CRDT system:
  *
- * - `comments`: merged per-comment, keyed by `id` (stable, random, never
- *   reused) — an addition, edit, or deletion on one side alone always
- *   survives; a comment edited on *both* sides differently is the one true
- *   per-comment conflict, resolved by that comment's own newer `updatedAt`
- *   (see `mergeComments`).
  * - `doc`: merged section-by-section, keyed by each `section`'s own
  *   stable `attrs.id` — a section added, removed, moved, or edited on only
  *   one side survives untouched; a section edited on both sides recurses
@@ -43,7 +38,16 @@
  *   for the caller to preserve (`syncEngine.ts` sends each one to that
  *   essay's own Graveyard, the same "cut, not destroyed" landing spot
  *   "Send to graveyard" already uses for anything else removed from a
- *   document on purpose).
+ *   document on purpose). Comments (`pmSchema.ts`'s own `comment_thread`
+ *   node — real document content now, not a separate side array) ride
+ *   along inside whichever paragraph they're anchored in, merged at that
+ *   same paragraph granularity: two devices commenting on, or replying
+ *   to comments in, *different* paragraphs always keep both; two
+ *   independent edits landing in the very same paragraph (an existing
+ *   comment replied to differently by each device, say) are a real
+ *   conflict, same as any other same-paragraph collision — newer wins,
+ *   older goes to the Graveyard. No comment-specific merge logic exists
+ *   separately from this; there's nothing left to give it one.
  * - `title`/`authorNote`: plain three-way scalar merge — unchanged on one
  *   side always yields to whatever the other side has; genuinely changed
  *   differently on both sides resolves to the newer essay's version (no
@@ -61,12 +65,10 @@
  * a real three-way merge instead of staying last-write-wins forever.
  */
 import { diff3Merge } from 'node-diff3'
-import type { Comment } from '../models/types'
 
 export interface EssayMergeSnapshot {
   title: string
   doc?: unknown
-  comments?: Comment[]
   authorNote?: string
   deleted?: boolean
 }
@@ -81,7 +83,6 @@ export interface EssayMergeConflict {
 export interface EssayMergeResult {
   title: string
   doc?: unknown
-  comments: Comment[]
   authorNote?: string
   deleted: boolean
   conflicts: EssayMergeConflict[]
@@ -113,55 +114,6 @@ function mergeScalar<T>(base: T | undefined, local: T, remote: T, preferLocal: b
   if (base !== undefined && base === local) return remote
   if (base !== undefined && base === remote) return local
   return preferLocal ? local : remote
-}
-
-/**
- * Per-comment three-way merge, keyed by `Comment.id` (random, durable,
- * never reused — see `models/types.ts`). Four cases beyond the trivial
- * ones: added fresh on exactly one side (kept), deleted on exactly one
- * side with the other side leaving it untouched (deletion wins), deleted
- * on one side while the *other* side actually edited it ("edit beats
- * delete" — same reasoning `mergeEssayContent` applies at the whole-essay
- * level, just per-comment here), and genuinely edited differently on both
- * sides (resolved by that one comment's own `updatedAt`, finer-grained
- * than the whole essay's).
- */
-function mergeComments(base: Comment[], local: Comment[], remote: Comment[]): Comment[] {
-  const baseMap = new Map(base.map((c) => [c.id, c]))
-  const localMap = new Map(local.map((c) => [c.id, c]))
-  const remoteMap = new Map(remote.map((c) => [c.id, c]))
-  const ids = new Set([...baseMap.keys(), ...localMap.keys(), ...remoteMap.keys()])
-
-  const result: Comment[] = []
-  for (const id of ids) {
-    const b = baseMap.get(id)
-    const l = localMap.get(id)
-    const r = remoteMap.get(id)
-
-    if (!b) {
-      // Not present in the base at all: a fresh addition on one (the
-      // overwhelming common case) or, vanishingly unlikely given random
-      // ids, both sides at once.
-      if (l && r) result.push(deepEqual(l, r) || l.updatedAt >= r.updatedAt ? l : r)
-      else if (l) result.push(l)
-      else if (r) result.push(r)
-      continue
-    }
-    if (!l && !r) continue // deleted on both sides
-    if (!l) {
-      if (!deepEqual(r, b)) result.push(r!) // remote actually edited it — edit beats delete
-      continue
-    }
-    if (!r) {
-      if (!deepEqual(l, b)) result.push(l)
-      continue
-    }
-    if (deepEqual(l, r)) result.push(l)
-    else if (deepEqual(l, b)) result.push(r)
-    else if (deepEqual(r, b)) result.push(l)
-    else result.push(l.updatedAt >= r.updatedAt ? l : r)
-  }
-  return result
 }
 
 // ---- doc (PM JSON) merge, at section granularity ------------------------
@@ -302,7 +254,7 @@ function mergeDoc(baseDoc: unknown, localDoc: unknown, remoteDoc: unknown, prefe
 }
 
 function contentOf(s: EssayMergeSnapshot) {
-  return { title: s.title, doc: s.doc, comments: s.comments ?? [], authorNote: s.authorNote }
+  return { title: s.title, doc: s.doc, authorNote: s.authorNote }
 }
 
 /**
@@ -310,8 +262,8 @@ function contentOf(s: EssayMergeSnapshot) {
  * their shared `base` (`null` for the no-base bootstrap case — see this
  * module's own doc comment). `local`/`remote` each carry their own whole-
  * essay `updatedAt`, used as the tiebreak wherever a genuine conflict has
- * no finer-grained timestamp to resolve by (comments use their own;
- * `doc` content and scalar fields don't, so they fall back to this).
+ * no finer-grained timestamp to resolve by (`doc` content and scalar
+ * fields have none of their own, so they fall back to this).
  *
  * `deleted` is the one field where "newer wins" is deliberately
  * overridden: a plain scalar merge would let a delete on one side
@@ -348,7 +300,6 @@ export function mergeEssayContent(base: EssayMergeSnapshot | null, local: EssayM
 
   const title = mergeScalar(base?.title, local.title, remote.title, preferLocal)
   const authorNote = mergeScalar(base?.authorNote, local.authorNote, remote.authorNote, preferLocal)
-  const comments = mergeComments(base?.comments ?? [], local.comments ?? [], remote.comments ?? [])
 
   let doc: unknown
   let conflicts: EssayMergeConflict[]
@@ -368,5 +319,5 @@ export function mergeEssayContent(base: EssayMergeSnapshot | null, local: EssayM
     conflicts = []
   }
 
-  return { title, doc, comments, authorNote, deleted, conflicts }
+  return { title, doc, authorNote, deleted, conflicts }
 }
