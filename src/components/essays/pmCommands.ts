@@ -558,7 +558,7 @@ export function sliceToHtml(slice: { content: Fragment }): string {
   return div.innerHTML
 }
 
-/** Every `(from, to, mark)` hit for `commentId`'s own `comment_anchor` mark, across however many adjacent text runs it happens to span (a bold word in the middle of an otherwise-plain highlighted phrase is two text nodes carrying the same mark, not one) — the shared lookup `removeCommentAnchorMark`/`pmCommentPlugin.ts`'s inline-preview placement both need. */
+/** Every `(from, to, mark)` hit for `commentId`'s own `comment_anchor` mark, across however many adjacent text runs it happens to span (a bold word in the middle of an otherwise-plain highlighted phrase is two text nodes carrying the same mark, not one) — the shared lookup `removeCommentAnchorMark`/`commentAnchorEndPos`/`commentAnchorText` below all need. */
 function findCommentAnchorHits(doc: PMNode, commentId: string): { from: number; to: number; mark: Mark; text: string }[] {
   const hits: { from: number; to: number; mark: Mark; text: string }[] = []
   doc.descendants((node, pos) => {
@@ -569,19 +569,6 @@ function findCommentAnchorHits(doc: PMNode, commentId: string): { from: number; 
   return hits
 }
 
-/**
- * Removes `commentId`'s own `comment_anchor` mark from wherever it sits in
- * the live document — a run that's nothing but the zero-width-space
- * placeholder `insertCommentAnchorMark` invents for an empty selection is
- * deleted outright (nothing real to keep); a run of genuine highlighted
- * text is just unmarked, keeping the text itself exactly as `unwrapCommentMark`
- * (essaysRepo.ts) already does for the old model. Used both to cancel an
- * in-progress (not-yet-submitted) comment composer and, from
- * `essayCommentActions.ts`, to clean up a deleted top-level comment's own
- * anchor. `placeCursorAfter` — used by "promote" — leaves the selection
- * collapsed right where the (possibly now-shorter) anchor used to end, so
- * a follow-up `insertHtmlAtSelection` call lands in exactly the right spot.
- */
 /** Mutates `tr` in place, stripping `commentId`'s own `comment_anchor` mark from wherever it sits in `tr`'s *current* doc (so this composes correctly with other edits already applied to the same `tr`/`Transform`) — the shared removal logic `removeCommentAnchorMark` (live view) and `deleteCommentThreadNode`/`deleteCommentThread` (pure and live, respectively — a deleted comment's own anchor needs the exact same cleanup) all build on. A run that's nothing but the zero-width-space placeholder `insertCommentAnchorMark` invents for an empty selection is deleted outright (nothing real to keep); a run of genuine highlighted text is just unmarked, keeping the text itself. */
 function stripCommentAnchorMark(tr: Transform, commentId: string): void {
   const hits = findCommentAnchorHits(tr.doc, commentId)
@@ -604,7 +591,7 @@ export function removeCommentAnchorMark(view: EditorView, commentId: string, opt
   view.dispatch(tr)
 }
 
-/** The end position of `commentId`'s own `comment_anchor` mark — the last point it reaches, if it spans more than one text run — or `null` if it isn't anchored anywhere in the main document at all (an `'inline'`-anchorKind comment, whose anchor lives inside another comment's own `body` HTML instead — see `Comment`'s own doc comment). Exported for `pmCommentPlugin.ts`'s own inline-preview widget placement. */
+/** The end position of `commentId`'s own `comment_anchor` mark — the last point it reaches, if it spans more than one text run — or `null` if it isn't anchored anywhere in the main document at all. Exported for `lib/pmMigration.ts`'s own `foldCommentsIntoDoc`, which needs to find exactly this position to splice a migrated top-level comment's `comment_thread` node in right after its own anchor. */
 export function commentAnchorEndPos(doc: PMNode, commentId: string): number | null {
   const hits = findCommentAnchorHits(doc, commentId)
   if (!hits.length) return null
