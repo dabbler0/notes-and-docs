@@ -430,31 +430,21 @@ const marks: Record<string, MarkSpec> = {
   comment_anchor: {
     attrs: { commentId: {} },
     excludes: '',
+    // `inclusive: false`, deliberately — an anchor marks a *fixed* span of
+    // already-commented-on text; typing right after it (confirmed live:
+    // right where its own `comment_thread` lands, immediately following)
+    // must never grow it. Without this, ProseMirror's own boundary
+    // handling treats a cursor sitting exactly between the anchor's own
+    // text and the following node as still "inside" the anchor's mark set
+    // (the default, `inclusive: true`, is built for exactly the opposite
+    // case — bold/italic naturally continuing as you keep typing), and a
+    // real keystroke typed there landed inside the *anchor's* own text
+    // node instead of the comment_thread's, even though the model-level
+    // selection was already correctly positioned inside the thread.
+    inclusive: false,
     parseDOM: [{ tag: 'comment-anchor', getAttrs: (dom) => ({ commentId: (dom as HTMLElement).getAttribute('data-comment-id') }) }],
     toDOM(mark) {
       return ['comment-anchor', { 'data-comment-id': mark.attrs.commentId }]
-    },
-  },
-  /**
-   * A top-level, inline-displayed comment's own body — unlike `comment_anchor`
-   * (which marks the *original prose being commented on*), this marks the
-   * comment's *own* reply text, living directly in the document right after
-   * its anchor: an ordinary run of real, typable content, distinguished from
-   * plain prose only in being extractable into the margin
-   * (`pmCommands.ts`'s `extractInlineCommentBody`) and in never being
-   * rendered in export (`lib/export.ts`'s own `inlineLeafToMarkdownPm`/
-   * `inlineLeafToLatexPm` skip any text carrying this mark outright). No
-   * `inclusive: false` here, deliberately — typing right after the end of a
-   * `comment_text` range should keep extending it, the same way bold/italic
-   * already behave, so a comment's own body grows the normal way as its
-   * author keeps typing.
-   */
-  comment_text: {
-    attrs: { commentId: {} },
-    excludes: '',
-    parseDOM: [{ tag: 'comment-text', getAttrs: (dom) => ({ commentId: (dom as HTMLElement).getAttribute('data-comment-id') }) }],
-    toDOM(mark) {
-      return ['comment-text', { 'data-comment-id': mark.attrs.commentId }]
     },
   },
 }

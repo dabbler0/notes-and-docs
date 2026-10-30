@@ -558,42 +558,6 @@ export function sliceToHtml(slice: { content: Fragment }): string {
   return div.innerHTML
 }
 
-/**
- * Wraps the current selection in a `comment_anchor` mark carrying a fresh
- * `commentId` — the PM-native counterpart of the old app's own
- * `insertCommentAnchor`, a real document edit (a `Transaction`) rather
- * than DOM surgery on a live `contentEditable` shard. With nothing
- * selected (an "inline comment, right here" — see `Comment.displayMode`'s
- * own doc comment), there's no existing content to mark — PM can't apply
- * a mark to a zero-length range — so this inserts one zero-width space
- * first and marks that: the exact same placeholder `pmMigration.ts`'s own
- * `walkInline` already invents when converting an old empty `<mark></mark>`
- * anchor, so an essay's zero-width anchors look identical regardless of
- * whether they were just created here or migrated from pre-PM data.
- * Returns the anchor's own plain text (empty for a zero-width one), the id
- * of its enclosing section, and the position right after it — the first
- * two are what `essayCommentActions.ts` needs to build the `Comment`
- * record itself; the third is where `EssayWorkspace.tsx`'s own
- * `beginComment` positions the composer popup (`view.coordsAtPos`).
- */
-export function insertCommentAnchorMark(view: EditorView, commentId: string): { anchorText: string; sectionId: string | null; pos: number } {
-  const { state } = view
-  const { $from, empty } = state.selection
-  const section = findEnclosingSection($from)
-  const mark = essaySchema.marks.comment_anchor.create({ commentId })
-  if (empty) {
-    const tr = state.tr.insertText('​')
-    const end = tr.selection.to
-    tr.addMark(end - 1, end, mark)
-    view.dispatch(tr)
-    return { anchorText: '', sectionId: section?.id ?? null, pos: end }
-  }
-  const { from, to } = state.selection
-  const anchorText = state.doc.textBetween(from, to, ' ').trim()
-  view.dispatch(state.tr.addMark(from, to, mark))
-  return { anchorText, sectionId: section?.id ?? null, pos: to }
-}
-
 /** Every `(from, to, mark)` hit for `commentId`'s own `comment_anchor` mark, across however many adjacent text runs it happens to span (a bold word in the middle of an otherwise-plain highlighted phrase is two text nodes carrying the same mark, not one) — the shared lookup `removeCommentAnchorMark`/`pmCommentPlugin.ts`'s inline-preview placement both need. */
 function findCommentAnchorHits(doc: PMNode, commentId: string): { from: number; to: number; mark: Mark; text: string }[] {
   const hits: { from: number; to: number; mark: Mark; text: string }[] = []
@@ -655,220 +619,8 @@ export function insertHtmlAtSelection(view: EditorView, html: string): void {
   view.dispatch(view.state.tr.replaceSelection(slice))
 }
 
-/** The zero-width space `insertInlineCommentBody`/`insertCommentAnchorMark` use as a placeholder for an otherwise-empty marked range — same character, same reason (see `insertCommentAnchorMark`'s own doc comment): a mark can't apply to a genuinely zero-length range, and a real cursor needs *something* to land on. */
+/** The zero-width space new, empty comment_thread nodes are seeded with (`buildCommentThreadNode`, below) — same reasoning as `insertCommentAnchorMark`'s own empty-selection case and `insertFootnote`'s own placeholder: a mark/node can't apply to nothing, and a real cursor needs *something* to land on. */
 const ZERO_WIDTH_SPACE = '​'
-
-/** Every `(from, to, mark, text)` hit for `commentId`'s own `comment_text` mark — the body-text counterpart to `findCommentAnchorHits`, above, same reasoning (a mark can span more than one adjacent text run). */
-function findCommentTextHits(doc: PMNode, commentId: string): { from: number; to: number; mark: Mark; text: string }[] {
-  const hits: { from: number; to: number; mark: Mark; text: string }[] = []
-  doc.descendants((node, pos) => {
-    if (!node.isText) return
-    const mark = node.marks.find((m) => m.type.name === 'comment_text' && m.attrs.commentId === commentId)
-    if (mark) hits.push({ from: pos, to: pos + node.nodeSize, mark, text: node.text ?? '' })
-  })
-  return hits
-}
-
-/** The full `{from, to}` span of `commentId`'s own `comment_text` mark in the live document — spanning every text run it touches — or `null` if it isn't anchored anywhere (no inline body has ever been created for this comment, or it's since been extracted to the margin). Exported for `pmCommentPlugin.ts`'s own action-widget placement and for `CommentsPanel.tsx`'s margin-positioning fallback. */
-export function commentTextRange(doc: PMNode, commentId: string): { from: number; to: number } | null {
-  const hits = findCommentTextHits(doc, commentId)
-  if (!hits.length) return null
-  return { from: Math.min(...hits.map((h) => h.from)), to: Math.max(...hits.map((h) => h.to)) }
-}
-
-/**
- * Inserts a `comment_text`-marked placeholder at `pos` (right after a
- * freshly-created inline comment's own anchor — see `EssayWorkspace.tsx`'s
- * `beginComment`) and places the cursor right inside it, ready to type
- * immediately: the whole point of this feature — a comment's own body is
- * real, directly-editable document content, not a separate popup. Seeded
- * with one zero-width space for the same reason `insertCommentAnchorMark`'s
- * own empty-selection case is: a mark can't apply to nothing, and an
- * inline, non-textblock position needs *some* character there for the
- * browser to actually land a cursor on. `comment_text`'s own `toDOM`
- * carries no `inclusive: false` (`pmSchema.ts`), so typing right after this
- * placeholder naturally keeps extending the mark, the same way it would for
- * bold/italic.
- */
-export function insertInlineCommentBody(view: EditorView, commentId: string, pos: number): void {
-  // A plain `insertText` here would be wrong: `Transaction.insertText`
-  // (`prosemirror-state`) inherits whatever marks are active right at
-  // `pos` for the new text — which, landing right after the anchor's own
-  // inclusive `comment_anchor` mark, confirmed live meant the placeholder
-  // came out carrying *both* marks, nesting `comment-text` inside
-  // `comment-anchor` in the rendered DOM. Building the text node directly
-  // with exactly the one mark we want sidesteps that inheritance
-  // entirely.
-  const mark = essaySchema.marks.comment_text.create({ commentId })
-  const textNode = essaySchema.text(ZERO_WIDTH_SPACE, [mark])
-  const tr = view.state.tr.insert(pos, textNode)
-  tr.setSelection(TextSelection.create(tr.doc, pos + 1))
-  view.dispatch(tr)
-  view.focus()
-}
-
-/**
- * Removes `commentId`'s own `comment_text` mark from wherever it sits in
- * the live document, deleting the range outright — used when a comment is
- * deleted (its own body has nothing left to keep) or extracted to the
- * margin (`extractInlineCommentBody`, below, which needs the HTML *before*
- * deleting — this function alone is for the simpler "just discard it"
- * case). A no-op if the comment has no live `comment_text` span at all
- * (e.g. it's a margin comment, or was already extracted).
- */
-export function deleteInlineCommentBody(view: EditorView, commentId: string): void {
-  const range = commentTextRange(view.state.doc, commentId)
-  if (!range) return
-  view.dispatch(view.state.tr.delete(range.from, range.to))
-}
-
-/**
- * Strips `commentId`'s own `comment_text` mark, keeping the text itself in
- * place as ordinary prose — the "promote" counterpart to
- * `deleteInlineCommentBody`'s "discard": used when an inline comment is
- * dissolved into permanent prose (`essayCommentActions.ts`'s
- * `promoteEssayComment`), where the whole point is that the typed text
- * *stays*, just without the mark (and the comment record itself) any more.
- * A run that's nothing but the zero-width-space placeholder (never actually
- * typed into) is deleted outright instead, same as
- * `removeCommentAnchorMark` already does for an anchor in the same state.
- */
-export function removeCommentTextMark(view: EditorView, commentId: string): void {
-  const hits = findCommentTextHits(view.state.doc, commentId)
-  if (!hits.length) return
-  let tr = view.state.tr
-  for (let i = hits.length - 1; i >= 0; i--) {
-    const h = hits[i]
-    if (new RegExp(`^${ZERO_WIDTH_SPACE}+$`).test(h.text)) {
-      tr = tr.delete(h.from, h.to)
-      continue
-    }
-    // A hit with *some* real typed content can still carry
-    // `insertInlineCommentBody`'s own leading placeholder character —
-    // stripping the mark alone would leave that invisible character
-    // baked into the now-permanent prose. `removeMark` first (it never
-    // shifts positions, so `h`'s own coordinates stay valid for the
-    // `delete` right after — safe within one hit precisely because hits
-    // are processed in reverse, so no *other* hit's positions have
-    // shifted yet either).
-    tr = tr.removeMark(h.from, h.to, h.mark)
-    const leading = h.text.match(new RegExp(`^${ZERO_WIDTH_SPACE}+`))?.[0].length ?? 0
-    if (leading > 0) tr = tr.delete(h.from, h.from + leading)
-  }
-  view.dispatch(tr)
-}
-
-/**
- * Removes `commentId`'s own `comment_text` range from the live document
- * (like `deleteInlineCommentBody`) but first serializes it to HTML
- * (`sliceToHtml`, above) and returns that — "extract to margin"
- * (`essayCommentActions.ts`'s `convertEssayCommentDisplayMode`), which
- * needs the comment's own typed content to become its `Comment.body`
- * *before* removing it from the document. Strips the leading placeholder
- * zero-width space (never real content) out of the returned HTML — a
- * comment extracted before its author ever typed anything returns `''`.
- * Returns `''` with no document change at all if the comment has no live
- * `comment_text` span (already extracted, or never an inline comment to
- * begin with).
- */
-export function extractInlineCommentBody(view: EditorView, commentId: string): string {
-  const range = commentTextRange(view.state.doc, commentId)
-  if (!range) return ''
-  const slice = view.state.doc.slice(range.from, range.to)
-  const html = sliceToHtml(slice).replace(new RegExp(ZERO_WIDTH_SPACE, 'g'), '')
-  view.dispatch(view.state.tr.delete(range.from, range.to))
-  return html
-}
-
-/**
- * The inverse of `extractInlineCommentBody` — "send to inline"
- * (`convertEssayCommentDisplayMode`'s other direction): parses `html` (a
- * margin comment's own stored `body`) wrapped in a synthetic
- * `<comment-text data-comment-id>` tag, so `comment_text`'s own `parseDOM`
- * rule (`pmSchema.ts`) applies the mark to every bit of it during parsing —
- * the same "wrap first, let `parseDOM` do the work" technique
- * `pasteFlatSectionsFromHtml` already relies on — and inserts the result at
- * `pos` (right after the comment's own anchor). An empty/whitespace-only
- * `html` (a margin comment nobody ever wrote anything into) falls back to
- * `insertInlineCommentBody`'s own placeholder instead of inserting nothing
- * — there still needs to be *something* marked for the comment to remain
- * anchored to, and for its author to be able to click into and start typing.
- */
-export function insertInlineCommentBodyFromHtml(view: EditorView, commentId: string, pos: number, html: string): void {
-  if (!html.trim()) {
-    insertInlineCommentBody(view, commentId, pos)
-    return
-  }
-  const dom = document.createElement('div')
-  dom.innerHTML = `<comment-text data-comment-id="${commentId}">${html}</comment-text>`
-  const slice = PMDOMParser.fromSchema(essaySchema).parseSlice(dom, { preserveWhitespace: true })
-  view.dispatch(view.state.tr.insert(pos, slice.content))
-}
-
-/**
- * Repairs a real, confirmed-live gap left by the move to live, in-document
- * inline comments: every inline top-level comment created *before* that
- * feature shipped has its own body sitting inertly in `Comment.body` HTML,
- * with no `comment_text` span ever inserted for it (nothing ever did that
- * migration) — and the current rendering has nothing left that falls back
- * to showing a comment's `body` directly any more (the old static preview
- * chip this replaced is gone; `pmCommentPlugin.ts` only ever decorates a
- * *live* `comment_text` range, and `CommentsPanel.tsx`'s own margin-row
- * filter deliberately skips a reply-less inline comment, trusting its body
- * to already be live in the document). The net effect, confirmed live: the
- * comment's own `comment_anchor` span still renders fine (that part was
- * never affected), but the comment's own written content is reachable
- * nowhere at all — not in the document, not in the margin.
- *
- * Run once, moments after a record is opened (`PMEssayEditor.tsx`'s mount
- * effect, alongside `dedupeSectionIds`' own repair-on-open), the same
- * "fix whatever's already wrong, going forward nothing can introduce this
- * again" shape that fix already established: for every top-level,
- * `'inline'`-displayed `'text'` comment with a real `body` but no live
- * `comment_text` range yet, this inserts one (same technique
- * `insertInlineCommentBodyFromHtml` uses, just operating on a plain `Node`
- * rather than a live `view` — nothing here needs an `EditorView` to exist
- * yet) right after the comment's own anchor, and clears the now-redundant
- * `Comment.body` to `''` to match every comment created after the live-
- * inline-comment feature shipped. No-op, returning the same `doc`/`comments`
- * references unchanged, for an essay with nothing to repair — the
- * overwhelming majority, once this has run once per affected essay.
- */
-export function repairMissingInlineCommentBodies(doc: PMNode, comments: Comment[]): { doc: PMNode; comments: Comment[]; changed: boolean } {
-  let currentDoc = doc
-  let changed = false
-  const repairedComments = comments.map((c) => {
-    if (c.parentId !== null || c.anchorKind !== 'text' || c.displayMode !== 'inline') return c
-    if (!c.body || !c.body.trim()) return c
-    if (commentTextRange(currentDoc, c.id)) return c // already migrated
-    const pos = commentAnchorEndPos(currentDoc, c.id)
-    if (pos == null) return c // no anchor either — nothing to anchor a repaired span to
-    try {
-      const dom = document.createElement('div')
-      dom.innerHTML = `<comment-text data-comment-id="${c.id}">${c.body}</comment-text>`
-      const slice = PMDOMParser.fromSchema(essaySchema).parseSlice(dom, { preserveWhitespace: true })
-      currentDoc = currentDoc.replace(pos, pos, new Slice(slice.content, 0, 0))
-      changed = true
-      return { ...c, body: '' }
-    } catch (err) {
-      // A legacy inline comment's own body was always plain text (typed
-      // into the old composer's plain `<textarea>`, never rich HTML) —
-      // this shouldn't normally fail. But `comment_text` is a mark, not a
-      // node: it can only ever apply to genuinely inline content, and an
-      // insertion position right after an anchor is itself inline (inside
-      // an existing paragraph's own content) — if `body` somehow contains
-      // block-level markup (a `<p>`/`<ul>`/…, the way a *margin* comment's
-      // own rich-HTML body legitimately can), parsing it this way produces
-      // block nodes that don't fit there at all, and `Node.replace` throws
-      // rather than silently losing or corrupting anything. Left unrepaired
-      // (same as "no anchor to attach to," above) rather than letting one
-      // comment's own unusual body crash this essay's entire load.
-      console.error(`repairMissingInlineCommentBodies: failed migrating comment ${c.id}'s own body into the document`, err)
-      return c
-    }
-  })
-  return { doc: currentDoc, comments: changed ? repairedComments : comments, changed }
-}
 
 // ---- comment_thread — a comment as real document content (see
 // `pmSchema.ts`'s own doc comment). A reply, or "comment on a span within
@@ -920,49 +672,90 @@ export function findCommentThread(doc: PMNode, commentId: string): { pos: number
   return found
 }
 
-/** Splices a brand-new top-level comment thread into `doc` right after its own anchor's end position (see `commentAnchorEndPos`) — pure, headless-safe (built on `prosemirror-transform`'s own `Transform` class, the same escape hatch `repairMissingInlineCommentBodies` above already uses via `Node.replace`; no `EditorView` required, so this is safe to call from a headless migration too). */
+/** Splices a brand-new top-level comment thread into `doc` right after its own anchor's end position (see `commentAnchorEndPos`) — pure, headless-safe (built on `prosemirror-transform`'s own `Transform` class; no `EditorView` required, so this is safe to call from a headless migration too). */
 export function insertCommentThreadNode(doc: PMNode, pos: number, commentId: string, displayMode: 'margin' | 'inline', now: number, text?: string): PMNode {
   return new Transform(doc).insert(pos, buildCommentThreadNode(commentId, displayMode, now, text)).doc
 }
 
-/** Live-view counterpart to `insertCommentThreadNode` — same insertion, dispatched as a real transaction so the user's own selection elsewhere maps through normally, with the cursor landing right inside the new comment's own content, ready to type immediately (same idea as `insertFootnote`'s own post-insert selection). Also used, unchanged, to insert a *reply* (or "comment on a span within this comment") — `pos` is then a position inside an existing thread's own content (right after a nested `comment_anchor` for the latter, or simply the end of its content for a plain reply) rather than in the main document; there is no separate "add a reply" command, since this is already the exact same operation either way. */
-export function insertCommentThread(view: EditorView, pos: number, commentId: string, displayMode: 'margin' | 'inline', text?: string): void {
-  const tr = view.state.tr.insert(pos, buildCommentThreadNode(commentId, displayMode, Date.now(), text))
-  tr.setSelection(TextSelection.create(tr.doc, pos + 1))
+/**
+ * Starts a brand-new comment anchored to `[from, to)` (marked with a real
+ * `comment_anchor`, if non-empty) or at `from` alone (a zero-width anchor,
+ * if `from === to`) — then inserts a fresh `comment_thread` right after
+ * it. `from`/`to` default to the current selection (used by
+ * `EssayWorkspace.tsx`'s own `beginComment`, creating a brand-new
+ * *top-level* comment — never nested inside another one's own content).
+ *
+ * `text`, when given, seeds the new comment's own body up front and
+ * lands the cursor right *after* the whole new node instead of inside
+ * it. Top-level creation never needs this — passing nothing leaves the
+ * body empty and the cursor inside it, ready to type directly, no popup,
+ * the same way a footnote's body works. But confirmed live: typing
+ * immediately after creating a *nested* comment_thread (a reply, or
+ * "comment on a span within this comment" — `CommentThreadView`'s own
+ * toolbar) doesn't reliably land inside it — ProseMirror's own native-
+ * input handling resolves the very next keystroke one level too shallow,
+ * into the *parent's* own content, even though the model-level selection
+ * set here is already correct immediately beforehand (confirmed by
+ * inspecting `view.state.selection` directly, not just the DOM). Nothing
+ * about *this* function's own position math is at fault; it's specific
+ * to ProseMirror handling a keystroke right after a brand-new nested,
+ * non-atom inline NodeView. The reliable fix is not to depend on that at
+ * all for a nested comment: `CommentThreadView`'s reply/comment-on-a-span
+ * buttons collect the text with a small prompt first (see their own
+ * doc comments) and pass it straight in here already-known, so the only
+ * thing left to position afterward is the ordinary, unproblematic "right
+ * after a node that already has real content" case. Returns the new
+ * comment's own id.
+ */
+export function beginCommentThread(view: EditorView, displayMode: 'margin' | 'inline', from?: number, to?: number, text?: string): string {
+  const commentId = id()
+  const { state } = view
+  const f = from ?? state.selection.from
+  const t = to ?? state.selection.to
+  const mark = essaySchema.marks.comment_anchor.create({ commentId })
+  const tr = state.tr
+  let threadPos: number
+  if (f === t) {
+    tr.insertText('​', f)
+    const end = f + 1
+    tr.addMark(end - 1, end, mark)
+    threadPos = end
+  } else {
+    tr.addMark(f, t, mark)
+    threadPos = t
+  }
+  const node = buildCommentThreadNode(commentId, displayMode, Date.now(), text)
+  tr.insert(threadPos, node)
+  tr.setSelection(TextSelection.create(tr.doc, text ? threadPos + node.nodeSize : threadPos + 1))
   view.dispatch(tr)
   view.focus()
-}
-
-/**
- * Starts a brand-new comment anchored to the current selection (marked
- * with a real `comment_anchor`, if non-empty) or at the cursor (a
- * zero-width anchor, if empty — same as `insertCommentAnchorMark`'s own
- * empty-selection case) — then inserts a fresh `comment_thread` right
- * after it, cursor landing inside, ready to type. No popup: the comment's
- * own body is real, directly-editable document content from the moment
- * it's created, the same way a footnote's is. Used identically for a
- * brand-new top-level comment (`EssayWorkspace.tsx`'s own `beginComment`)
- * and for "comment on a span within an existing comment"
- * (`CommentThreadView`'s own toolbar) — `view.state.selection` doesn't
- * care whether it's in the main document or nested inside another
- * comment's own content. Returns the new comment's own id.
- */
-export function beginCommentThread(view: EditorView, displayMode: 'margin' | 'inline'): string {
-  const commentId = id()
-  const { pos } = insertCommentAnchorMark(view, commentId)
-  insertCommentThread(view, pos, commentId, displayMode)
   return commentId
 }
 
-/** A reply to `parentCommentId` — a zero-width-anchored comment appended right at the end of its parent's own content (collapsing the selection there first, then reusing `beginCommentThread`'s own empty-selection branch — no separate insertion logic needed). Always `'inline'` (a reply never gets its own margin/inline toggle — see `pmSchema.ts`'s own doc comment on `displayMode`). `null`/no-op if `parentCommentId` no longer exists. */
-export function replyToCommentThread(view: EditorView, parentCommentId: string): string | null {
+/**
+ * A reply to `parentCommentId` — appended right at the end of its
+ * parent's own content, with `text` (already collected — see
+ * `CommentThreadView`'s own reply button, which prompts for it first;
+ * `beginCommentThread`'s own doc comment explains why) seeded directly
+ * into the new node rather than left for the user to type into live.
+ * Never gets its own `comment_anchor` mark — a reply has no specific
+ * span of text it's "about" (that's what "comment on a span within this
+ * comment," a separate action, is for), so there's nothing real to
+ * anchor. `null`/no-op if `parentCommentId` no longer exists.
+ */
+export function replyToCommentThread(view: EditorView, parentCommentId: string, text: string): string | null {
   const endPos = commentThreadContentEndPos(view.state.doc, parentCommentId)
   if (endPos == null) return null
-  view.dispatch(view.state.tr.setSelection(TextSelection.create(view.state.doc, endPos)))
-  return beginCommentThread(view, 'inline')
+  const replyId = id()
+  const node = buildCommentThreadNode(replyId, 'inline', Date.now(), text)
+  const tr = view.state.tr.insert(endPos, node)
+  tr.setSelection(TextSelection.create(tr.doc, endPos + node.nodeSize))
+  view.dispatch(tr)
+  view.focus()
+  return replyId
 }
 
-/** The position right at the end of `commentId`'s own content — where a plain reply (no highlighted span) lands, via `insertCommentThread`/`insertCommentThreadNode` above. `null` if that thread no longer exists. */
+/** The position right at the end of `commentId`'s own content — where a plain reply (no highlighted span) lands, via `replyToCommentThread` below. `null` if that thread no longer exists. */
 export function commentThreadContentEndPos(doc: PMNode, commentId: string): number | null {
   const thread = findCommentThread(doc, commentId)
   if (!thread) return null
@@ -1021,6 +814,38 @@ export function deleteCommentThread(view: EditorView, commentId: string): void {
   if (!thread) return
   const tr = view.state.tr
   tr.delete(thread.pos, thread.pos + thread.node.nodeSize)
+  stripCommentAnchorMark(tr, commentId)
+  view.dispatch(tr)
+}
+
+/**
+ * Dissolves `commentId`'s comment into ordinary prose: its own record (and
+ * its own anchor mark, via `stripCommentAnchorMark` — same reasoning as
+ * `deleteCommentThreadNode`'s own) go away, but its text stays, as plain
+ * unmarked prose right where the comment used to be. Any nested reply's
+ * own text is flattened in along with it (`node.textContent` already
+ * joins everything, nested comment_threads included) rather than kept as
+ * a separate structure — "promote" was always meant for dissolving a
+ * comment that's served its purpose, not for preserving a whole thread's
+ * own shape as prose. Pure, headless-safe. `null`/no-op if that comment no
+ * longer exists.
+ */
+export function promoteCommentThreadNode(doc: PMNode, commentId: string): PMNode | null {
+  const thread = findCommentThread(doc, commentId)
+  if (!thread) return null
+  const tr = new Transform(doc)
+  const text = thread.node.textContent.replace(/​/g, '')
+  tr.replaceWith(thread.pos, thread.pos + thread.node.nodeSize, text ? essaySchema.text(text) : Fragment.empty)
+  stripCommentAnchorMark(tr, commentId)
+  return tr.doc
+}
+
+export function promoteCommentThread(view: EditorView, commentId: string): void {
+  const thread = findCommentThread(view.state.doc, commentId)
+  if (!thread) return
+  const tr = view.state.tr
+  const text = thread.node.textContent.replace(/​/g, '')
+  tr.replaceWith(thread.pos, thread.pos + thread.node.nodeSize, text ? essaySchema.text(text) : Fragment.empty)
   stripCommentAnchorMark(tr, commentId)
   view.dispatch(tr)
 }

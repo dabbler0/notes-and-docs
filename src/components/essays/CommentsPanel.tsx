@@ -1,50 +1,14 @@
 import { useEffect, useRef, useState } from 'preact/hooks'
-import type { Node as PMNode } from 'prosemirror-model'
-import { essayCommentChildren, topLevelEssayComments, updateEssayCommentBody, addEssayComment, setEssayCommentResolved } from '../../models/essayCommentsRepo'
-import { deleteEssayComment, convertEssayCommentDisplayMode } from './essayCommentActions'
-import { commentTextRange } from './pmCommands'
-import { id } from '../../lib/id'
+import { Node as PMNode } from 'prosemirror-model'
+import { EditorState } from 'prosemirror-state'
+import { EditorView } from 'prosemirror-view'
+import { baseKeymap, toggleMark } from 'prosemirror-commands'
+import { keymap } from 'prosemirror-keymap'
+import { history, undo, redo } from 'prosemirror-history'
+import { essaySchema } from '../../lib/pmSchema'
+import { CommentThreadView } from './pmNodeViews'
+import { topLevelCommentThreads, commentAnchorText, findCommentThread, deleteCommentThread } from './pmCommands'
 import { confirmDialog } from '../../lib/confirm'
-import { Icon } from '../Icon'
-import type { Comment, Essay } from '../../models/types'
-import type { EditorView } from 'prosemirror-view'
-
-interface Row {
-  comment: Comment
-}
-
-/** The title of the section `sectionId` names, or `essayTitle` for the root section itself (its displayed title always comes from `essay.title`, not its own `section_title` text — same convention `NodeTree.tsx` and `saveEssayTitle` already follow). `'Untitled section'` for anything else — a deleted section, or a pre-migration `'node'`-anchorKind comment whose `sectionId` never pointed into a PM doc to begin with. */
-function sectionTitleFor(doc: PMNode, essayTitle: string, sectionId: string | null | undefined): string {
-  if (!sectionId) return 'Untitled section'
-  if (doc.firstChild?.attrs.id === sectionId) return essayTitle
-  let title: string | null = null
-  doc.descendants((node) => {
-    if (title) return false
-    if (node.type.name === 'section' && node.attrs.id === sectionId) {
-      title = node.firstChild?.textContent || 'Untitled section'
-      return false
-    }
-    return true
-  })
-  return title ?? 'Untitled section'
-}
-
-/**
- * A top-level inline comment normally has nowhere to show in the margin
- * because its content already lives in the document itself (its own
- * `comment_text` span) — that's what the margin render's own filter below
- * is skipping. But nothing stops that span from being deleted by ordinary
- * editing (selecting across it, cutting, retyping) without going through
- * "Delete this comment" or "Move to the margin" — nothing in the document
- * model cascades a `Comment` record's own deletion to that. When that
- * happens, the comment keeps counting toward `openCount` (nothing marks it
- * resolved or removes it) while having no live content anywhere — true
- * "exists in the count, invisible everywhere" — unless this is checked and
- * a fallback card shown instead of silently excluding it.
- */
-function isOrphanedInlineComment(doc: PMNode, essay: Essay, comment: Comment): boolean {
-  return comment.displayMode === 'inline' && essayCommentChildren(essay, comment.id).length === 0 && !commentTextRange(doc, comment.id)
-}
 
 /**
  * Comments shown in the margin, each aligned with its own anchor in the
@@ -57,31 +21,31 @@ function isOrphanedInlineComment(doc: PMNode, essay: Essay, comment: Comment): b
  * document coordinates (anchor position + however far the document is
  * already scrolled) — a value that stays correct at any scroll offset,
  * since the transform below re-applies that same offset in the other
- * direction. Only top-level comments (anchored to text, or to a whole
- * section) get their own position — every reply and comment-on-a-comment
- * nested under one renders inside that same card instead (see `CommentCard`).
+ * direction.
+ *
+ * Every top-level comment (`comment_thread` — see `pmSchema.ts`'s own doc
+ * comment) now gets a card here, margin or inline alike — there is no more
+ * render-only filter deciding some comments don't get one, and no second
+ * data source (`essay.comments`) the count and the rendered list could
+ * ever diverge from, since both come from one `topLevelCommentThreads(doc)`
+ * walk. An `'inline'`-displayed comment's own text already shows live in
+ * the document (`pmNodeViews.ts`'s own `CommentThreadView`), so its card
+ * here is a lightweight summary with a "scroll to it" jump, not a second
+ * copy of the text; a `'margin'`-displayed one mounts its own small
+ * detached editor (`CommentMarginEditor`, below) so its text can actually
+ * be edited from here, since the document itself is hiding it.
  */
 export function CommentsPanel({
   doc,
-  essay,
-  essayTitle,
   view,
-  onChanged,
   scrollRef,
   mode = 'margin',
-  onJumpTo,
 }: {
   doc: PMNode
-  essay: Essay
-  essayTitle: string
-  /** For stripping a deleted/promoted top-level comment's own `comment_anchor` mark out of the live document — `null` while the editor hasn't mounted yet. */
   view: EditorView | null
-  onChanged: () => void
   scrollRef: { current: HTMLDivElement | null }
   /** 'list' is the mobile rendering: comments aren't visible next to the document there (it's a separate full-screen view), so there's no anchor to line a card up with — just a plain scrollable list, same as the pre-margin design. */
   mode?: 'margin' | 'list'
-  /** list mode only: jump back to a comment's own section in the document (and, on mobile, close this view). */
-  onJumpTo?: (sectionId: string) => void
 }) {
   const panelRef = useRef<HTMLDivElement>(null)
   const innerRef = useRef<HTMLDivElement>(null)
@@ -90,9 +54,8 @@ export function CommentsPanel({
   const [canvasHeight, setCanvasHeight] = useState(0)
   const rafRef = useRef<number>(0)
 
-  const rows: Row[] = topLevelEssayComments(essay).map((comment) => ({ comment }))
-  rows.sort((a, b) => b.comment.createdAt - a.comment.createdAt)
-  const openCount = rows.filter((r) => !r.comment.resolved).length
+  const rows = topLevelCommentThreads(doc).sort((a, b) => b.node.attrs.createdAt - a.node.attrs.createdAt)
+  const openCount = rows.filter((r) => !r.node.attrs.resolved).length
 
   function recompute() {
     if (mode !== 'margin') return
@@ -111,33 +74,17 @@ export function CommentsPanel({
     const deltaTop = scrollRect.top - panelRect.top
 
     const raw: { id: string; top: number }[] = []
-    for (const { comment } of rows) {
-      // Inline top-level comments only ever show a margin row when they
-      // have replies/comments-on-them, or have lost their own live content
-      // (see `isOrphanedInlineComment`/the render below) — nothing to
-      // position otherwise.
-      if (comment.displayMode === 'inline' && essayCommentChildren(essay, comment.id).length === 0 && !isOrphanedInlineComment(doc, essay, comment)) continue
-      // A 'node' (whole-section) comment has no mark to look for at all —
-      // it always anchors to the section's own heading. A 'text' comment
-      // anchored inline positions off its own live `comment_text` span
-      // (guaranteed to exist whenever displayMode is 'inline' — see
-      // `pmSchema.ts`'s own doc comment on that mark); a margin one
-      // positions off its anchor mark instead, falling back the
-      // same way if that mark is collapsed out of view (its own section,
-      // or an ancestor, toggled closed) — getBoundingClientRect() on
-      // anything inside a `display: none` subtree returns all zeroes,
-      // which would otherwise pin the comment to the very top of the
-      // margin instead of near its real (collapsed) location.
-      const mark =
-        comment.anchorKind === 'text'
-          ? comment.displayMode === 'inline'
-            ? (scrollEl.querySelector(`comment-text[data-comment-id="${cssEscape(comment.id)}"]`) as HTMLElement | null)
-            : (scrollEl.querySelector(`comment-anchor[data-comment-id="${cssEscape(comment.id)}"]`) as HTMLElement | null)
-          : null
-      const anchorEl = isVisible(mark) ? mark : nearestVisibleSectionHeader(scrollEl, comment.sectionId)
+    for (const { node } of rows) {
+      // A top-level comment's own marker (`comment-thread[data-comment-id]`,
+      // `pmNodeViews.ts`'s `CommentThreadView`) is always present in the
+      // main document, margin or inline display alike — there's no more
+      // separate `comment-anchor`/`comment-text` lookup, and no "nothing
+      // to position" case, since every top-level row gets a card now.
+      const mark = scrollEl.querySelector(`comment-thread[data-comment-id="${cssEscape(node.attrs.id)}"] > .pm-comment-thread-marker`) as HTMLElement | null
+      const anchorEl = isVisible(mark) ? mark : nearestVisibleSectionHeader(scrollEl, doc)
       if (!anchorEl) continue
       const top = anchorEl.getBoundingClientRect().top - scrollRect.top + scrollEl.scrollTop + deltaTop
-      raw.push({ id: comment.id, top })
+      raw.push({ id: node.attrs.id, top })
     }
     raw.sort((a, b) => a.top - b.top)
 
@@ -184,40 +131,26 @@ export function CommentsPanel({
     // reverts, a section collapsing, etc.) — `doc` is a fresh object on
     // every document-changing transaction.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [doc, essay.comments, mode])
+  }, [doc, mode])
+
+  function scrollToComment(commentId: string) {
+    scrollRef.current?.querySelector(`comment-thread[data-comment-id="${cssEscape(commentId)}"]`)?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+  }
 
   async function handleDelete(commentId: string) {
+    if (!view) return
     if (!(await confirmDialog('Delete this comment, and everything replied or commented on it?', { confirmLabel: 'Delete', danger: true }))) return
-    await deleteEssayComment(essay, view, commentId)
-    onChanged()
+    deleteCommentThread(view, commentId)
   }
 
-  async function handleToggleDisplayMode(commentId: string, target: 'margin' | 'inline') {
-    await convertEssayCommentDisplayMode(essay, view, commentId, target)
-    onChanged()
-  }
+  const cards = rows.map(({ node }) => <CommentRow key={node.attrs.id} doc={doc} view={view} node={node} onDelete={handleDelete} onJumpTo={scrollToComment} />)
 
   if (mode === 'list') {
     return (
       <div className="comments-list-view">
         <h2 style={{ marginTop: 0 }}>Comments ({openCount} open)</h2>
         {rows.length === 0 && <p className="muted">No comments yet. Select some text (or use the Comment button with nothing selected) to leave one.</p>}
-        {rows.map((row) => (
-          <div className="comment-thread-root" key={row.comment.id}>
-            <div className="comment-section-label" onClick={() => row.comment.sectionId && onJumpTo?.(row.comment.sectionId)}>
-              {sectionTitleFor(doc, essayTitle, row.comment.sectionId)}
-            </div>
-            {row.comment.displayMode === 'inline' ? (
-              isOrphanedInlineComment(doc, essay, row.comment) ? (
-                <OrphanedInlineComment comment={row.comment} onDelete={handleDelete} />
-              ) : (
-                <InlineTopLevelThread essay={essay} comment={row.comment} onChanged={onChanged} onDelete={handleDelete} />
-              )
-            ) : (
-              <CommentCard essay={essay} comment={row.comment} depth={0} onChanged={onChanged} onDelete={handleDelete} onToggleDisplayMode={handleToggleDisplayMode} />
-            )}
-          </div>
-        ))}
+        {cards}
       </div>
     )
   }
@@ -227,300 +160,140 @@ export function CommentsPanel({
       <span className="margin-comments-count chip">{openCount} open</span>
       {rows.length === 0 && <p className="muted margin-comments-empty">No comments yet. Select some text (or use the Comment button with nothing selected) to leave one.</p>}
       <div className="margin-comments-inner" ref={innerRef} style={{ height: canvasHeight, transform: `translateY(${-scrollTop}px)` }}>
-        {rows
-          .filter((row) => row.comment.displayMode !== 'inline' || essayCommentChildren(essay, row.comment.id).length > 0 || isOrphanedInlineComment(doc, essay, row.comment))
-          .map((row) => (
-            <div className="comment-thread-root" key={row.comment.id} data-comment-thread-id={row.comment.id} style={{ top: positions.get(row.comment.id) ?? 0 }}>
-              {row.comment.anchorKind === 'node' && <div className="comment-section-label">{sectionTitleFor(doc, essayTitle, row.comment.sectionId)}</div>}
-              {row.comment.displayMode === 'inline' ? (
-                isOrphanedInlineComment(doc, essay, row.comment) ? (
-                  <OrphanedInlineComment comment={row.comment} onDelete={handleDelete} />
-                ) : (
-                  <InlineTopLevelThread essay={essay} comment={row.comment} onChanged={onChanged} onDelete={handleDelete} />
-                )
-              ) : (
-                <CommentCard essay={essay} comment={row.comment} depth={0} onChanged={onChanged} onDelete={handleDelete} onToggleDisplayMode={handleToggleDisplayMode} />
-              )}
-            </div>
-          ))}
+        {rows.map(({ node }) => (
+          <div className="comment-thread-root" key={node.attrs.id} data-comment-thread-id={node.attrs.id} style={{ top: positions.get(node.attrs.id) ?? 0 }}>
+            <CommentRow doc={doc} view={view} node={node} onDelete={handleDelete} onJumpTo={scrollToComment} />
+          </div>
+        ))}
       </div>
     </div>
   )
 }
 
 /**
- * Fallback for a top-level inline comment caught by `isOrphanedInlineComment`
- * — its own `comment_text` span (the only place its content ever lived) is
- * gone from the document, through ordinary editing that had nothing to do
- * with comments, with no replies to show instead. There's nothing left to
- * display, but showing *this* rather than silently excluding the row (the
- * old behavior) is the whole fix: the comment stays visible, and deletable,
- * instead of permanently counting toward "N open" while being unreachable
- * anywhere in the UI.
+ * One top-level comment's own row in the panel. `displayMode: 'margin'`
+ * mounts `CommentMarginEditor` — the comment's real, directly-editable
+ * content, just relocated into this panel instead of the main document
+ * flow (`pmNodeViews.ts`'s own `CommentThreadView` hides its wrapper there
+ * for exactly this case). `displayMode: 'inline'` just shows a summary
+ * (the anchor quote, resolved state) with a "scroll to it" link, since the
+ * real editable content already lives, visibly, right there in the text.
  */
-function OrphanedInlineComment({ comment, onDelete }: { comment: Comment; onDelete: (commentId: string) => void }) {
+function CommentRow({
+  doc,
+  view,
+  node,
+  onDelete,
+  onJumpTo,
+}: {
+  doc: PMNode
+  view: EditorView | null
+  node: PMNode
+  onDelete: (commentId: string) => void
+  onJumpTo: (commentId: string) => void
+}) {
+  const commentId = node.attrs.id as string
+  const anchorText = commentAnchorText(doc, commentId)
   return (
-    <div className="comment-item orphaned-inline-comment">
-      <p className="muted">This comment’s own text was removed from the document (e.g. by editing over it) — there’s nothing left to show.</p>
-      <button className="icon-btn" title="Delete this comment" onClick={() => onDelete(comment.id)}>
-        Delete
+    <div className={`comment-item${node.attrs.resolved ? ' resolved' : ''}`}>
+      {anchorText && <div className="anchor">“{anchorText}”</div>}
+      {node.attrs.displayMode === 'margin' && view ? (
+        <CommentMarginEditor mainView={view} commentId={commentId} />
+      ) : (
+        <div className="comment-inline-summary">
+          <p className="muted">Shown inline, in the document text.</p>
+          <button className="icon-btn" title="Scroll to it in the document" onClick={() => onJumpTo(commentId)}>
+            ↳ Jump to it
+          </button>
+        </div>
+      )}
+      <button className="icon-btn" title="Delete this comment (and anything nested under it)" onClick={() => onDelete(commentId)}>
+        × Delete
       </button>
     </div>
   )
 }
 
 /**
- * An inline top-level comment's own body doesn't render here at all any
- * more — it's real, directly-editable content right in the document
- * itself (`pmCommentPlugin.ts`/`pmSchema.ts`'s own `comment_text` mark),
- * with its own action buttons (resolve/extract/promote/delete) sitting
- * right next to it there. This only ever shows once the comment has at
- * least one reply or comment-on-it (the row-filtering above skips it
- * entirely otherwise), rendering just that nested thread, indented under a
- * small label rather than a full card of its own.
+ * A detached ProseMirror `EditorView`, scoped to exactly one top-level
+ * `comment_thread` node, mounted into the margin panel instead of the main
+ * document flow (the pattern ProseMirror's own docs recommend for a node
+ * whose own editing surface needs to live somewhere other than its real
+ * document position — the same shape as the official footnote-tooltip
+ * example, just synced back on every change rather than only on blur, to
+ * feel as live as editing in place would). Wraps the comment's own node in
+ * a minimal synthetic `{doc: [section: [section_title, paragraph: [node]]]}`
+ * shell, reusing the *same* `essaySchema` instance directly (no parallel
+ * schema, no serialization round-trip — the node is already a real
+ * `essaySchema` node, just given somewhere valid to sit) so its own nested
+ * replies/comments-on-a-span, if any, render through the exact same
+ * `CommentThreadView` recursively. `forceVisible: true` on that NodeView is
+ * what makes the comment's own content actually show here despite
+ * `displayMode: 'margin'` normally hiding it (see that NodeView's own doc
+ * comment) — this is the one place that override is used.
+ *
+ * Every local edit re-finds the comment's current position in the *real*
+ * document fresh (`findCommentThread`) and writes the updated node back via
+ * an ordinary transaction on `mainView` — so this never needs to cache a
+ * stale position, and the edit lands wherever the comment actually is by
+ * the time it happens, however much the rest of the document moved in the
+ * meantime. Its own undo history is local to this detached editor, not
+ * threaded onto the main document's — an accepted limitation of the
+ * detached-editor shape, same as the official example's own.
  */
-function InlineTopLevelThread({
-  essay,
-  comment,
-  onChanged,
-  onDelete,
-}: {
-  essay: Essay
-  comment: Comment
-  onChanged: () => void
-  onDelete: (commentId: string) => void
-}) {
-  const children = essayCommentChildren(essay, comment.id)
-  return (
-    <div className="comment-children inline-thread-children">
-      {children.map((child) => (
-        <CommentCard key={child.id} essay={essay} comment={child} depth={1} onChanged={onChanged} onDelete={onDelete} onToggleDisplayMode={undefined} />
-      ))}
-    </div>
-  )
-}
-
-/**
- * One comment's own card — its rich-text body (an uncontrolled
- * `contentEditable` div, same debounced-save shape a footnote's body used
- * in the old model: editable in place, satisfying "edit existing comments"
- * with no separate edit mode needed at all), a small formatting toolbar
- * (Bold/Italic/Underline via `document.execCommand`, same mechanism the
- * main editor's own toolbar used before it was PM-native — a comment's own
- * body is still a plain rich-HTML string, not PM content, same as a
- * citation's note or a footnote's body used to be: see `essayCommentsRepo.ts`'s
- * own doc comment), and buttons to comment on a highlighted span within
- * this body (nesting a new comment under this one, anchored with the same
- * `<mark class="comment-anchor">` HTML scheme the old model's own comment
- * bodies always used — a comment body was never promoted to real PM
- * content, so this one piece of the old DOM-surgery approach is still
- * exactly right here), to reply (a plain nested comment, no highlight
- * needed), and to delete (recursively — see `deleteEssayCommentCascade`).
- * Renders its own children (`essayCommentChildren`) recursively
- * underneath, indented — a whole thread lives inside the one positioned
- * top-level card, rather than each reply trying to claim its own spot in
- * the margin. "Promote to permanent prose" lives elsewhere now — an
- * inline comment's own in-document action buttons
- * (`pmCommentPlugin.ts`/`EssayWorkspace.tsx`'s `handleInlineCommentAction`)
- * — since a margin comment's own body was never real document content to
- * promote into in the first place.
- */
-export function CommentCard({
-  essay,
-  comment,
-  depth,
-  onChanged,
-  onDelete,
-  onToggleDisplayMode,
-}: {
-  essay: Essay
-  comment: Comment
-  depth: number
-  onChanged: () => void
-  onDelete: (commentId: string) => void
-  /** Only present for a top-level `'text'` comment — lets it flip between margin and inline display. Undefined for a nested comment (that field only ever applies to a top-level comment in the first place). */
-  onToggleDisplayMode: ((commentId: string, target: 'margin' | 'inline') => void) | undefined
-}) {
-  const bodyRef = useRef<HTMLDivElement>(null)
-  const savedRangeRef = useRef<Range | null>(null)
-  const saveTimer = useRef<number | undefined>(undefined)
-  const synced = useRef<{ comment: Comment | null; body: string }>({ comment: null, body: '' })
-  const [replying, setReplying] = useState(false)
-  const [commentingOnSelection, setCommentingOnSelection] = useState(false)
+function CommentMarginEditor({ mainView, commentId }: { mainView: EditorView; commentId: string }) {
+  const containerRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
-    if (synced.current.comment === comment && synced.current.body === comment.body) return
-    if (bodyRef.current) bodyRef.current.innerHTML = comment.body
-    synced.current = { comment, body: comment.body }
-  }, [comment, comment.body])
+    const container = containerRef.current
+    const thread = findCommentThread(mainView.state.doc, commentId)
+    if (!container || !thread) return
 
-  function scheduleSave() {
-    window.clearTimeout(saveTimer.current)
-    saveTimer.current = window.setTimeout(() => {
-      const html = bodyRef.current?.innerHTML ?? ''
-      synced.current = { comment, body: html }
-      updateEssayCommentBody(essay, comment.id, html)
-    }, 500)
-  }
+    const wrapperDoc = essaySchema.nodes.doc.create(
+      null,
+      essaySchema.nodes.section.create({ id: `__margin_${commentId}` }, [essaySchema.nodes.section_title.create(), essaySchema.nodes.paragraph.create(null, thread.node)]),
+    )
 
-  function captureBodyRange() {
-    const sel = window.getSelection()
-    if (!sel || sel.rangeCount === 0 || !bodyRef.current || !bodyRef.current.contains(sel.anchorNode)) return
-    savedRangeRef.current = sel.getRangeAt(0).cloneRange()
-  }
+    const miniView: EditorView = new EditorView(container, {
+      state: EditorState.create({
+        doc: wrapperDoc,
+        plugins: [
+          history(),
+          keymap({
+            'Mod-z': undo,
+            'Shift-Mod-z': redo,
+            'Mod-b': toggleMark(essaySchema.marks.strong),
+            'Mod-i': toggleMark(essaySchema.marks.em),
+            'Mod-u': toggleMark(essaySchema.marks.underline),
+          }),
+          keymap(baseKeymap),
+        ],
+      }),
+      nodeViews: {
+        comment_thread: (node, v, getPos) => new CommentThreadView(node, v, getPos as () => number | undefined, true),
+      },
+      dispatchTransaction(tr) {
+        const newState = miniView.state.apply(tr)
+        miniView.updateState(newState)
+        if (!tr.docChanged) return
+        const freshThread = findCommentThread(mainView.state.doc, commentId)
+        if (!freshThread) return // the comment was deleted elsewhere (e.g. this panel's own Delete button) while this editor was still open
+        const updatedNode = newState.doc.firstChild!.lastChild!.firstChild!
+        mainView.dispatch(mainView.state.tr.replaceWith(freshThread.pos, freshThread.pos + freshThread.node.nodeSize, updatedNode))
+      },
+    })
 
-  function exec(cmd: string) {
-    bodyRef.current?.focus()
-    document.execCommand(cmd)
-  }
+    return () => miniView.destroy()
+    // Deliberately just `[mainView, commentId]` — this effect owns the mini
+    // editor's entire lifecycle itself from here on (every edit, live or
+    // synced back, flows through its own `dispatchTransaction` above); if
+    // this re-ran on every keystroke-driven re-render of the parent panel
+    // it would tear down and rebuild the editor (losing focus, cursor
+    // position, local undo history) on every single character typed.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mainView, commentId])
 
-  async function handleAddInline(replyBody: string) {
-    const range = savedRangeRef.current
-    if (!range || range.collapsed || !bodyRef.current) return
-    const newCommentId = id()
-    const mark = document.createElement('mark')
-    mark.className = 'comment-anchor'
-    mark.dataset.commentId = newCommentId
-    const contents = range.extractContents()
-    const anchorText = contents.textContent || ''
-    mark.appendChild(contents)
-    range.insertNode(mark)
-    const html = bodyRef.current.innerHTML
-    synced.current = { comment, body: html }
-    await updateEssayCommentBody(essay, comment.id, html)
-    await addEssayComment(essay, { anchorKind: 'inline', anchorText, body: replyBody, parentId: comment.id, commentId: newCommentId })
-    setCommentingOnSelection(false)
-    onChanged()
-  }
-
-  /**
-   * A reply is just an 'inline' comment anchored to an empty mark appended
-   * at the very end of *this* comment's own body — the same mechanism
-   * `handleAddInline` above uses for a genuine comment-on-a-comment, just
-   * with an empty (rather than a real, highlighted) anchor. See `Comment`'s
-   * own doc comment in models/types.ts for why replies don't get their own
-   * separate shape.
-   */
-  async function handleReply(replyBody: string) {
-    const newCommentId = id()
-    const mark = `<mark class="comment-anchor" data-comment-id="${newCommentId}"></mark>`
-    if (bodyRef.current) {
-      bodyRef.current.insertAdjacentHTML('beforeend', mark)
-      const html = bodyRef.current.innerHTML
-      synced.current = { comment, body: html }
-      await updateEssayCommentBody(essay, comment.id, html)
-    } else {
-      await updateEssayCommentBody(essay, comment.id, comment.body + mark)
-    }
-    await addEssayComment(essay, { anchorKind: 'inline', anchorText: '', body: replyBody, parentId: comment.id, commentId: newCommentId })
-    setReplying(false)
-    onChanged()
-  }
-
-  const children = essayCommentChildren(essay, comment.id)
-
-  return (
-    <div className={`comment-item${comment.resolved ? ' resolved' : ''}`} style={depth > 0 ? { marginLeft: 16 } : undefined}>
-      {comment.anchorKind === 'text' && comment.anchorText && <div className="anchor">“{comment.anchorText}”</div>}
-      {comment.anchorKind === 'inline' && comment.anchorText && <div className="anchor">on: “{comment.anchorText}”</div>}
-      <div className="comment-mini-toolbar">
-        <button className="icon-btn" title="Bold" onMouseDown={(e) => e.preventDefault()} onClick={() => exec('bold')}>
-          B
-        </button>
-        <button className="icon-btn" title="Italic" onMouseDown={(e) => e.preventDefault()} onClick={() => exec('italic')}>
-          I
-        </button>
-        <button className="icon-btn" title="Underline" onMouseDown={(e) => e.preventDefault()} onClick={() => exec('underline')}>
-          U
-        </button>
-        <span className="spacer" />
-        <button
-          className="icon-btn"
-          title="Comment on the selected text within this comment"
-          onMouseDown={(e) => {
-            e.preventDefault()
-            captureBodyRange()
-          }}
-          onClick={() => setCommentingOnSelection(true)}
-        >
-          <Icon name="comment" size={15} />
-        </button>
-        <button className="icon-btn" title="Reply" onClick={() => setReplying(true)}>
-          ↩
-        </button>
-        {onToggleDisplayMode && comment.anchorKind === 'text' && comment.displayMode !== 'inline' && (
-          <button className="icon-btn" title="Show this comment inline, in the text, instead of in the margin" onClick={() => onToggleDisplayMode(comment.id, 'inline')}>
-            →¶
-          </button>
-        )}
-        {onToggleDisplayMode && comment.anchorKind === 'text' && comment.displayMode === 'inline' && (
-          <button className="icon-btn" title="Show this comment in the margin instead of inline" onClick={() => onToggleDisplayMode(comment.id, 'margin')}>
-            →▤
-          </button>
-        )}
-        <button className="icon-btn" title="Delete this comment (and anything nested under it)" onClick={() => onDelete(comment.id)}>
-          ×
-        </button>
-      </div>
-      <div className="comment-body" ref={bodyRef} contentEditable onInput={scheduleSave} onMouseUp={captureBodyRange} onKeyUp={captureBodyRange} />
-      <label className="comment-checkbox-row">
-        <input
-          type="checkbox"
-          checked={comment.resolved}
-          onChange={async (e) => {
-            await setEssayCommentResolved(essay, comment.id, (e.target as HTMLInputElement).checked)
-            onChanged()
-          }}
-        />
-        <span className="muted">Dealt with</span>
-      </label>
-      {commentingOnSelection && <InlineComposer placeholder="Comment on the highlighted text…" onCancel={() => setCommentingOnSelection(false)} onSubmit={handleAddInline} />}
-      {replying && <InlineComposer placeholder="Write a reply…" onCancel={() => setReplying(false)} onSubmit={handleReply} />}
-      {children.length > 0 && (
-        <div className="comment-children">
-          {children.map((child) => (
-            <CommentCard key={child.id} essay={essay} comment={child} depth={depth + 1} onChanged={onChanged} onDelete={onDelete} onToggleDisplayMode={undefined} />
-          ))}
-        </div>
-      )}
-    </div>
-  )
-}
-
-function InlineComposer({ placeholder, onCancel, onSubmit }: { placeholder: string; onCancel: () => void; onSubmit: (body: string) => void }) {
-  const [body, setBody] = useState('')
-  // The `autoFocus` attribute alone isn't reliable here — this textarea is
-  // mounted well after the page's own initial load, in response to a click
-  // on a button that itself just took focus, and the dynamic-autofocus
-  // path browsers support for that case doesn't always win the race against
-  // an already-focused control. An explicit focus() on mount, same fix
-  // PromptDialog.tsx already uses for its own input, works regardless.
-  const textareaRef = useRef<HTMLTextAreaElement>(null)
-  useEffect(() => {
-    textareaRef.current?.focus()
-  }, [])
-  return (
-    <div className="field">
-      <textarea
-        ref={textareaRef}
-        rows={2}
-        placeholder={placeholder}
-        value={body}
-        onInput={(e) => setBody((e.target as HTMLTextAreaElement).value)}
-        onKeyDown={(e) => {
-          if (e.key === 'Escape') onCancel()
-        }}
-      />
-      <div className="comment-widget-actions">
-        <button className="btn btn-ghost btn-sm" onClick={onCancel}>
-          Cancel
-        </button>
-        <button className="btn btn-primary btn-sm" disabled={!body.trim()} onClick={() => onSubmit(body.trim())}>
-          Add
-        </button>
-      </div>
-    </div>
-  )
+  return <div className="comment-margin-editor" ref={containerRef} />
 }
 
 function cssEscape(s: string): string {
@@ -535,18 +308,13 @@ function isVisible(el: HTMLElement | null): el is HTMLElement {
   return !!el && el.offsetParent !== null
 }
 
-/** Walks up from `sectionId`'s own `<section>` to the nearest ancestor
- * section whose own title is actually visible — its own title if visible,
- * or else its parent's, grandparent's, and so on, up to the root (which is
- * never collapsible and so always visible). The PM-doc-rendered
- * counterpart of the old per-node model's own `nearestVisibleHeader`. */
-function nearestVisibleSectionHeader(scrollEl: HTMLElement, sectionId: string | null | undefined): HTMLElement | null {
-  if (!sectionId) return null
-  let sectionEl = scrollEl.querySelector(`section[data-section-id="${cssEscape(sectionId)}"]`) as HTMLElement | null
-  while (sectionEl) {
-    const header = sectionEl.querySelector(':scope > .section-body > h2.section-title') as HTMLElement | null
-    if (isVisible(header)) return header
-    sectionEl = sectionEl.parentElement?.closest('section') ?? null
-  }
-  return null
+/** Fallback anchor when a comment's own marker isn't visible (its section,
+ * or an ancestor, is collapsed) — the essay's own root section header,
+ * always visible, so the card still lands somewhere sensible rather than
+ * being dropped. */
+function nearestVisibleSectionHeader(scrollEl: HTMLElement, doc: PMNode): HTMLElement | null {
+  const rootId = doc.firstChild?.attrs.id
+  if (!rootId) return null
+  const header = scrollEl.querySelector(`section[data-section-id="${cssEscape(rootId)}"] > .section-body > h2.section-title`) as HTMLElement | null
+  return isVisible(header) ? header : null
 }

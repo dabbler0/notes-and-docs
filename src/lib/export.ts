@@ -404,10 +404,6 @@ function footnoteMarkdownPm(node: PMNode, fnCtx: PmMarkdownFootnoteCtx): string 
 /** One inline leaf's own markdown — a text run (escaped, with its marks applied) or one of the inline atom/content node types. `quote_inline`/`source_link` marks render as plain text for now — the same scope cut the prototype this was ported from already made (neither is wired to a toolbar command producing styled Markdown output yet). */
 function inlineLeafToMarkdownPm(node: PMNode, fnCtx: PmMarkdownFootnoteCtx): string {
   if (node.isText) {
-    // An inline comment's own body — real document content, but never
-    // meant for an export render (see `pmSchema.ts`'s own doc comment on
-    // `comment_text`); skipped before any other mark is even considered.
-    if (node.marks.some((m) => m.type.name === 'comment_text')) return ''
     let text = mdEscapeText(node.text ?? '')
     const linkMark = node.marks.find((m) => m.type.name === 'link')
     if (node.marks.some((m) => m.type.name === 'underline')) text = `<u>${text}</u>`
@@ -425,6 +421,10 @@ function inlineLeafToMarkdownPm(node: PMNode, fnCtx: PmMarkdownFootnoteCtx): str
       return `$${node.attrs.latex}$`
     case 'hard_break':
       return '  \n'
+    // `comment_thread` (pmSchema.ts) — a comment's own body, real
+    // document content, but never meant for an export render; falls
+    // through to the `default` case below, same as it would for any
+    // other node type this walker doesn't know about.
     default:
       return ''
   }
@@ -1380,8 +1380,6 @@ function footnoteLatexPm(node: PMNode, ctx: PmLatexCtx): string {
 
 function inlineLeafToLatexPm(node: PMNode, ctx: PmLatexCtx): string {
   if (node.isText) {
-    // See the matching check in `inlineLeafToMarkdownPm`, above.
-    if (node.marks.some((m) => m.type.name === 'comment_text')) return ''
     let text = texEscape(node.text ?? '')
     const linkMark = node.marks.find((m) => m.type.name === 'link')
     if (node.marks.some((m) => m.type.name === 'underline')) text = `\\underline{${text}}`
@@ -1399,6 +1397,8 @@ function inlineLeafToLatexPm(node: PMNode, ctx: PmLatexCtx): string {
       return `$${node.attrs.latex}$`
     case 'hard_break':
       return '\\\\\n'
+    // `comment_thread` (pmSchema.ts) — see the matching comment in
+    // `inlineLeafToMarkdownPm`, above; falls through to `default`.
     default:
       return ''
   }

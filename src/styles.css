@@ -2208,6 +2208,27 @@ select {
   padding-left: 6px;
 }
 
+/* `CommentMarginEditor` (CommentsPanel.tsx) — a detached ProseMirror
+   EditorView, mounted right into one margin card. Its own `comment-thread`
+   element (`pmNodeViews.ts`'s `CommentThreadView`, same one rendered
+   inline in the main document) supplies the actual toolbar/resolve state;
+   this just gives it somewhere sane to sit and type. */
+.comment-margin-editor {
+  min-height: 1.4em;
+  outline: none;
+}
+
+.comment-margin-editor .ProseMirror {
+  outline: none;
+}
+
+.comment-inline-summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
 .comment-checkbox-row {
   display: flex;
   align-items: flex-start;
@@ -3649,7 +3670,11 @@ select {
    always renders in place within its parent) — a margin-displayed
    top-level comment's content renders into the margin panel instead, so
    this stays hidden here. */
-.pm-editor-root .ProseMirror .pm-comment-thread-marker {
+/* Not scoped to `.pm-editor-root .ProseMirror` — unlike every other
+   PM-rendered element on this page, `comment-thread` also renders inside
+   `CommentsPanel.tsx`'s own detached margin editor (`CommentMarginEditor`),
+   which mounts a second `EditorView` *outside* `.pm-editor-root` entirely. */
+.ProseMirror .pm-comment-thread-marker {
   display: inline-block;
   width: 6px;
   height: 6px;
@@ -3659,20 +3684,53 @@ select {
   vertical-align: middle;
 }
 
-.pm-editor-root .ProseMirror .pm-comment-thread-wrapper {
+.ProseMirror .pm-comment-thread-wrapper {
   font-size: 13px;
   color: var(--ink-dim);
   background: var(--surface-2);
   border-radius: 4px;
-  padding: 0 5px;
+  padding: 2px 5px;
   margin-left: 2px;
 }
 
-.pm-editor-root .ProseMirror comment-thread comment-thread {
+.ProseMirror comment-thread comment-thread {
   display: inline-block;
   margin-left: 6px;
   padding-left: 6px;
   border-left: 1px solid var(--border);
+}
+
+.pm-comment-thread-toolbar {
+  display: inline-flex;
+  gap: 2px;
+  margin-left: 4px;
+  vertical-align: middle;
+}
+
+.pm-comment-thread-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: none;
+  border-radius: 3px;
+  background: var(--surface);
+  color: var(--ink-dim);
+  font-size: 11px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.pm-comment-thread-btn:hover {
+  background: var(--border);
+  color: var(--ink);
+}
+
+.pm-comment-thread.pm-comment-thread-resolved .pm-comment-thread-wrapper {
+  opacity: 0.6;
+  text-decoration: line-through;
 }
 
 /* `math_inline`/`math_block` (pmSchema.ts) render as real custom elements

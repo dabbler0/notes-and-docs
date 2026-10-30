@@ -15,7 +15,7 @@ import { CitationPickerDialog } from '../essays/CitationPickerDialog'
 import { QuoteInsertDialog } from '../essays/QuoteInsertDialog'
 import { Icon } from '../Icon'
 import type { EditorView } from 'prosemirror-view'
-import type { Essay, Slideshow, Source } from '../../models/types'
+import type { Slideshow, Source } from '../../models/types'
 
 /**
  * The slideshow editing surface — literally the real essay editor
@@ -25,8 +25,7 @@ import type { Essay, Slideshow, Source } from '../../models/types'
  * already works for it, plus only two extra toolbar operations (insert
  * slide/fragment divider) that essay's own toolbar doesn't have. No comment
  * mode, history panel, or split view — a slideshow has no comment feature at
- * all (`commentsHolder` below is always `null`), and this first pass has no
- * history/split-view support either.
+ * all, and this first pass has no history/split-view support either.
  */
 export function SlideshowWorkspace({ slideshowId, onBack }: { slideshowId: string; onBack: () => void }) {
   const [deck, setDeck] = useState<Slideshow | null>(null)
@@ -36,9 +35,6 @@ export function SlideshowWorkspace({ slideshowId, onBack }: { slideshowId: strin
   // over this object once, at mount, and only ever re-renders a chip's own
   // label when the *document* changes, not when `sources` does.
   const sources = useRef<Map<string, Source>>(new Map())
-  // `PMEssayEditor` needs a holder shaped like an essay's comment source —
-  // a slideshow has no comments at all, so this just always stays `null`.
-  const commentsHolder = useRef<Essay | null>(null)
   const [doc, setDoc] = useState<PMNode | null>(null)
   const [showCitation, setShowCitation] = useState(false)
   const [showQuoteDialog, setShowQuoteDialog] = useState(false)
@@ -151,7 +147,6 @@ export function SlideshowWorkspace({ slideshowId, onBack }: { slideshowId: strin
               key={deck.id}
               record={deck}
               sources={sources.current}
-              commentsHolder={commentsHolder}
               onCiteShortcut={() => setShowCitation(true)}
               onSave={(r) => saveSlideshow(r as Slideshow)}
               onViewReady={(view) => {

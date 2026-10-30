@@ -9,9 +9,6 @@ import { createSlideshowFromEssay } from '../../models/slideshowsRepo'
 import { groupEssays } from '../../models/projectsRepo'
 import { listSources } from '../../models/sourcesRepo'
 import { addToGraveyard } from '../../models/graveyardRepo'
-import { addEssayComment, setEssayCommentResolved } from '../../models/essayCommentsRepo'
-import { deleteEssayComment, promoteEssayComment, convertEssayCommentDisplayMode } from './essayCommentActions'
-import type { InlineCommentAction } from './pmCommentPlugin'
 import { essaySchema } from '../../lib/pmSchema'
 import { displayTitle } from '../../lib/bibtex'
 import { confirmDialog } from '../../lib/confirm'
@@ -42,9 +39,7 @@ import {
   toggleSectionCollapsed,
   moveSectionTo,
   findEnclosingSection,
-  insertCommentAnchorMark,
-  removeCommentAnchorMark,
-  insertInlineCommentBody,
+  beginCommentThread,
   insertFootnote,
 } from './pmCommands'
 import type { SectionDropZone } from './pmCommands'
@@ -100,14 +95,6 @@ export function EssayWorkspace({
   // snapshot forever after. `reload()` and the insert-citation/quote/link
   // handlers below all mutate it in place for exactly this reason.
   const sources = useRef<Map<string, Source>>(new Map()).current
-  // Same "stable container, never replaced" shape as `sources` above —
-  // `pmCommentPlugin.ts`'s own inline-preview decorations close over this
-  // once, at `EditorView` mount, and need `essay.comments` fresh on every
-  // rebuild rather than whatever it was back then. Kept in sync below
-  // (plain assignment during render, not an effect — see that line's own
-  // comment).
-  const commentsHolder = useRef<Essay | null>(null)
-  commentsHolder.current = essay
   const [splitEssayId, setSplitEssayId] = useState<string | null>(null)
   const [showSplitPicker, setShowSplitPicker] = useState(false)
   const [showTree, setShowTree] = useState(true)
@@ -128,15 +115,6 @@ export function EssayWorkspace({
   const [commentMode, setCommentMode] = useState(false)
   const [rightPanel, setRightPanel] = useState<'comments' | 'graveyard' | null>('comments')
   const [mobilePanel, setMobilePanel] = useState<'comments' | 'graveyard' | null>(null)
-  /** The toolbar's "Comment" button, with real text selected, opens a margin composer right here — not yet a real `Comment` until `submitComment` records it; see `beginComment`'s own doc comment. With nothing selected, there's no composer at all any more — the comment is created immediately, its body typed directly into the document (see `beginComment`). */
-  const [pendingComment, setPendingComment] = useState<{
-    commentId: string
-    sectionId: string | null
-    text: string
-    anchorRect: { top: number; bottom: number; left: number; right: number }
-  } | null>(null)
-  const commentWidgetRef = useRef<HTMLDivElement>(null)
-
   const viewRef = useRef<EditorView | null>(null)
   const docScrollRef = useRef<HTMLDivElement>(null)
 
@@ -163,71 +141,25 @@ export function EssayWorkspace({
     reload()
   }, [essayId])
 
-  // Dismiss the pending comment composer on an outside click, same as any
-  // other popover in this app.
-  useEffect(() => {
-    if (!pendingComment) return
-    function onDocDown(e: MouseEvent) {
-      if (commentWidgetRef.current && !commentWidgetRef.current.contains(e.target as Node)) {
-        cancelPendingComment()
-      }
-    }
-    document.addEventListener('mousedown', onDocDown)
-    return () => document.removeEventListener('mousedown', onDocDown)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pendingComment])
-
-  /**
-   * Notifies everything that reads `essay.comments` — the margin panel
-   * (ordinary Preact re-render, via `setEssay`) and the document's own
-   * inline-preview chips (`pmCommentPlugin.ts`, which only rebuilds its
-   * decorations in response to a PM transaction) — that a comment was
-   * added, edited, resolved, or deleted. `essay` itself was already
-   * mutated in place by whichever `essayCommentsRepo.ts` call just ran
-   * (same "same object, new shallow clone to force a re-render" shape
-   * `saveAuthorNote` already uses); the empty `view.dispatch(view.state.tr)`
-   * is a no-op transaction whose only job is making the comment plugin's
-   * own `apply` re-run (see that file's own doc comment).
-   */
-  function notifyCommentsChanged() {
-    setEssay((e) => (e ? { ...e } : e))
-    const view = viewRef.current
-    if (view) view.dispatch(view.state.tr)
-  }
-
   /**
    * The toolbar's "Comment" button — the primary way to add a comment,
    * usable whether or not comment mode is on (comment mode isn't the only
-   * way to add one). Highlighted text opens the ordinary margin composer,
-   * same as selecting text in comment mode does (`handleMouseUpForComments`
-   * below, which just calls this once there's a real selection). Nothing
-   * highlighted creates an *inline* comment instead, anchored to a
-   * zero-width mark right at the cursor (see `insertCommentAnchorMark`'s
-   * own doc comment for why that needs a placeholder character at all) —
-   * and, per the whole point of inline comments being real document
-   * content, the `Comment` record is created right away (empty body) and
-   * a `comment_text`-marked placeholder is inserted immediately after the
-   * anchor with the cursor already inside it, ready to type — no popup
-   * for this path at all.
+   * way to add one). No popup, either way: a comment's own body is real,
+   * directly-editable document content from the moment it's created (see
+   * `pmCommands.ts`'s own `beginCommentThread`), the same way a footnote's
+   * is — highlighted text gets a real anchor and a margin-displayed
+   * comment (shown and edited from `CommentsPanel.tsx`'s own detached
+   * editor, since the document itself hides a margin comment's content);
+   * nothing highlighted gets a zero-width anchor and an inline-displayed
+   * one, cursor landing inside it immediately, ready to type right there.
    */
-  async function beginComment() {
+  function beginComment() {
     const view = viewRef.current
     if (!view) {
       alert('Click into the document first.')
       return
     }
-    const wasEmpty = view.state.selection.empty
-    const commentId = id()
-    const { anchorText, sectionId, pos } = insertCommentAnchorMark(view, commentId)
-    if (wasEmpty) {
-      insertInlineCommentBody(view, commentId, pos)
-      if (!essay) return
-      await addEssayComment(essay, { anchorKind: 'text', anchorText, body: '', commentId, displayMode: 'inline', sectionId })
-      notifyCommentsChanged()
-      return
-    }
-    const coords = view.coordsAtPos(pos)
-    setPendingComment({ commentId, sectionId, text: anchorText, anchorRect: coords })
+    beginCommentThread(view, view.state.selection.empty ? 'inline' : 'margin')
   }
 
   /** Selecting text while in comment mode opens the same comment composer the toolbar's own "Comment" button does — this is just the mouseup-triggered shortcut for it that only applies while comment mode is on, and only for a real (non-collapsed) selection. */
@@ -236,77 +168,6 @@ export function EssayWorkspace({
     const view = viewRef.current
     if (!view || view.state.selection.empty) return
     beginComment()
-  }
-
-  /**
-   * Undoes `beginComment`'s own `insertCommentAnchorMark` without ever
-   * saving anything — the mark (and, for a zero-width anchor, its
-   * placeholder character) only ever lived in the live, uncommitted
-   * document, so removing it here is enough; there's nothing persisted
-   * yet for a cancel to need to clean up in storage. Shared by the
-   * composer's own Cancel button and a click outside the widget.
-   */
-  function cancelPendingComment() {
-    if (pendingComment) {
-      const view = viewRef.current
-      if (view) removeCommentAnchorMark(view, pendingComment.commentId)
-    }
-    setPendingComment(null)
-  }
-
-  async function submitComment(body: string) {
-    if (!pendingComment || !essay) return
-    // Closes (unmounts) the composer immediately, before the `await` below
-    // — not just for responsiveness, but so a second trigger of this same
-    // handler (a rapid double-click on "Add comment" before the first
-    // `addEssayComment` call has resolved) finds `pendingComment` already
-    // cleared and bails out above, rather than re-submitting the exact same
-    // `commentId` and appending a duplicate `Comment` record.
-    const pending = pendingComment
-    setPendingComment(null)
-    await addEssayComment(essay, {
-      anchorKind: 'text',
-      anchorText: pending.text,
-      body,
-      commentId: pending.commentId,
-      displayMode: 'margin',
-      sectionId: pending.sectionId,
-    })
-    notifyCommentsChanged()
-  }
-
-  /** A margin comment's own `comment-anchor` highlight, clicked anywhere in the main text — just scrolls its card into view, since it's already visible in the panel. An inline comment has no separate "open" click target any more — its own action buttons (`handleInlineCommentAction`, below) sit right next to its body in the document. */
-  function handleAnchorClick(commentId: string) {
-    document.querySelector(`comment-anchor[data-comment-id="${cssEscape(commentId)}"]`)?.scrollIntoView({ behavior: 'smooth', block: 'center' })
-  }
-
-  /** An inline comment's own always-visible action buttons (`pmCommentPlugin.ts`) — resolve/unresolve need no document edit at all (see `createCommentPlugin`'s own doc comment); extract/promote/delete all do, and are shared with the margin column's equivalent actions via `essayCommentActions.ts`. */
-  async function handleInlineCommentAction(commentId: string, action: InlineCommentAction) {
-    if (!essay) return
-    const view = viewRef.current
-    switch (action) {
-      case 'resolve':
-        await setEssayCommentResolved(essay, commentId, true)
-        notifyCommentsChanged()
-        return
-      case 'unresolve':
-        await setEssayCommentResolved(essay, commentId, false)
-        notifyCommentsChanged()
-        return
-      case 'extract':
-        await convertEssayCommentDisplayMode(essay, view, commentId, 'margin')
-        notifyCommentsChanged()
-        return
-      case 'promote':
-        await promoteEssayComment(essay, view, commentId)
-        notifyCommentsChanged()
-        return
-      case 'delete':
-        if (!(await confirmDialog('Delete this comment, and everything replied or commented on it?', { confirmLabel: 'Delete', danger: true }))) return
-        await deleteEssayComment(essay, view, commentId)
-        notifyCommentsChanged()
-        return
-    }
   }
 
   function run(command: (state: EditorState, dispatch?: (tr: Transaction) => void) => boolean) {
@@ -687,9 +548,6 @@ export function EssayWorkspace({
               key={docGeneration}
               record={essay}
               sources={sources}
-              commentsHolder={commentsHolder}
-              onAnchorClick={handleAnchorClick}
-              onInlineAction={handleInlineCommentAction}
               onCiteShortcut={() => setShowCitation(true)}
               editable={!commentMode}
               onViewReady={(view) => {
@@ -727,7 +585,7 @@ export function EssayWorkspace({
                 </button>
               </div>
               {rightPanel === 'comments' ? (
-                doc && <CommentsPanel doc={doc} essay={essay} essayTitle={essayTitle} view={viewRef.current} onChanged={notifyCommentsChanged} scrollRef={docScrollRef} />
+                doc && <CommentsPanel doc={doc} view={viewRef.current} scrollRef={docScrollRef} />
               ) : (
                 <GraveyardPanel essayId={essay.id} />
               )}
@@ -768,32 +626,11 @@ export function EssayWorkspace({
             </button>
           </div>
           {mobilePanel === 'comments' ? (
-            doc && (
-              <CommentsPanel
-                doc={doc}
-                essay={essay}
-                essayTitle={essayTitle}
-                view={viewRef.current}
-                onChanged={notifyCommentsChanged}
-                scrollRef={docScrollRef}
-                mode="list"
-                onJumpTo={(sectionId) => {
-                  setMobilePanel(null)
-                  requestAnimationFrame(() => scrollToNode(sectionId))
-                }}
-              />
-            )
+            doc && <CommentsPanel doc={doc} view={viewRef.current} scrollRef={docScrollRef} mode="list" />
           ) : (
             <GraveyardPanel essayId={essay.id} mode="list" />
           )}
         </Modal>
-      )}
-
-      {pendingComment && (
-        <div ref={commentWidgetRef} className="comment-widget" style={commentWidgetStyle(pendingComment.anchorRect)}>
-          <p className="comment-widget-quote">“{pendingComment.text}”</p>
-          <CommentComposer onCancel={cancelPendingComment} onSubmit={submitComment} />
-        </div>
       )}
 
       {showAuthorNote && <AuthorNoteDialog initialValue={essay.authorNote ?? ''} onSave={saveAuthorNote} onClose={() => setShowAuthorNote(false)} />}
@@ -809,71 +646,3 @@ export function EssayWorkspace({
   )
 }
 
-function CommentComposer({ onCancel, onSubmit }: { onCancel: () => void; onSubmit: (body: string) => void }) {
-  const [body, setBody] = useState('')
-  // The `autoFocus` attribute alone isn't reliable here — this textarea
-  // mounts in response to a click on a toolbar button that itself just
-  // took focus, and the dynamic-autofocus path browsers support for an
-  // element inserted after initial page load doesn't always win that race.
-  // An explicit focus() on mount, the same fix PromptDialog.tsx already
-  // uses for its own input, works regardless.
-  const textareaRef = useRef<HTMLTextAreaElement>(null)
-  useEffect(() => {
-    textareaRef.current?.focus()
-  }, [])
-  return (
-    <>
-      <div className="field">
-        <textarea
-          ref={textareaRef}
-          rows={3}
-          value={body}
-          onInput={(e) => setBody((e.target as HTMLTextAreaElement).value)}
-          onKeyDown={(e) => {
-            if (e.key === 'Escape') onCancel()
-          }}
-        />
-      </div>
-      <div className="comment-widget-actions">
-        <button className="btn btn-ghost" onClick={onCancel}>
-          Cancel
-        </button>
-        <button className="btn btn-primary" disabled={!body.trim()} onClick={() => onSubmit(body.trim())}>
-          Add comment
-        </button>
-      </div>
-    </>
-  )
-}
-
-/**
- * Positions a comment widget (the pending-comment composer, or an open
- * inline comment's own popover) just below the anchor it belongs to,
- * clamped so it never runs off the right or bottom edge of the viewport —
- * `anchorRect` is already in viewport (not document) coordinates (either
- * `view.coordsAtPos`'s own return shape, or a plain `getBoundingClientRect()`),
- * so `position: fixed` is what we want here.
- */
-function commentWidgetStyle(rect: { top: number; bottom: number; left: number; right: number }) {
-  const margin = 12
-  const width = Math.min(320, window.innerWidth - margin * 2)
-  const maxLeft = Math.max(margin, window.innerWidth - width - margin)
-  const left = Math.min(Math.max(rect.left, margin), maxLeft)
-  const spaceBelow = window.innerHeight - rect.bottom
-  const openUpward = spaceBelow < 220 && rect.top > 220
-  const style: Record<string, string> = {
-    position: 'fixed',
-    left: `${left}px`,
-    width: `${width}px`,
-  }
-  if (openUpward) {
-    style.bottom = `${window.innerHeight - rect.top + 8}px`
-  } else {
-    style.top = `${rect.bottom + 8}px`
-  }
-  return style
-}
-
-function cssEscape(s: string): string {
-  return typeof CSS !== 'undefined' && CSS.escape ? CSS.escape(s) : s.replace(/["\\]/g, '\\$&')
-}

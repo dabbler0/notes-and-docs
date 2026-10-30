@@ -9,9 +9,7 @@ import { Node as PMNode } from 'prosemirror-model'
 import { essaySchema } from '../../lib/pmSchema'
 import { saveEssay } from '../../models/essaysRepo'
 import { createCitationView, SectionView, FootnoteView, CommentThreadView, createMathView, SlideBreakView, FragmentBreakView } from './pmNodeViews'
-import { splitIntoSection, preventJoinIntoSectionTitle, dedupeSectionIds, pasteFlatSectionsFromHtml, repairMissingInlineCommentBodies } from './pmCommands'
-import { createCommentPlugin } from './pmCommentPlugin'
-import type { InlineCommentAction } from './pmCommentPlugin'
+import { splitIntoSection, preventJoinIntoSectionTitle, dedupeSectionIds, pasteFlatSectionsFromHtml } from './pmCommands'
 import { createCitationArrowPlugin } from './pmCitationArrowPlugin'
 import { createActiveSectionPlugin } from './pmActiveSectionPlugin'
 import { createSectionIdDedupePlugin } from './pmSectionIdPlugin'
@@ -101,9 +99,6 @@ export function stripCollapsedAttrs(node: unknown): unknown {
 export function PMEssayEditor({
   record,
   sources,
-  commentsHolder,
-  onAnchorClick,
-  onInlineAction,
   onCiteShortcut,
   editable = true,
   onViewReady,
@@ -114,12 +109,6 @@ export function PMEssayEditor({
   record: PMDocHost
   /** Live source map (`listSources()`, loaded once by `EssayWorkspace.tsx`) — closed over by the `citation` NodeView so every citation always renders fresh from current bibtex, never a cached label (see `pmSchema.ts`'s own doc comment). */
   sources: Map<string, Source>
-  /** A stable holder for the live essay (same "never replaced, always re-pointed at the current object" shape as `sources` above) — closed over once by `pmCommentPlugin.ts`'s own decorations, which need `essay.comments` fresh on every rebuild, not whatever it was the moment this `EditorView` first mounted. Left permanently `null` for a non-essay `record` (a slideshow) — there's no comment feature for those, so the plugin's own anchor lookups just never find anything to decorate. */
-  commentsHolder: { current: Essay | null }
-  /** A margin comment's own `comment_anchor` mark was clicked, anywhere in the main text — see `pmCommentPlugin.ts`'s own doc comment. */
-  onAnchorClick?: (commentId: string) => void
-  /** One of an inline comment's own action buttons (resolve/extract/promote/delete) was clicked — see `pmCommentPlugin.ts`'s own doc comment. */
-  onInlineAction?: (commentId: string, action: InlineCommentAction) => void
   /** Mod-Shift-K pressed inside the editor — `EssayWorkspace.tsx`'s own keyboard-shortcut counterpart to clicking the "Cite a source" toolbar button. */
   onCiteShortcut?: () => void
   editable?: boolean
@@ -136,19 +125,6 @@ export function PMEssayEditor({
   // (which would tear down undo history, scroll position, everything).
   const editableRef = useRef(editable)
   editableRef.current = editable
-  // Same reasoning as `sources`/`commentsHolder` above — the comment
-  // plugin's own click handler is built once, inside the mount effect
-  // below, so closing over the `onAnchorClick` *prop* directly would wire
-  // it to whichever render happened to be current at mount time (and, in
-  // turn, to that render's own stale `essay`/`openInlineComment` — this
-  // was a real bug, caught live: an inline comment's preview chip, added
-  // *after* the editor first mounted, didn't open its popover at all,
-  // because the handler closed over at mount time still thought there
-  // were no comments yet).
-  const onAnchorClickRef = useRef(onAnchorClick)
-  onAnchorClickRef.current = onAnchorClick
-  const onInlineActionRef = useRef(onInlineAction)
-  onInlineActionRef.current = onInlineAction
   const onCiteShortcutRef = useRef(onCiteShortcut)
   onCiteShortcutRef.current = onCiteShortcut
 
@@ -164,29 +140,7 @@ export function PMEssayEditor({
     // symptoms) the moment it's opened — `pmSectionIdPlugin.ts`'s own
     // `appendTransaction` plugin, registered below, only ever catches a
     // *future* transaction introducing one, not whatever's already there.
-    let doc = dedupeSectionIds(parsedDoc)
-    // Same "fix it the moment this record is opened" shape, for a second,
-    // unrelated gap: an inline top-level comment created before the live-
-    // inline-comment feature shipped has its own body sitting inertly in
-    // `Comment.body`, with no `comment_text` span ever inserted for it —
-    // see `repairMissingInlineCommentBodies`'s own doc comment for the
-    // real, confirmed-live symptom (the comment's own anchor still shows
-    // fine; its written content is reachable nowhere at all, not in the
-    // document, not in the margin). `commentsHolder.current` is the same
-    // object as `record` for an essay (set during `EssayWorkspace.tsx`'s
-    // own render, before this effect ever runs) — mutating its `comments`
-    // field in place is what makes `onSave` below, a few lines down,
-    // persist the repaired bodies together with the repaired doc as one
-    // atomic fix, and what makes `CommentsPanel`'s own next render (forced
-    // by `onDocChanged`, right after this effect, if the doc itself also
-    // changed) see them.
-    if (commentsHolder.current?.comments?.length) {
-      const repaired = repairMissingInlineCommentBodies(doc, commentsHolder.current.comments)
-      if (repaired.changed) {
-        doc = repaired.doc
-        commentsHolder.current.comments = repaired.comments
-      }
-    }
+    const doc = dedupeSectionIds(parsedDoc)
     let saveTimer: number | undefined
 
     function scheduleSave(newDoc: PMNode) {
@@ -243,11 +197,6 @@ export function PMEssayEditor({
         keymap(baseKeymap),
         createMathInputRules(),
         createListInputRules(),
-        createCommentPlugin(
-          commentsHolder,
-          (commentId) => onAnchorClickRef.current?.(commentId),
-          (commentId, action) => onInlineActionRef.current?.(commentId, action),
-        ),
         createActiveSectionPlugin(),
         createSectionIdDedupePlugin(),
       ],
@@ -309,7 +258,22 @@ export function PMEssayEditor({
           // renumber all of them now.
           sectionViews.forEach((v) => v.renumber())
           onDocChanged?.(newState.doc)
-          if (editableRef.current) scheduleSave(newState.doc)
+          // Always schedule a save on a real doc change, "Comment mode"
+          // (editable: false) included — `editable` only ever blocks
+          // DOM-level typing from reaching a transaction in the first
+          // place; any doc-changing transaction that gets here while not
+          // editable is already a *programmatic* one (a section's own
+          // collapse toggle, or now a comment_thread's own resolve/reply/
+          // delete toolbar — CommentThreadView, pmNodeViews.ts — dispatched
+          // directly via `view.dispatch`, same as collapse). The old
+          // `if (editableRef.current)` gate here silently dropped exactly
+          // those programmatic changes while "editing off but commenting
+          // still on" — harmless for a collapse toggle (stripped before
+          // persisting either way, see `stripCollapsedAttrs`), but it would
+          // have reintroduced an "action completes live but never
+          // persists" bug for comment actions specifically, which Comment
+          // mode explicitly keeps enabled.
+          scheduleSave(newState.doc)
         }
       },
     })
@@ -324,9 +288,9 @@ export function PMEssayEditor({
     // Only `record.id` — a new EditorView per record switch, never per
     // unrelated prop/state change. `editable` itself is read live off
     // `editableRef` (see above) specifically so "Comment mode" can flip it
-    // without a remount; `sources`/`commentsHolder` are the same kind of
-    // stable, mutated-in-place container, read fresh by the NodeViews/
-    // plugin that close over them rather than re-closed-over per render.
+    // without a remount; `sources` is the same kind of stable,
+    // mutated-in-place container, read fresh by the NodeViews that close
+    // over it rather than re-closed-over per render.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [record.id])
 

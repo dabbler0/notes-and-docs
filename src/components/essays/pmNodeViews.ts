@@ -3,7 +3,17 @@ import { TextSelection } from 'prosemirror-state'
 import type { EditorView, NodeView, ViewMutationRecord } from 'prosemirror-view'
 import { citationLabelOpen } from '../../lib/bibtex'
 import { renderMathHtml } from '../../lib/math'
-import { demoteSectionAt, deleteDivider, setCommentThreadResolved, replyToCommentThread, beginCommentThread, deleteCommentThread, setCommentThreadDisplayMode } from './pmCommands'
+import { promptDialog } from '../../lib/prompt'
+import {
+  demoteSectionAt,
+  deleteDivider,
+  setCommentThreadResolved,
+  replyToCommentThread,
+  beginCommentThread,
+  deleteCommentThread,
+  setCommentThreadDisplayMode,
+  promoteCommentThread,
+} from './pmCommands'
 import type { Source } from '../../models/types'
 
 /** The one thing `pmCitationArrowPlugin.ts` needs back out of a citation's own DOM — there's no public ProseMirror API to recover a NodeView instance from a position, only its DOM (`view.nodeDOM`), so `CitationView` stashes itself on its own root element for that plugin to read via `getCitationView` below. */
@@ -620,11 +630,14 @@ export class CommentThreadView implements NodeView {
   private getPos: () => number | undefined
   private view: EditorView
   private node: PMNode
+  /** True only inside `CommentsPanel.tsx`'s own detached margin editor (`CommentMarginEditor`) — the one place a margin-mode top-level comment's own content needs to actually show despite `displayMode: 'margin'` normally hiding it here (the whole reason that detached editor exists at all). Doesn't affect a nested reply/comment-on-a-span, which already always renders in place regardless of this flag. */
+  private forceVisible: boolean
 
-  constructor(node: PMNode, view: EditorView, getPos: () => number | undefined) {
+  constructor(node: PMNode, view: EditorView, getPos: () => number | undefined, forceVisible = false) {
     this.node = node
     this.getPos = getPos
     this.view = view
+    this.forceVisible = forceVisible
     this.dom = document.createElement('comment-thread')
     this.dom.className = 'pm-comment-thread'
     this.marker = document.createElement('span')
@@ -642,10 +655,28 @@ export class CommentThreadView implements NodeView {
       setCommentThreadDisplayMode(this.view, this.node.attrs.id, this.node.attrs.displayMode === 'inline' ? 'margin' : 'inline')
     })
     const commentOnSelectionBtn = buildCommentThreadToolbarButton('“”', 'Comment on the selected text within this comment', () => {
-      if (!this.view.state.selection.empty) beginCommentThread(this.view, 'inline')
+      const { empty, from, to } = this.view.state.selection
+      if (empty) return
+      // Captured before the `await` below, not re-read from
+      // `this.view.state.selection` afterward — see `beginCommentThread`'s
+      // own doc comment on why this is collected via a prompt rather than
+      // left for live typing, and `promptDialog`'s own async gap could in
+      // principle see other edits land first (unlikely, but the captured
+      // range stays valid either way, mapped through nothing in between).
+      promptDialog('Comment on the selected text:').then((text) => {
+        if (!text) return
+        beginCommentThread(this.view, 'inline', from, to, text)
+      })
     })
     const replyBtn = buildCommentThreadToolbarButton('↩', 'Reply', () => {
-      replyToCommentThread(this.view, this.node.attrs.id)
+      const commentId = this.node.attrs.id
+      promptDialog('Write a reply:').then((text) => {
+        if (!text) return
+        replyToCommentThread(this.view, commentId, text)
+      })
+    })
+    const promoteBtn = buildCommentThreadToolbarButton('⇧¶', 'Promote to permanent prose (deletes the comment, keeps the text)', () => {
+      promoteCommentThread(this.view, this.node.attrs.id)
     })
     const deleteBtn = buildCommentThreadToolbarButton('×', 'Delete this comment (and anything nested under it)', () => {
       deleteCommentThread(this.view, this.node.attrs.id)
@@ -653,7 +684,7 @@ export class CommentThreadView implements NodeView {
     const toolbar = document.createElement('span')
     toolbar.className = 'pm-comment-thread-toolbar'
     toolbar.contentEditable = 'false'
-    toolbar.append(this.resolveBtn, commentOnSelectionBtn, replyBtn, this.modeBtn, deleteBtn)
+    toolbar.append(this.resolveBtn, commentOnSelectionBtn, replyBtn, this.modeBtn, promoteBtn, deleteBtn)
 
     this.wrapper.append(this.contentDOM, toolbar)
     this.dom.append(this.marker, this.wrapper)
@@ -672,8 +703,8 @@ export class CommentThreadView implements NodeView {
     this.node = node
     this.marker.dataset.commentId = node.attrs.id ?? ''
     const topLevel = this.isTopLevel()
-    this.marker.style.display = topLevel ? '' : 'none'
-    const inline = !topLevel || node.attrs.displayMode === 'inline'
+    this.marker.style.display = topLevel && !this.forceVisible ? '' : 'none'
+    const inline = !topLevel || node.attrs.displayMode === 'inline' || this.forceVisible
     this.wrapper.style.display = inline ? 'inline' : 'none'
     this.dom.classList.toggle('pm-comment-thread-margin', topLevel && !inline)
     this.dom.classList.toggle('pm-comment-thread-resolved', !!node.attrs.resolved)
@@ -697,8 +728,19 @@ export class CommentThreadView implements NodeView {
     return (event.target as Node | null) !== null && this.wrapper.contains(event.target as Node) && !this.contentDOM.contains(event.target as Node)
   }
 
-  ignoreMutation() {
-    return true
+  // Unlike FootnoteView's own unconditional `true` above, this only
+  // exempts the marker/toolbar (outside `contentDOM`) — confirmed live
+  // that ignoring *everything* unconditionally, the same way FootnoteView
+  // does, breaks typing into a *nested* comment_thread specifically (a
+  // reply, or "comment on a span within this comment"): the very first
+  // characters typed there landed one level too shallow, in the parent's
+  // own content, even though the model-level selection was already
+  // correctly positioned inside the new nested node. Letting PM actually
+  // read mutations inside `contentDOM` back into the model — the same
+  // pattern `SectionView`'s own `ignoreMutation`, above, already uses —
+  // closes that gap.
+  ignoreMutation(record: ViewMutationRecord) {
+    return !this.contentDOM.contains(record.target as Node)
   }
 }
 

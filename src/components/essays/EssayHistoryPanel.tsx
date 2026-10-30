@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'preact/hooks'
+import { useEffect, useState } from 'preact/hooks'
 import type { Node as PMNode } from 'prosemirror-model'
 import { getCommitSnapshot, getCommitPmSnapshot, listEssayHistory, revertEssayTo, revertPmEssayTo } from '../../models/essayHistoryRepo'
 import { confirmDialog } from '../../lib/confirm'
@@ -51,10 +51,6 @@ export function EssayHistoryPanel({
   const [viewingPmSnapshot, setViewingPmSnapshot] = useState<EssaySnapshot | null>(null)
   const [busy, setBusy] = useState(false)
   const isPm = !!essay.doc
-  // The frozen preview is always read-only (`editable={false}`) — nothing
-  // ever clicks a comment anchor in it, so this never needs to hold a real
-  // essay, just something stable to satisfy `PMEssayEditor`'s own prop.
-  const previewCommentsHolder = useRef<Essay | null>(null)
 
   useEffect(() => {
     let cancelled = false
@@ -150,7 +146,7 @@ export function EssayHistoryPanel({
         <div className="version-split-pane frozen-pane" style={{ marginTop: 10 }}>
           <div className="version-split-label">Preview</div>
           <div className="pm-history-preview">
-            <PMEssayEditor record={previewEssay} sources={sources ?? new Map()} commentsHolder={previewCommentsHolder} editable={false} />
+            <PMEssayEditor record={previewEssay} sources={sources ?? new Map()} editable={false} />
           </div>
         </div>
       )}
