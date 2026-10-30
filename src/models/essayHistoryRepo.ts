@@ -44,9 +44,9 @@ export function buildSnapshot(essay: Essay, nodeMap: Map<string, EssayNode>): Le
   return { title: essay.title, rootNodeId: essay.rootNodeId, nodes }
 }
 
-/** The doc-based counterpart to `buildSnapshot` above — trivial by comparison: a migrated essay's document already *is* the whole tree (see `EssaySnapshot`'s own doc comment in `models/types.ts`), so there's nothing to walk/reassemble, just `essay.doc`/`essay.comments` copied straight in. */
+/** The doc-based counterpart to `buildSnapshot` above — trivial by comparison: a migrated essay's document already *is* the whole tree, comments included (`comment_thread` nodes — see `EssaySnapshot`'s own doc comment in `models/types.ts`), so there's nothing to walk/reassemble, just `essay.doc` copied straight in. */
 export function buildPmSnapshot(essay: Essay): EssaySnapshot {
-  return { title: essay.title, doc: essay.doc, comments: essay.comments ?? [] }
+  return { title: essay.title, doc: essay.doc }
 }
 
 /** Every commit for `essayId`, sorted ascending by `seq` — the shape every other function here expects to work with. */
@@ -66,7 +66,7 @@ export async function getCommitSnapshot(essayId: string, commitId: string): Prom
 /** `reconstructSnapshotText`, parsed back into an `EssaySnapshot` — the doc-based counterpart to `lib/essayHistory.ts`'s own `reconstructSnapshot`, which is hardcoded to `LegacyEssaySnapshot`. */
 function reconstructPmSnapshot(commits: EssayCommitEntry[], uptoSeq: number): EssaySnapshot {
   const text = reconstructSnapshotText(commits, uptoSeq)
-  return text ? JSON.parse(text) : { title: '', doc: null, comments: [] }
+  return text ? JSON.parse(text) : { title: '', doc: null }
 }
 
 /** The reconstructed `EssaySnapshot` for one specific commit, for a migrated essay — the doc-based counterpart to `getCommitSnapshot` above, for `EssayHistoryPanel.tsx`'s own "View" action. */
@@ -93,7 +93,7 @@ export async function commitEssay(essay: Essay, nodeMap: Map<string, EssayNode>,
   return appendCommit(essay.id, commits, 'commit', diffSnapshots(prevText, newText), label)
 }
 
-/** The doc-based counterpart to `commitEssay` above, for a migrated essay — same "diff against the last commit, no-op if nothing changed" shape, built from `essay.doc`/`essay.comments` directly instead of a `nodeMap` walk. */
+/** The doc-based counterpart to `commitEssay` above, for a migrated essay — same "diff against the last commit, no-op if nothing changed" shape, built from `essay.doc` directly instead of a `nodeMap` walk. */
 export async function commitPmEssay(essay: Essay, label?: string): Promise<EssayCommitEntry | undefined> {
   const commits = await listEssayHistory(essay.id)
   const prevText = reconstructSnapshotText(commits, Infinity)
@@ -134,7 +134,7 @@ export async function revertEssayTo(essay: Essay, nodeMap: Map<string, EssayNode
  * essay — same "apply the diff, don't separately re-derive the target a
  * second time" shape. Updating the live essay is trivial by comparison
  * too: no node tree to reconcile node-by-node, just `essay.doc`/
- * `essay.comments`/`essay.title` overwritten directly from the
+ * `essay.title` overwritten directly from the
  * reconstructed snapshot (the doc-based equivalent of
  * `applySnapshotToLiveTree`, small enough not to need its own named
  * helper).
@@ -150,7 +150,6 @@ export async function revertPmEssayTo(essay: Essay, commitId: string): Promise<E
   const resultText = applyPatch(currentText, patch)
   const snapshot: EssaySnapshot = JSON.parse(resultText)
   essay.doc = snapshot.doc
-  essay.comments = snapshot.comments
   essay.title = snapshot.title
   await saveEssay(essay)
   await appendCommit(essay.id, commits, 'revert', patch, target.label ? `Reverted to "${target.label}"` : `Reverted to ${new Date(target.createdAt).toLocaleString()}`)
@@ -305,11 +304,10 @@ export async function mergeEssays(baseEssayId: string, appendedEssayId: string):
  * `appended`'s remaining commits' `patch` text byte-for-byte — a patch is
  * just diff text, agnostic to what it's a diff *of*), but step 4 is a
  * genuine simplification: no node tree to re-parent node-by-node, just
- * `base.doc`/`base.comments` overwritten directly with `appended`'s own
- * (the appended essay is being tombstoned regardless, so there's no
- * reason not to just move its doc/comments over outright rather than
- * deep-copying them the way `clonePmEssay` has to for a *surviving*
- * original).
+ * `base.doc` overwritten directly with `appended`'s own (the appended
+ * essay is being tombstoned regardless, so there's no reason not to just
+ * move its doc over outright rather than deep-copying it the way
+ * `clonePmEssay` has to for a *surviving* original).
  */
 async function mergePmEssays(base: Essay, appended: Essay): Promise<void> {
   let baseCommits = await listEssayHistory(base.id)
@@ -344,7 +342,6 @@ async function mergePmEssays(base: Essay, appended: Essay): Promise<void> {
   for (const commit of appendedCommits) await backend.docs.delete(ESSAY_HISTORY, commit.id)
 
   base.doc = appended.doc
-  base.comments = appended.comments
   base.rootNodeId = appended.rootNodeId
   base.title = appended.title
   await saveEssay(base)

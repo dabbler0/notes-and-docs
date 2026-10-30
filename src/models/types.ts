@@ -399,14 +399,20 @@ export interface Essay {
    */
   doc?: unknown
   /**
-   * This essay's own comment threads, once migrated (see `doc`, above) —
-   * every comment anchored to a span of text, to a section as a whole, and
-   * every reply nested under any of those (see `Comment`'s own doc
-   * comment, including `sectionId`). Replaces `EssayNode.comments` for a
-   * migrated essay: comments move off the old per-node arrays onto one
-   * flat array here, the same way `doc` replaces the old per-node content
-   * tree with one flat document. Absent/undefined for an essay that
-   * hasn't been migrated yet, exactly like `doc`.
+   * @deprecated Transient, migration-only artifact of converting an old
+   * per-node essay to the ProseMirror document model (`doc`, above) —
+   * `migratePMDocuments` (`models/essaysMigrations.ts`) sets this
+   * immediately alongside `doc`, and `migrateCommentThreadsIntoDoc` (the
+   * very next migration) folds every entry here into real `comment_thread`
+   * nodes inside `doc` itself and clears this field right back out, in the
+   * same migration pass for any essay migrating today. A comment is real
+   * document content now (`pmSchema.ts`'s own doc comment on
+   * `comment_thread`), never a side array — this field only still exists so
+   * an essay that was already migrated under an *older* build (one that
+   * predates `migrateCommentThreadsIntoDoc`) still has somewhere for its
+   * own `comments` to sit until that catch-up migration runs. Live code
+   * (the editor, `CommentsPanel.tsx`, sync) never reads or writes this —
+   * only migration code does.
    */
   comments?: Comment[]
   /** Tombstone — see the note on Source.deleted. */
@@ -621,5 +627,17 @@ export interface LegacyEssaySnapshot {
 export interface EssaySnapshot {
   title: string
   doc: unknown
-  comments: Comment[]
+  /**
+   * @deprecated Legacy-shape-only — an already-stored commit written before
+   * `lib/pmMigration.ts`'s `foldCommentsIntoDoc` existed still has this key
+   * sitting in its own snapshot JSON text (comments were briefly a separate
+   * field, same as `Essay.comments` below). Never set by any code that
+   * builds an `EssaySnapshot` today — a comment is real `comment_thread`
+   * content inside `doc` itself now (`pmSchema.ts`'s own doc comment) — kept
+   * only so `JSON.parse`-ing an old commit's text still type-checks, and so
+   * `models/essaysMigrations.ts`'s `migrateCommentThreadsIntoDoc` can read it
+   * off a reconstructed historical snapshot to fold it in, once, via
+   * `refoldEssayHistoryComments`.
+   */
+  comments?: Comment[]
 }

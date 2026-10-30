@@ -112,5 +112,17 @@ export type SyncedCollection = (typeof SYNCED_COLLECTIONS)[number]
  *     collection of their own, so this needed no new entry in
  *     `SYNCED_COLLECTIONS` — just the two field names added to `essays`' own
  *     `SENSITIVE_FIELDS` entry (`sync/syncEngine.ts`).
+ * 9 — a comment's own flat `Essay.comments` side-array record folded
+ *     directly into `Essay.doc` as a real `comment_thread` node (see that
+ *     node type's own doc comment in `lib/pmSchema.ts`), its entire
+ *     `essayHistory` commit chain refolded along with it, same transform as
+ *     local migration version 7 (`models/essaysMigrations.ts`'s
+ *     `migrateCommentThreadsIntoDoc`, built on `lib/pmMigration.ts`'s
+ *     `foldCommentsIntoDoc`/`refoldEssayHistoryComments`). `comments` stays
+ *     in `essays`' own `SENSITIVE_FIELDS` entry regardless — an
+ *     already-migrated-but-not-yet-refolded remote record from before this
+ *     version still has it, and a field no longer written is still a field
+ *     that needs encrypting if it's still sometimes present (see that
+ *     entry's own comment in `sync/syncEngine.ts`).
  */
-export const CURRENT_REMOTE_SCHEMA_VERSION = 8
+export const CURRENT_REMOTE_SCHEMA_VERSION = 9

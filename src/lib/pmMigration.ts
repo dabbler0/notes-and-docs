@@ -29,10 +29,14 @@
  * since both are solving "walk this HTML and reinterpret it structurally,"
  * just in opposite directions.
  */
+import { Fragment, Node as PMNode, Mark } from 'prosemirror-model'
+import { Transform } from 'prosemirror-transform'
 import { getChildIds, parseSegments } from './childMarkers'
 import { extractLegacyCitationNote } from './bibtex'
 import { id } from './id'
-import { diffSnapshots, reconstructSnapshot } from './essayHistory'
+import { diffSnapshots, reconstructSnapshot, reconstructSnapshotText } from './essayHistory'
+import { essaySchema } from './pmSchema'
+import { commentAnchorEndPos } from '../components/essays/pmCommands'
 import type { Comment, Essay, EssayCommitEntry, EssayNode, EssaySnapshot, GraveyardFragment, Source } from '../models/types'
 
 /** Loose on purpose — this file only ever builds plain JSON objects matching `pmSchema.ts`'s own shape, checked for real by round-tripping through `Node.fromJSON(essaySchema, ...)` in tests, not by a parallel hand-maintained TypeScript type here. */
@@ -628,4 +632,239 @@ export function migrateEssayHistory(essayTitle: string, oldCommits: EssayCommitE
 /** The new-format counterpart to `lib/essayHistory.ts`'s own `snapshotText` — same stable, deterministic serialization, just for `EssaySnapshot` (the PM-doc-based shape) rather than `LegacyEssaySnapshot` (the tree-based one that module stays on — see `models/types.ts`'s own doc comments on why the two are separate types). Exported for `essayHistoryRepo.ts`'s own doc-based `commitPmEssay`/`revertPmEssayTo`/`mergePmEssays` (Stage B5), which need the exact same serialization `migrateEssayHistory` above already uses so a migrated essay's pre-existing commit chain and any commit made after migration both describe the same snapshot shape. */
 export function pmSnapshotText(snapshot: EssaySnapshot): string {
   return JSON.stringify(snapshot, null, 2)
+}
+
+/** Same zero-width-space placeholder `pmCommands.ts`'s own `buildCommentThreadNode`/`insertFootnote` use — a genuinely empty inline-ish node gives nothing for a cursor (or, here, this function's own "did this produce real content" check) to land on. */
+const ZERO_WIDTH_SPACE = '​'
+
+/**
+ * Folds `comments` — the old flat per-essay array (`Essay.comments`, now a
+ * migration-only artifact — see that field's own doc comment) — directly
+ * into `doc` as real `comment_thread` nodes, exactly matching the shape a
+ * live, through-the-UI-created comment now has (`pmSchema.ts`'s own doc
+ * comment on `comment_thread`; `pmCommands.ts`'s `beginCommentThread`/
+ * `replyToCommentThread`). This is the one-time structural move that
+ * `migrateCommentThreadsIntoDoc` (`models/essaysMigrations.ts`) and this
+ * file's own `migrateEssayHistory` (for a historical commit) both need —
+ * factored out here since both have to produce *identical* doc shapes for
+ * the same comment data, or a migrated essay's live content and its own
+ * reconstructed history could end up describing two different realities of
+ * the exact same point in time.
+ *
+ * Pure, headless-safe (`Transform`, no `EditorView`) — safe to call from a
+ * migration, same convention as every `...Node` function in `pmCommands.ts`.
+ *
+ * - A top-level (`parentId: null`) `'text'`-anchored comment is spliced in
+ *   right after its own `comment_anchor` mark's end (`commentAnchorEndPos`,
+ *   re-searched fresh against the *current* `tr.doc` before every single
+ *   insertion — so each insertion's own position accounts for every
+ *   insertion already made, without needing to track position mapping by
+ *   hand across the whole loop).
+ * - A top-level `'node'` comment (legacy — attached to a whole section, no
+ *   anchor mark at all) has no inline position to splice into directly
+ *   (`comment_thread` is an inline node; `section`'s own content is
+ *   `section_title block+`, not inline) — wrapped in a fresh paragraph
+ *   inserted as the first body block of its own `sectionId`, right after
+ *   that section's title.
+ * - Anything that can't be placed as intended — a `'text'` comment whose
+ *   anchor mark no longer exists anywhere in the document (already-orphaned
+ *   data — exactly what `__marginalDumpComments()` surfaced live this
+ *   session), or a `'node'` comment whose `sectionId` no longer resolves —
+ *   is still never silently dropped: it's wrapped in a paragraph and
+ *   appended as the very last block of the document's own root section,
+ *   with a warning explaining why it landed there instead of its intended
+ *   spot.
+ * - A reply, or "comment on a span within this comment's own body," is
+ *   built as a nested `comment_thread` right inside its own parent's
+ *   content — see `buildNestedThreadContent`, below — never inserted via
+ *   `tr.insert` at the top level the way a top-level comment is; nesting is
+ *   handled entirely while building the parent's own node, matching how a
+ *   live reply/comment-on-a-span is just "another `comment_thread` nested
+ *   inside this one's content," never a separate top-level insertion.
+ */
+export function foldCommentsIntoDoc(doc: PMNode, comments: Comment[]): { doc: PMNode; warnings: string[] } {
+  if (comments.length === 0) return { doc, warnings: [] }
+  const warnings: string[] = []
+  const childrenByParent = new Map<string, Comment[]>()
+  for (const c of comments) {
+    if (c.parentId == null) continue
+    if (!childrenByParent.has(c.parentId)) childrenByParent.set(c.parentId, [])
+    childrenByParent.get(c.parentId)!.push(c)
+  }
+  for (const list of childrenByParent.values()) list.sort((a, b) => a.createdAt - b.createdAt)
+
+  /** Builds one comment's own `comment_thread` node, content included — recursing into `childrenByParent` for any nested reply/comment-on-a-span along the way (see `buildNestedThreadContent`). */
+  function buildThreadNode(c: Comment): PMNode {
+    const content = buildNestedThreadContent(c.body, childrenByParent.get(c.id) ?? [], warnings, buildThreadNode)
+    return essaySchema.nodes.comment_thread.create(
+      { id: c.id, resolved: c.resolved, createdAt: c.createdAt, updatedAt: c.updatedAt, displayMode: c.displayMode ?? 'margin' },
+      content.length > 0 ? Fragment.fromArray(content) : essaySchema.text(ZERO_WIDTH_SPACE),
+    )
+  }
+
+  const topLevel = comments.filter((c) => c.parentId == null).sort((a, b) => a.createdAt - b.createdAt)
+  let tr = new Transform(doc)
+  for (const c of topLevel) {
+    const node = buildThreadNode(c)
+    if (c.anchorKind === 'text') {
+      const endPos = commentAnchorEndPos(tr.doc, c.id)
+      if (endPos != null) {
+        tr = tr.insert(endPos, node)
+        continue
+      }
+      warnings.push(`A comment (${c.id}) anchored to text that no longer exists in the document — appended to the end of the essay instead.`)
+    } else if (c.anchorKind === 'node') {
+      const section = findSectionByIdIn(tr.doc, c.sectionId ?? null)
+      if (section) {
+        const insertPos = section.pos + 1 + section.node.firstChild!.nodeSize
+        tr = tr.insert(insertPos, essaySchema.nodes.paragraph.create(null, node))
+        continue
+      }
+      warnings.push(`A whole-section comment (${c.id}) whose own section (${c.sectionId}) no longer exists — appended to the end of the essay instead.`)
+    } else {
+      warnings.push(`A top-level comment (${c.id}) was unexpectedly anchor-kind "inline" — appended to the end of the essay instead.`)
+    }
+    // Orphan fallback — appended as the last block *inside* the document's own single root section (`firstChild!.nodeSize - 1`: just inside its own closing tag, at position 0 since the root section is always `doc`'s first and only top-level child — `doc.nodeSize - 2` would instead land just *after* the whole root section, at the document's own top level, where an inline node can't go at all).
+    tr = tr.insert(tr.doc.firstChild!.nodeSize - 1, essaySchema.nodes.paragraph.create(null, node))
+  }
+  return { doc: tr.doc, warnings }
+}
+
+/** Finds a `section` node by its stable `id` anywhere in `doc` — the migration-local counterpart to `pmCommands.ts`'s own (unexported) `findSectionById`, duplicated rather than imported since that one isn't exported and this is the only place here that needs it. */
+function findSectionByIdIn(doc: PMNode, sectionId: string | null): { pos: number; node: PMNode } | null {
+  if (!sectionId) return null
+  let found: { pos: number; node: PMNode } | null = null
+  doc.descendants((node, pos) => {
+    if (found) return false
+    if (node.type.name === 'section' && node.attrs.id === sectionId) {
+      found = { pos, node }
+      return false
+    }
+    return true
+  })
+  return found
+}
+
+/**
+ * Walks one comment's own rich-text `body` HTML into real inline PM
+ * content — minimal on purpose: the live comment-editing surface
+ * (`CommentsPanel.tsx`'s predecessor, `CommentCard`) only ever let someone
+ * apply bold/italic/underline via `toggleMark`/`execCommand`, so there's no
+ * citation/footnote/quote-inline handling to port here the way
+ * `pmMigration.ts`'s own main `walkInline` needs for a section's body.
+ *
+ * The one genuinely structural piece: a `<mark class="comment-anchor"
+ * data-comment-id>` span inside this body is where a nested reply or
+ * "comment on a span within this comment" used to live (the exact same
+ * anchoring scheme `'text'`-anchorKind used in the main document, just
+ * applied to a comment's own body instead — see `Comment`'s own doc
+ * comment in `models/types.ts`) — converted to a real `comment_anchor`
+ * mark, with the matching child's own `comment_thread` (built recursively
+ * via `buildThreadNode`) spliced in immediately after it, exactly where
+ * `beginCommentThread`/`replyToCommentThread` would place a live one. A
+ * plain reply (no real span highlighted) is the same mechanism with an
+ * *empty* mark at the very end of the body — handled for free, since an
+ * empty `<mark>` still matches and still carries its child id.
+ *
+ * Any child whose own id never turns up as a `data-comment-id` in this
+ * body at all (a data inconsistency no live code should ever produce, but
+ * nothing here assumes stored data is perfect) is still never dropped:
+ * appended at the very end of this content, with a warning.
+ */
+function buildNestedThreadContent(bodyHtml: string, children: Comment[], warnings: string[], buildThreadNode: (c: Comment) => PMNode): PMNode[] {
+  const byId = new Map(children.map((c) => [c.id, c]))
+  const remaining = new Set(children.map((c) => c.id))
+  const out: PMNode[] = []
+
+  function collapseWhitespace(s: string): string {
+    return s.replace(/\s+/g, ' ')
+  }
+
+  function walk(node: Node, marks: Mark[]): void {
+    if (node.nodeType === Node.TEXT_NODE) {
+      const text = collapseWhitespace(node.textContent ?? '')
+      if (text) out.push(marks.length ? essaySchema.text(text, marks) : essaySchema.text(text))
+      return
+    }
+    if (node.nodeType !== Node.ELEMENT_NODE) return
+    const el = node as HTMLElement
+    const tag = el.tagName.toLowerCase()
+    if (tag === 'br') {
+      out.push(essaySchema.nodes.hard_break.create())
+      return
+    }
+    let childMarks = marks
+    if (tag === 'b' || tag === 'strong') childMarks = [...marks, essaySchema.marks.strong.create()]
+    else if (tag === 'i' || tag === 'em') childMarks = [...marks, essaySchema.marks.em.create()]
+    else if (tag === 'u') childMarks = [...marks, essaySchema.marks.underline.create()]
+    else if (tag === 'mark' && el.classList.contains('comment-anchor')) {
+      const commentId = el.getAttribute('data-comment-id')
+      const child = commentId ? byId.get(commentId) : undefined
+      if (commentId && child && remaining.has(commentId)) {
+        const anchorMarks = [...childMarks, essaySchema.marks.comment_anchor.create({ commentId })]
+        if (el.textContent) {
+          for (const c of Array.from(el.childNodes)) walk(c, anchorMarks)
+        } else {
+          out.push(essaySchema.text(ZERO_WIDTH_SPACE, anchorMarks))
+        }
+        out.push(buildThreadNode(child))
+        remaining.delete(commentId)
+        return
+      }
+      // A comment-anchor mark with no matching live child record (already-orphaned data) — keep its text, drop the now-meaningless mark.
+    }
+    for (const c of Array.from(el.childNodes)) walk(c, childMarks)
+  }
+
+  const dom = new DOMParser().parseFromString(bodyHtml || '', 'text/html')
+  for (const node of Array.from(dom.body.childNodes)) walk(node, [])
+
+  for (const child of children) {
+    if (remaining.has(child.id)) {
+      warnings.push(`A reply/nested comment (${child.id}) had no matching anchor in its parent's own body — appended at the end of that body instead.`)
+      out.push(buildThreadNode(child))
+    }
+  }
+  return out
+}
+
+/**
+ * Re-walks an *already* PM-era essay's own existing `essayHistory` commit
+ * chain — written back when `comments` still lived in each commit's own
+ * `EssaySnapshot` text as a separate field (pre-`foldCommentsIntoDoc`) —
+ * folding each reconstructed historical snapshot's own comments into its
+ * own `doc` exactly the way `migrateCommentThreadsIntoDoc`
+ * (`models/essaysMigrations.ts`) folds the *live* one, then re-diffing
+ * incrementally against the *previous already-folded* snapshot's text
+ * (never the original pre-fold text) to build a fresh, self-consistent
+ * `patch` chain — same incremental-forward-reconstruction shape
+ * `migrateEssayHistory` above already uses, just starting from an
+ * `EssaySnapshot` (PM-era) rather than a `LegacyEssaySnapshot` (tree-era).
+ *
+ * Returned commits reuse each original's own `id`/`seq`/`kind`/`label`/
+ * `createdAt` — same slot in the timeline, only `patch` changes — same
+ * "in-place field update, never delete-and-reinsert" convention
+ * `migrateEssayHistory` already follows.
+ */
+export function refoldEssayHistoryComments(oldCommits: EssayCommitEntry[]): { commits: EssayCommitEntry[]; warnings: string[] } {
+  const warnings: string[] = []
+  const sorted = [...oldCommits].sort((a, b) => a.seq - b.seq)
+  const newCommits: EssayCommitEntry[] = []
+  let prevText = ''
+  for (const commit of sorted) {
+    const text = reconstructSnapshotText(sorted, commit.seq)
+    const snapshot: EssaySnapshot = text ? JSON.parse(text) : { title: '', doc: null }
+    let foldedDoc = snapshot.doc
+    const comments = snapshot.comments ?? []
+    if (snapshot.doc && comments.length > 0) {
+      const liveDoc = PMNode.fromJSON(essaySchema, snapshot.doc)
+      const folded = foldCommentsIntoDoc(liveDoc, comments)
+      warnings.push(...folded.warnings)
+      foldedDoc = folded.doc.toJSON()
+    }
+    const newText = pmSnapshotText({ title: snapshot.title, doc: foldedDoc })
+    newCommits.push({ ...commit, patch: diffSnapshots(prevText, newText) })
+    prevText = newText
+  }
+  return { commits: newCommits, warnings }
 }

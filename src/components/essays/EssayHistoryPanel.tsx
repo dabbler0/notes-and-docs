@@ -97,7 +97,7 @@ export function EssayHistoryPanel({
   const previewMap = viewingSnapshot ? new Map(viewingSnapshot.nodes.map((n) => [n.id, n])) : null
   const previewRoot = viewingSnapshot?.nodes.find((n) => n.id === viewingSnapshot.rootNodeId)
   const previewEssay: Essay | null = viewingPmSnapshot
-    ? { id: `${essay.id}:${viewingId}`, title: viewingPmSnapshot.title, rootNodeId: essay.rootNodeId, doc: viewingPmSnapshot.doc, comments: viewingPmSnapshot.comments, createdAt: 0, updatedAt: 0 }
+    ? { id: `${essay.id}:${viewingId}`, title: viewingPmSnapshot.title, rootNodeId: essay.rootNodeId, doc: viewingPmSnapshot.doc, createdAt: 0, updatedAt: 0 }
     : null
 
   return (

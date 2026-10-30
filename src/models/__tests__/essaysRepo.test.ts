@@ -342,7 +342,7 @@ describe('cloneEssay', () => {
     expect(await cloneEssay('nonexistent-id')).toBeUndefined()
   })
 
-  it('for a migrated (doc-based) essay, deep-copies the doc under fresh section ids and remaps comment anchors to fresh comment ids', async () => {
+  it('for a migrated (doc-based) essay, deep-copies the doc under fresh section ids and remaps comment_thread ids (and their matching comment_anchor marks), at any nesting depth', async () => {
     const essay = await createEssay('Original Essay')
     const doc = essay.doc as { content: Array<Record<string, unknown>> }
     const rootSection = doc.content[0] as Record<string, unknown>
@@ -356,18 +356,28 @@ describe('cloneEssay', () => {
           { type: 'section_title', content: [{ type: 'text', text: 'A Section' }] },
           {
             type: 'paragraph',
-            content: [{ type: 'text', text: 'Commented text.', marks: [{ type: 'comment_anchor', attrs: { commentId: 'comment-1' } }] }],
+            content: [
+              { type: 'text', text: 'Commented text.', marks: [{ type: 'comment_anchor', attrs: { commentId: 'comment-1' } }] },
+              {
+                type: 'comment_thread',
+                attrs: { id: 'comment-1', resolved: false, createdAt: 1, updatedAt: 1, displayMode: 'margin' },
+                content: [
+                  { type: 'text', text: 'A note.' },
+                  { type: 'comment_thread', attrs: { id: 'comment-2', resolved: false, createdAt: 2, updatedAt: 2, displayMode: 'margin' }, content: [{ type: 'text', text: 'A reply.' }] },
+                ],
+              },
+            ],
           },
         ],
       },
     ]
-    essay.comments = [{ id: 'comment-1', parentId: null, sectionId: childSectionId, anchorKind: 'text', anchorText: 'Commented text.', body: '<p>A note.</p>', resolved: false, createdAt: 1, updatedAt: 1 }]
     await saveEssay(essay)
 
     const clone = (await cloneEssay(essay.id))!
     expect(clone.title).toBe('Copy of Original Essay')
     expect(clone.id).not.toBe(essay.id)
     expect(clone.rootNodeId).not.toBe(essay.rootNodeId)
+    expect(clone.comments).toBeUndefined()
 
     const clonedDoc = clone.doc as { content: Array<Record<string, unknown>> }
     const clonedRoot = clonedDoc.content[0] as Record<string, unknown>
@@ -376,19 +386,26 @@ describe('cloneEssay', () => {
     const clonedChildId = (clonedChild.attrs as Record<string, unknown>).id as string
     expect(clonedChildId).not.toBe(childSectionId)
 
-    expect(clone.comments).toHaveLength(1)
-    const clonedComment = clone.comments![0]
-    expect(clonedComment.id).not.toBe('comment-1')
-    expect(clonedComment.sectionId).toBe(clonedChildId)
-
     const clonedParagraph = (clonedChild.content as Array<Record<string, unknown>>).find((n) => n.type === 'paragraph')!
-    const clonedMark = ((clonedParagraph.content as Array<Record<string, unknown>>)[0].marks as Array<Record<string, unknown>>)[0]
-    expect((clonedMark.attrs as Record<string, unknown>).commentId).toBe(clonedComment.id)
+    const paragraphContent = clonedParagraph.content as Array<Record<string, unknown>>
+    const clonedMark = (paragraphContent[0].marks as Array<Record<string, unknown>>)[0]
+    const clonedThread = paragraphContent[1]
+    const clonedThreadId = (clonedThread.attrs as Record<string, unknown>).id as string
+    expect(clonedThreadId).not.toBe('comment-1')
+    expect((clonedMark.attrs as Record<string, unknown>).commentId).toBe(clonedThreadId)
+
+    const clonedReply = (clonedThread.content as Array<Record<string, unknown>>)[1]
+    const clonedReplyId = (clonedReply.attrs as Record<string, unknown>).id as string
+    expect(clonedReplyId).not.toBe('comment-2')
+    expect(clonedReplyId).not.toBe(clonedThreadId)
 
     // Original is untouched.
-    const originalComment = (await getEssay(essay.id))!.comments![0]
-    expect(originalComment.id).toBe('comment-1')
-    expect(originalComment.sectionId).toBe(childSectionId)
+    const original = (await getEssay(essay.id))!
+    const originalDoc = original.doc as { content: Array<Record<string, unknown>> }
+    const originalChild = ((originalDoc.content[0] as Record<string, unknown>).content as Array<Record<string, unknown>>).find((n) => n.type === 'section')!
+    const originalParagraph = (originalChild.content as Array<Record<string, unknown>>).find((n) => n.type === 'paragraph')!
+    const originalThread = (originalParagraph.content as Array<Record<string, unknown>>)[1]
+    expect((originalThread.attrs as Record<string, unknown>).id).toBe('comment-1')
   })
 
   it('for a migrated essay, editing the clone never touches the original, and vice versa', async () => {

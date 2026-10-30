@@ -3,7 +3,9 @@ import { createFakeBackend } from '../../test/fakeBackend'
 import { markerHtml } from '../../lib/childMarkers'
 import { reconstructSnapshot, reconstructSnapshotText } from '../../lib/essayHistory'
 import { Node as PMNode } from 'prosemirror-model'
-import { migratePMDocuments, migrateVersionsToEssayHistory } from '../essaysMigrations'
+import { migrateCommentThreadsIntoDoc, migratePMDocuments, migrateVersionsToEssayHistory } from '../essaysMigrations'
+import { diffSnapshots } from '../../lib/essayHistory'
+import { pmSnapshotText } from '../../lib/pmMigration'
 import { essaySchema } from '../../lib/pmSchema'
 import type { Essay, EssayCommitEntry, EssayNode } from '../types'
 
@@ -312,5 +314,84 @@ describe('migratePMDocuments', () => {
   it('is a no-op on an empty database', async () => {
     const { docs } = createFakeBackend()
     await expect(migratePMDocuments.run(docs)).resolves.toBeUndefined()
+  })
+})
+
+describe('migrateCommentThreadsIntoDoc', () => {
+  function docWithAnchor(commentId: string): unknown {
+    return {
+      type: 'doc',
+      content: [
+        {
+          type: 'section',
+          attrs: { id: 'root' },
+          content: [{ type: 'section_title', content: [{ type: 'text', text: 'My Essay' }] }, { type: 'paragraph', content: [{ type: 'text', text: 'Some text.', marks: [{ type: 'comment_anchor', attrs: { commentId } }] }] }],
+        },
+      ],
+    }
+  }
+
+  it("folds essay.comments into real comment_thread nodes inside essay.doc, and clears the field", async () => {
+    const { docs } = createFakeBackend()
+    const migratedEssay = essay({ id: 'e1', title: 'My Essay', rootNodeId: 'root', doc: docWithAnchor('c1') })
+    migratedEssay.comments = [{ id: 'c1', parentId: null, sectionId: 'root', anchorKind: 'text', anchorText: 'Some text.', body: '<p>A note.</p>', resolved: false, createdAt: 1, updatedAt: 2 }]
+    await docs.put('essays', migratedEssay)
+
+    await migrateCommentThreadsIntoDoc.run(docs)
+
+    const result = (await docs.list<Essay>('essays')).find((e) => e.id === 'e1')!
+    expect(result.comments).toBeUndefined()
+    const pm = PMNode.fromJSON(essaySchema, result.doc)
+    let found = false
+    pm.descendants((n) => {
+      if (n.type.name === 'comment_thread' && n.attrs.id === 'c1') found = true
+    })
+    expect(found).toBe(true)
+  })
+
+  it('also refolds the same essay\'s existing essayHistory commits, so reverting into an old commit never lands on a dead pre-fold shape', async () => {
+    const { docs } = createFakeBackend()
+    const doc = docWithAnchor('c1')
+    const comments = [{ id: 'c1', parentId: null, sectionId: 'root', anchorKind: 'text' as const, anchorText: 'Some text.', body: 'A note.', resolved: false, createdAt: 1, updatedAt: 2 }]
+    const text = pmSnapshotText({ title: 'My Essay', doc, comments } as never)
+    await docs.put('essayHistory', { id: 'c0', essayId: 'e1', seq: 0, createdAt: 0, kind: 'migrated' as const, patch: diffSnapshots('', text) })
+
+    const migratedEssay = essay({ id: 'e1', title: 'My Essay', rootNodeId: 'root', doc })
+    migratedEssay.comments = comments
+    await docs.put('essays', migratedEssay)
+
+    await migrateCommentThreadsIntoDoc.run(docs)
+
+    const commits = (await docs.list<EssayCommitEntry>('essayHistory')).filter((c) => c.essayId === 'e1')
+    expect(commits).toHaveLength(1)
+    const historyText = reconstructSnapshotText(commits, 0)
+    expect(historyText).not.toContain('"comments"')
+    const snapshot = JSON.parse(historyText)
+    const pm = PMNode.fromJSON(essaySchema, snapshot.doc)
+    let found = false
+    pm.descendants((n) => {
+      if (n.type.name === 'comment_thread' && n.attrs.id === 'c1') found = true
+    })
+    expect(found).toBe(true)
+  })
+
+  it('skips an essay with no comments to fold (idempotent)', async () => {
+    const { docs } = createFakeBackend()
+    const doc = docWithAnchor('ignored')
+    await docs.put('essays', essay({ id: 'e1', title: 'My Essay', rootNodeId: 'root', doc }))
+    await migrateCommentThreadsIntoDoc.run(docs)
+    const result = (await docs.list<Essay>('essays')).find((e) => e.id === 'e1')!
+    expect(result.doc).toEqual(doc)
+  })
+
+  it('skips an essay that was never migrated to doc at all', async () => {
+    const { docs } = createFakeBackend()
+    await docs.put('essays', essay({ id: 'e1', title: 'My Essay', rootNodeId: 'root' }))
+    await expect(migrateCommentThreadsIntoDoc.run(docs)).resolves.toBeUndefined()
+  })
+
+  it('is a no-op on an empty database', async () => {
+    const { docs } = createFakeBackend()
+    await expect(migrateCommentThreadsIntoDoc.run(docs)).resolves.toBeUndefined()
   })
 })

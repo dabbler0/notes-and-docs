@@ -411,12 +411,32 @@ export function cloneDocWithFreshSectionIds(node: unknown, sectionIdMap: Map<str
   return next
 }
 
-/** Rewrites every `comment_anchor` mark's own `commentId` attr through `commentIdMap` — the second pass `clonePmEssay` needs once it knows the full old->new comment id mapping (built from `original.comments` directly, independent of the document walk that assigns section ids). A mark whose `commentId` isn't in the map (shouldn't happen for a well-formed essay) is left untouched rather than dropped. */
-function remapCommentAnchorIds(node: unknown, commentIdMap: Map<string, string>): unknown {
+/** Every `comment_thread` node's own `id` attr anywhere in a PM doc JSON tree (any depth — a reply or "comment on a span" is just another `comment_thread` nested inside another's own content) — the first pass `clonePmEssay` needs before it can remap anything: a `comment_anchor` mark always sits *before* its own thread's node in document order, so a single combined collect-and-rewrite pass would try to remap the mark using an id that hasn't been minted yet. Collecting every id up front, then rewriting in a second pass (`remapCommentThreadIds`, below), avoids that ordering problem entirely. */
+function collectCommentThreadIds(node: unknown, ids: Set<string>): void {
+  if (node === null || typeof node !== 'object') return
+  if (Array.isArray(node)) {
+    for (const n of node) collectCommentThreadIds(n, ids)
+    return
+  }
+  const obj = node as Record<string, unknown>
+  if (obj.type === 'comment_thread' && obj.attrs && typeof obj.attrs === 'object') {
+    const cid = (obj.attrs as Record<string, unknown>).id as string
+    if (cid) ids.add(cid)
+  }
+  if (Array.isArray(obj.content)) for (const c of obj.content) collectCommentThreadIds(c, ids)
+}
+
+/** Rewrites every `comment_thread` node's own `id` attr, and every `comment_anchor` mark's own `commentId` attr, through `commentIdMap` — the second pass `clonePmEssay` needs once `collectCommentThreadIds` has found every comment id and minted a fresh one for each. An id that isn't in the map (shouldn't happen for a well-formed essay) is left untouched rather than dropped. */
+function remapCommentThreadIds(node: unknown, commentIdMap: Map<string, string>): unknown {
   if (node === null || typeof node !== 'object') return node
-  if (Array.isArray(node)) return node.map((n) => remapCommentAnchorIds(n, commentIdMap))
+  if (Array.isArray(node)) return node.map((n) => remapCommentThreadIds(n, commentIdMap))
   const obj = node as Record<string, unknown>
   const next: Record<string, unknown> = { ...obj }
+  if (next.type === 'comment_thread' && next.attrs && typeof next.attrs === 'object') {
+    const attrs = next.attrs as Record<string, unknown>
+    const mapped = commentIdMap.get(attrs.id as string)
+    if (mapped) next.attrs = { ...attrs, id: mapped }
+  }
   if (Array.isArray(next.marks)) {
     next.marks = next.marks.map((m) => {
       const mark = m as Record<string, unknown>
@@ -426,7 +446,7 @@ function remapCommentAnchorIds(node: unknown, commentIdMap: Map<string, string>)
       return mapped ? { ...mark, attrs: { ...attrs, commentId: mapped } } : mark
     })
   }
-  if (Array.isArray(next.content)) next.content = next.content.map((c) => remapCommentAnchorIds(c, commentIdMap))
+  if (Array.isArray(next.content)) next.content = next.content.map((c) => remapCommentThreadIds(c, commentIdMap))
   return next
 }
 
@@ -434,35 +454,31 @@ function remapCommentAnchorIds(node: unknown, commentIdMap: Map<string, string>)
  * The doc-based `cloneEssay` path — a genuine simplification over the old
  * per-node clone above: no node tree to re-parent, just the one document
  * to deep-copy. Every `section` gets a fresh id (`cloneDocWithFreshSectionIds`)
- * and every `Comment` a fresh id too (unlike the old model's own
- * verbatim-copy reasoning, a `comment_anchor` mark's own `commentId`
- * really does need to still resolve correctly inside *this* clone's own
- * `comments` array, not collide with — or silently share identity with —
- * the original essay's) — `remapCommentAnchorIds` is the matching second
- * pass over the already-section-id-remapped doc. `rootNodeId` becomes the
- * root section's own fresh id, preserving the invariant `createEssay`
- * already establishes (`rootNodeId` always equals the root section's own
- * `attrs.id`).
+ * and every comment thread a fresh id too (a comment is real document
+ * content now — `comment_thread` nodes nested in `doc` itself, see
+ * `pmSchema.ts`'s own doc comment — so there's no separate `comments` array
+ * to deep-copy alongside the doc the way there used to be; `collectCommentThreadIds`/
+ * `remapCommentThreadIds` are the two-pass version of exactly the same "the
+ * clone's own comment ids must never collide with, or silently share
+ * identity with, the original essay's" reasoning `cloneDocWithFreshSectionIds`
+ * already applies to section ids). `rootNodeId` becomes the root section's
+ * own fresh id, preserving the invariant `createEssay` already establishes
+ * (`rootNodeId` always equals the root section's own `attrs.id`).
  */
 async function clonePmEssay(original: Essay): Promise<Essay> {
   const now = Date.now()
   const sectionIdMap = new Map<string, string>()
   const docWithFreshSections = cloneDocWithFreshSectionIds(original.doc, sectionIdMap)
+  const commentThreadIds = new Set<string>()
+  collectCommentThreadIds(docWithFreshSections, commentThreadIds)
   const commentIdMap = new Map<string, string>()
-  for (const c of original.comments ?? []) commentIdMap.set(c.id, id())
-  const clonedDoc = remapCommentAnchorIds(docWithFreshSections, commentIdMap)
-  const clonedComments: Comment[] = (original.comments ?? []).map((c) => ({
-    ...c,
-    id: commentIdMap.get(c.id)!,
-    parentId: c.parentId ? (commentIdMap.get(c.parentId) ?? c.parentId) : null,
-    sectionId: c.sectionId ? (sectionIdMap.get(c.sectionId) ?? c.sectionId) : c.sectionId,
-  }))
+  for (const cid of commentThreadIds) commentIdMap.set(cid, id())
+  const clonedDoc = remapCommentThreadIds(docWithFreshSections, commentIdMap)
   const clonedEssay: Essay = {
     id: id(),
     title: `Copy of ${original.title}`,
     rootNodeId: sectionIdMap.get(original.rootNodeId) ?? id(),
     doc: clonedDoc,
-    comments: clonedComments,
     createdAt: now,
     updatedAt: now,
   }

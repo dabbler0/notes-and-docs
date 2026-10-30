@@ -23,16 +23,16 @@
  *
  * A future remote-only shape change (or another encryption-policy change)
  * adds another version here and bumps `CURRENT_REMOTE_SCHEMA_VERSION`, not
- * another one-off migration function wired in by hand — version 7 (the most
+ * another one-off migration function wired in by hand — version 9 (the most
  * recent) is exactly that: the same `run` function as local migration
- * version 5 in `models/essaysMigrations.ts`, converting the old per-node
- * `versions`/`headVersionId` scheme into the new `essayHistory` commit
- * collection — see that module's own doc comment for the full algorithm.
+ * version 7 in `models/essaysMigrations.ts`, folding a comment's own flat
+ * side-array record into its real `comment_thread` node inside `doc` — see
+ * that module's own doc comment for the full algorithm.
  */
 import type { Migration } from '../storage/migrations'
 import { migrateCompressPageHtml, migratePageTextsToPageHtml, migrateSplitSourceContent } from '../models/sourcesMigrations'
 import { migrateDefaultQuoteKind } from '../models/quoteBankMigrations'
-import { migratePMDocuments, migrateVersionsToEssayHistory } from '../models/essaysMigrations'
+import { migrateCommentThreadsIntoDoc, migratePMDocuments, migrateVersionsToEssayHistory } from '../models/essaysMigrations'
 import { SYNCED_COLLECTIONS } from './collections'
 
 /**
@@ -65,4 +65,5 @@ export const remoteMigrations: Migration[] = [
   { ...migrateDefaultQuoteKind, version: 6 },
   { ...migrateVersionsToEssayHistory, version: 7 },
   { ...migratePMDocuments, version: 8 },
+  { ...migrateCommentThreadsIntoDoc, version: 9 },
 ]

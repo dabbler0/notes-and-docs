@@ -64,12 +64,14 @@
  * comment to show for it) was a real bug here before `migrateComments` was
  * exported and wired in below, not a merely theoretical one.
  */
+import { Node as PMNode } from 'prosemirror-model'
 import type { Migration } from '../storage/migrations'
 import type { DocStore } from '../storage/types'
 import { getChildIds } from '../lib/childMarkers'
 import { diffSnapshots, snapshotText } from '../lib/essayHistory'
 import { id } from '../lib/id'
-import { migrateEssay, migrateEssayHistory } from '../lib/pmMigration'
+import { migrateEssay, migrateEssayHistory, foldCommentsIntoDoc, refoldEssayHistoryComments } from '../lib/pmMigration'
+import { essaySchema } from '../lib/pmSchema'
 import { migrateComments } from './essaysRepo'
 import type { Essay, EssayCommitEntry, EssayNode, LegacyEssaySnapshot, Source } from './types'
 
@@ -226,4 +228,61 @@ export const migratePMDocuments: Migration = {
   run: migratePMDocumentsRun,
 }
 
-export const essaysMigrations: Migration[] = [migrateVersionsToEssayHistory, migratePMDocuments]
+/**
+ * The follow-up to `migratePMDocuments` above: folds `essay.comments` — a
+ * flat side array that was only ever a transient step in migrating off the
+ * old per-node tree (see that field's own `@deprecated` doc comment in
+ * `models/types.ts`) — directly into `essay.doc` as real `comment_thread`
+ * nodes, via `lib/pmMigration.ts`'s `foldCommentsIntoDoc`, then clears the
+ * field. This is what actually eliminates the two-independently-mutable-
+ * representations design flaw diagnosed this session (an anchor mark and
+ * its own `Comment` record drifting apart — see `pmSchema.ts`'s own doc
+ * comment on `comment_thread`): until this runs, an essay that already went
+ * through `migratePMDocuments` under an older build still has that same
+ * side array sitting there, exactly as exposed before.
+ *
+ * Skips an essay outright once `essay.comments` is already empty/absent —
+ * covers both "never had any comments to begin with" and "already folded by
+ * a previous run of this very migration," so this is safely idempotent
+ * without needing its own separate marker. Also re-walks that essay's
+ * existing `essayHistory` chain (`refoldEssayHistoryComments`) — same
+ * "convert the *entire* history, not just the live doc" principle
+ * `migratePMDocumentsRun` above already follows for the tree->PM
+ * conversion, and for the same reason: reverting into an old commit
+ * shouldn't land on a doc that still has its comments living in a
+ * now-dead side field.
+ *
+ * `foldCommentsIntoDoc`'s own warnings (an orphaned anchor, a missing
+ * section) are deliberately not surfaced anywhere — same precedent
+ * `migratePMDocumentsRun` above already sets for `migrateEssay`'s own
+ * warnings: nothing in this codebase's migration pipeline threads warnings
+ * back to the user today, and the data itself is never silently dropped
+ * either way (every comment this function touches ends up placed
+ * *somewhere* in the doc, worst case at the very end with a warning no one
+ * currently reads — see `foldCommentsIntoDoc`'s own doc comment).
+ */
+async function migrateCommentThreadsIntoDocRun(ctx: DocStore): Promise<void> {
+  const essays = await ctx.list<Essay>(ESSAYS)
+  for (const essay of essays) {
+    if (essay.deleted || !essay.doc || !essay.comments?.length) continue
+    const liveDoc = PMNode.fromJSON(essaySchema, essay.doc)
+    const { doc: folded } = foldCommentsIntoDoc(liveDoc, essay.comments)
+    essay.doc = folded.toJSON()
+    delete essay.comments
+    await ctx.put(ESSAYS, essay)
+
+    const oldCommits = (await ctx.list<EssayCommitEntry>(ESSAY_HISTORY)).filter((c) => c.essayId === essay.id)
+    if (oldCommits.length > 0) {
+      const { commits } = refoldEssayHistoryComments(oldCommits)
+      for (const commit of commits) await ctx.put(ESSAY_HISTORY, commit)
+    }
+  }
+}
+
+export const migrateCommentThreadsIntoDoc: Migration = {
+  version: 7,
+  description: 'essays: fold the separate comments array into real comment_thread nodes inside doc',
+  run: migrateCommentThreadsIntoDocRun,
+}
+
+export const essaysMigrations: Migration[] = [migrateVersionsToEssayHistory, migratePMDocuments, migrateCommentThreadsIntoDoc]

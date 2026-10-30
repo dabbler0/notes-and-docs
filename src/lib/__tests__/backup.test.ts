@@ -11,7 +11,9 @@
  */
 import { beforeEach, describe, expect, it } from 'vitest'
 import JSZip from 'jszip'
+import { Node as PMNode } from 'prosemirror-model'
 import { exportBackup, restoreBackup, type BackupManifest } from '../backup'
+import { essaySchema } from '../pmSchema'
 import { addQuoteToBank, listQuoteBank } from '../../models/quoteBankRepo'
 import { addToGraveyard, listGraveyard } from '../../models/graveyardRepo'
 import { addBookmark, listBookmarksForSource } from '../../models/bookmarkRepo'
@@ -272,8 +274,8 @@ describe('exportBackup includes projects (the essay-grouping collection — see 
   })
 })
 
-describe("exportBackup includes a migrated essay's own doc/comments fields (Essay.doc/Essay.comments — see Essay's own doc comment in models/types.ts)", () => {
-  it('round-trips a migrated essay (doc + comments set) through export + restore — no separate collection needed, they ride along on the essay record itself', async () => {
+describe("exportBackup includes a migrated essay's own doc field (Essay.doc — see Essay's own doc comment in models/types.ts)", () => {
+  it('round-trips a migrated essay through export + restore — no separate collection needed, it rides along on the essay record itself; a pre-fold `comments` side array present on it is folded into real comment_thread nodes in doc, not carried along as a separate field', async () => {
     const essay = await createEssay('Migrated Essay')
     essay.doc = { type: 'doc', content: [{ type: 'section', attrs: { id: essay.rootNodeId }, content: [{ type: 'section_title', content: [{ type: 'text', text: 'Migrated Essay' }] }, { type: 'paragraph', content: [{ type: 'text', text: 'Real PM content.' }] }] }] }
     essay.comments = [{ id: 'c1', parentId: null, sectionId: essay.rootNodeId, anchorKind: 'node', anchorText: '', body: '<p>A comment.</p>', resolved: false, createdAt: now, updatedAt: now }]
@@ -288,8 +290,14 @@ describe("exportBackup includes a migrated essay's own doc/comments fields (Essa
     expect(result.essays).toBe(1)
 
     const restored = (await getEssay(essay.id))!
-    expect(restored.doc).toEqual(essay.doc)
-    expect(restored.comments).toEqual(essay.comments)
+    expect(restored.comments).toBeUndefined()
+    const pm = PMNode.fromJSON(essaySchema, restored.doc)
+    let foundThread = false
+    pm.descendants((n) => {
+      if (n.type.name === 'comment_thread' && n.attrs.id === 'c1') foundThread = true
+    })
+    expect(foundThread).toBe(true)
+    expect(pm.textContent).toContain('Real PM content.')
   })
 })
 
