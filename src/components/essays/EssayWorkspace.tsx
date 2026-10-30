@@ -113,6 +113,8 @@ export function EssayWorkspace({
   const [selectedTextForWordCount, setSelectedTextForWordCount] = useState('')
   const [activeSectionForWordCount, setActiveSectionForWordCount] = useState<PMNode | null>(null)
   const [commentMode, setCommentMode] = useState(false)
+  /** Set to a comment's own id for exactly one render right after `beginComment` creates a *margin*-displayed one — its real editing surface is `CommentsPanel.tsx`'s own detached editor, not anything in the main document (which hides a margin comment's content entirely), so this is what tells that detached editor to focus itself the moment it mounts, instead of leaving the user with no visible place to start typing at all. Cleared by `CommentsPanel` itself once consumed. */
+  const [focusNewCommentId, setFocusNewCommentId] = useState<string | null>(null)
   const [rightPanel, setRightPanel] = useState<'comments' | 'graveyard' | null>('comments')
   const [mobilePanel, setMobilePanel] = useState<'comments' | 'graveyard' | null>(null)
   const viewRef = useRef<EditorView | null>(null)
@@ -159,7 +161,9 @@ export function EssayWorkspace({
       alert('Click into the document first.')
       return
     }
-    beginCommentThread(view, view.state.selection.empty ? 'inline' : 'margin')
+    const displayMode = view.state.selection.empty ? 'inline' : 'margin'
+    const commentId = beginCommentThread(view, displayMode)
+    if (displayMode === 'margin') setFocusNewCommentId(commentId)
   }
 
   /** Selecting text while in comment mode opens the same comment composer the toolbar's own "Comment" button does — this is just the mouseup-triggered shortcut for it that only applies while comment mode is on, and only for a real (non-collapsed) selection. */
@@ -585,7 +589,15 @@ export function EssayWorkspace({
                 </button>
               </div>
               {rightPanel === 'comments' ? (
-                doc && <CommentsPanel doc={doc} view={viewRef.current} scrollRef={docScrollRef} />
+                doc && (
+                  <CommentsPanel
+                    doc={doc}
+                    view={viewRef.current}
+                    scrollRef={docScrollRef}
+                    focusNewCommentId={focusNewCommentId}
+                    onFocusedNewComment={() => setFocusNewCommentId(null)}
+                  />
+                )
               ) : (
                 <GraveyardPanel essayId={essay.id} />
               )}
@@ -626,7 +638,16 @@ export function EssayWorkspace({
             </button>
           </div>
           {mobilePanel === 'comments' ? (
-            doc && <CommentsPanel doc={doc} view={viewRef.current} scrollRef={docScrollRef} mode="list" />
+            doc && (
+              <CommentsPanel
+                doc={doc}
+                view={viewRef.current}
+                scrollRef={docScrollRef}
+                mode="list"
+                focusNewCommentId={focusNewCommentId}
+                onFocusedNewComment={() => setFocusNewCommentId(null)}
+              />
+            )
           ) : (
             <GraveyardPanel essayId={essay.id} mode="list" />
           )}

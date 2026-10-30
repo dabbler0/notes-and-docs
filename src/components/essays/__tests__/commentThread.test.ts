@@ -1,5 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import { Node as PMNode } from 'prosemirror-model'
+import { EditorState, TextSelection } from 'prosemirror-state'
+import type { Transaction } from 'prosemirror-state'
+import type { EditorView } from 'prosemirror-view'
 import { essaySchema } from '../../../lib/pmSchema'
 import {
   findCommentThread,
@@ -10,6 +13,7 @@ import {
   deleteCommentThreadNode,
   topLevelCommentThreads,
   commentAnchorText,
+  beginCommentThread,
 } from '../pmCommands'
 
 const ROOT_ID = 'root-section'
@@ -216,5 +220,81 @@ describe('comment_thread mutators', () => {
     expect(commentAnchorText(docWithEmptyAnchor, 'c1')).toBe('')
     const docWithNoAnchor = parse(docJson([paragraph('hi')]))
     expect(commentAnchorText(docWithNoAnchor, 'c1')).toBeNull()
+  })
+})
+
+/**
+ * A minimal stand-in for a real `EditorView` — `beginCommentThread` only
+ * ever reads `view.state`, calls `view.dispatch(tr)` once, and calls
+ * `view.focus()` — so a plain object with exactly those members, backed by
+ * a real (DOM-free) `EditorState`, exercises the function's actual
+ * position/selection math without needing a real mounted `EditorView`
+ * (which this project's test suite doesn't otherwise construct at all).
+ */
+function fakeView(doc: PMNode, selectionFrom: number, selectionTo = selectionFrom): { view: EditorView; getTransaction: () => Transaction } {
+  const state = EditorState.create({ doc, selection: TextSelection.create(doc, selectionFrom, selectionTo) })
+  let tr: Transaction | null = null
+  const view = {
+    get state() {
+      return tr ? state.apply(tr) : state
+    },
+    dispatch(t: Transaction) {
+      tr = t
+    },
+    focus() {},
+  } as unknown as EditorView
+  return { view, getTransaction: () => tr! }
+}
+
+describe('beginCommentThread — cursor placement', () => {
+  it("lands the main editor's own selection right after the whole node for a margin comment, never inside its (hidden-in-the-main-document) content", () => {
+    const doc = parse(docJson([paragraph('hello world')]))
+    const pos = doc.content.size - 1
+    const { view, getTransaction } = fakeView(doc, pos, pos)
+    beginCommentThread(view, 'margin')
+    const tr = getTransaction()
+    // Find the real comment_thread node's position dynamically rather than hardcoding an id (beginCommentThread mints a fresh uuid).
+    let threadId = ''
+    let threadPos = -1
+    let threadNodeSize = 0
+    tr.doc.descendants((n, p) => {
+      if (n.type.name === 'comment_thread') {
+        threadId = n.attrs.id
+        threadPos = p
+        threadNodeSize = n.nodeSize
+      }
+    })
+    expect(threadId).not.toBe('')
+    expect(tr.selection.from).toBe(threadPos + threadNodeSize)
+  })
+
+  it("lands the selection *inside* the new node's own content for an inline (nothing-selected) comment with no seed text — ready to type directly, since its content is visible right there", () => {
+    const doc = parse(docJson([paragraph('hello world')]))
+    const pos = doc.content.size - 1
+    const { view, getTransaction } = fakeView(doc, pos, pos)
+    beginCommentThread(view, 'inline')
+    const tr = getTransaction()
+    let threadPos = -1
+    tr.doc.descendants((n, p) => {
+      if (n.type.name === 'comment_thread') threadPos = p
+    })
+    expect(tr.selection.from).toBe(threadPos + 1)
+  })
+
+  it('lands the selection right after the whole node for an inline comment too, when seed text is given', () => {
+    const doc = parse(docJson([paragraph('hello world')]))
+    const pos = doc.content.size - 1
+    const { view, getTransaction } = fakeView(doc, pos, pos)
+    beginCommentThread(view, 'inline', undefined, undefined, 'seeded text')
+    const tr = getTransaction()
+    let threadPos = -1
+    let threadNodeSize = 0
+    tr.doc.descendants((n, p) => {
+      if (n.type.name === 'comment_thread') {
+        threadPos = p
+        threadNodeSize = n.nodeSize
+      }
+    })
+    expect(tr.selection.from).toBe(threadPos + threadNodeSize)
   })
 })

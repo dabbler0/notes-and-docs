@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'preact/hooks'
 import { Node as PMNode } from 'prosemirror-model'
-import { EditorState } from 'prosemirror-state'
+import { EditorState, TextSelection } from 'prosemirror-state'
 import { EditorView } from 'prosemirror-view'
 import { baseKeymap, toggleMark } from 'prosemirror-commands'
 import { keymap } from 'prosemirror-keymap'
@@ -40,12 +40,18 @@ export function CommentsPanel({
   view,
   scrollRef,
   mode = 'margin',
+  focusNewCommentId,
+  onFocusedNewComment,
 }: {
   doc: PMNode
   view: EditorView | null
   scrollRef: { current: HTMLDivElement | null }
   /** 'list' is the mobile rendering: comments aren't visible next to the document there (it's a separate full-screen view), so there's no anchor to line a card up with — just a plain scrollable list, same as the pre-margin design. */
   mode?: 'margin' | 'list'
+  /** The id of a margin comment `EssayWorkspace.tsx`'s own `beginComment` just created, if any — its detached editor (`CommentMarginEditor`, below) focuses itself the moment it mounts when this matches its own comment, since that editor is the only place a margin comment's content can actually be typed into at all. */
+  focusNewCommentId?: string | null
+  /** Called once the matching `CommentMarginEditor` has actually focused itself, so the parent can clear `focusNewCommentId` — never refocusing it again later (a scroll, a re-render) just because the id happens to still match. */
+  onFocusedNewComment?: () => void
 }) {
   const panelRef = useRef<HTMLDivElement>(null)
   const innerRef = useRef<HTMLDivElement>(null)
@@ -56,6 +62,15 @@ export function CommentsPanel({
 
   const rows = topLevelCommentThreads(doc).sort((a, b) => b.node.attrs.createdAt - a.node.attrs.createdAt)
   const openCount = rows.filter((r) => !r.node.attrs.resolved).length
+  // An `'inline'`-displayed comment's own content, and its own
+  // resolve/reply/delete toolbar, already render live in the main
+  // document (`pmNodeViews.ts`'s own `CommentThreadView`) — it needs no
+  // row here at all, margin or list view alike; showing one anyway (as
+  // this briefly did) just duplicates it with a second, read-only summary
+  // that has nothing real to do. Only a `'margin'`-displayed comment's
+  // content is actually hidden from the main document, which is the only
+  // reason this panel exists for it in the first place.
+  const marginRows = rows.filter(({ node }) => node.attrs.displayMode === 'margin')
 
   function recompute() {
     if (mode !== 'margin') return
@@ -74,12 +89,12 @@ export function CommentsPanel({
     const deltaTop = scrollRect.top - panelRect.top
 
     const raw: { id: string; top: number }[] = []
-    for (const { node } of rows) {
+    for (const { node } of marginRows) {
       // A top-level comment's own marker (`comment-thread[data-comment-id]`,
       // `pmNodeViews.ts`'s `CommentThreadView`) is always present in the
       // main document, margin or inline display alike — there's no more
       // separate `comment-anchor`/`comment-text` lookup, and no "nothing
-      // to position" case, since every top-level row gets a card now.
+      // to position" case, since every row rendered here gets a card.
       const mark = scrollEl.querySelector(`comment-thread[data-comment-id="${cssEscape(node.attrs.id)}"] > .pm-comment-thread-marker`) as HTMLElement | null
       const anchorEl = isVisible(mark) ? mark : nearestVisibleSectionHeader(scrollEl, doc)
       if (!anchorEl) continue
@@ -133,23 +148,25 @@ export function CommentsPanel({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [doc, mode])
 
-  function scrollToComment(commentId: string) {
-    scrollRef.current?.querySelector(`comment-thread[data-comment-id="${cssEscape(commentId)}"]`)?.scrollIntoView({ behavior: 'smooth', block: 'center' })
-  }
-
   async function handleDelete(commentId: string) {
     if (!view) return
     if (!(await confirmDialog('Delete this comment, and everything replied or commented on it?', { confirmLabel: 'Delete', danger: true }))) return
     deleteCommentThread(view, commentId)
   }
 
-  const cards = rows.map(({ node }) => <CommentRow key={node.attrs.id} doc={doc} view={view} node={node} onDelete={handleDelete} onJumpTo={scrollToComment} />)
+  function handleFocused(commentId: string) {
+    if (focusNewCommentId === commentId) onFocusedNewComment?.()
+  }
+
+  const cards = marginRows.map(({ node }) => (
+    <CommentRow key={node.attrs.id} doc={doc} view={view} node={node} onDelete={handleDelete} autoFocus={focusNewCommentId === node.attrs.id} onFocused={handleFocused} />
+  ))
 
   if (mode === 'list') {
     return (
       <div className="comments-list-view">
         <h2 style={{ marginTop: 0 }}>Comments ({openCount} open)</h2>
-        {rows.length === 0 && <p className="muted">No comments yet. Select some text (or use the Comment button with nothing selected) to leave one.</p>}
+        {marginRows.length === 0 && <p className="muted">No comments yet. Select some text (or use the Comment button with nothing selected) to leave one.</p>}
         {cards}
       </div>
     )
@@ -158,11 +175,11 @@ export function CommentsPanel({
   return (
     <div className="comments-panel" ref={panelRef}>
       <span className="margin-comments-count chip">{openCount} open</span>
-      {rows.length === 0 && <p className="muted margin-comments-empty">No comments yet. Select some text (or use the Comment button with nothing selected) to leave one.</p>}
+      {marginRows.length === 0 && <p className="muted margin-comments-empty">No comments yet. Select some text (or use the Comment button with nothing selected) to leave one.</p>}
       <div className="margin-comments-inner" ref={innerRef} style={{ height: canvasHeight, transform: `translateY(${-scrollTop}px)` }}>
-        {rows.map(({ node }) => (
+        {marginRows.map(({ node }) => (
           <div className="comment-thread-root" key={node.attrs.id} data-comment-thread-id={node.attrs.id} style={{ top: positions.get(node.attrs.id) ?? 0 }}>
-            <CommentRow doc={doc} view={view} node={node} onDelete={handleDelete} onJumpTo={scrollToComment} />
+            <CommentRow doc={doc} view={view} node={node} onDelete={handleDelete} autoFocus={focusNewCommentId === node.attrs.id} onFocused={handleFocused} />
           </div>
         ))}
       </div>
@@ -171,42 +188,37 @@ export function CommentsPanel({
 }
 
 /**
- * One top-level comment's own row in the panel. `displayMode: 'margin'`
- * mounts `CommentMarginEditor` — the comment's real, directly-editable
- * content, just relocated into this panel instead of the main document
- * flow (`pmNodeViews.ts`'s own `CommentThreadView` hides its wrapper there
- * for exactly this case). `displayMode: 'inline'` just shows a summary
- * (the anchor quote, resolved state) with a "scroll to it" link, since the
- * real editable content already lives, visibly, right there in the text.
+ * One top-level comment's own row in the panel — always a `displayMode:
+ * 'margin'` one (`CommentsPanel`'s own `marginRows` filters out every
+ * `'inline'` one before this ever gets called: an inline comment's real,
+ * directly-editable content, and its own resolve/reply/delete toolbar,
+ * already render live in the main document, so it has no row here at
+ * all — see `pmNodeViews.ts`'s own `CommentThreadView`). Mounts
+ * `CommentMarginEditor` — the comment's real, directly-editable content,
+ * just relocated into this panel instead of the main document flow
+ * (`CommentThreadView` hides its own wrapper there for exactly this case).
  */
 function CommentRow({
   doc,
   view,
   node,
   onDelete,
-  onJumpTo,
+  autoFocus,
+  onFocused,
 }: {
   doc: PMNode
   view: EditorView | null
   node: PMNode
   onDelete: (commentId: string) => void
-  onJumpTo: (commentId: string) => void
+  autoFocus: boolean
+  onFocused: (commentId: string) => void
 }) {
   const commentId = node.attrs.id as string
   const anchorText = commentAnchorText(doc, commentId)
   return (
     <div className={`comment-item${node.attrs.resolved ? ' resolved' : ''}`}>
       {anchorText && <div className="anchor">“{anchorText}”</div>}
-      {node.attrs.displayMode === 'margin' && view ? (
-        <CommentMarginEditor mainView={view} commentId={commentId} />
-      ) : (
-        <div className="comment-inline-summary">
-          <p className="muted">Shown inline, in the document text.</p>
-          <button className="icon-btn" title="Scroll to it in the document" onClick={() => onJumpTo(commentId)}>
-            ↳ Jump to it
-          </button>
-        </div>
-      )}
+      {view && <CommentMarginEditor mainView={view} commentId={commentId} autoFocus={autoFocus} onFocused={onFocused} />}
       <button className="icon-btn" title="Delete this comment (and anything nested under it)" onClick={() => onDelete(commentId)}>
         × Delete
       </button>
@@ -240,8 +252,20 @@ function CommentRow({
  * meantime. Its own undo history is local to this detached editor, not
  * threaded onto the main document's — an accepted limitation of the
  * detached-editor shape, same as the official example's own.
+ *
+ * `autoFocus` — true for exactly the one render right after
+ * `EssayWorkspace.tsx`'s own `beginComment` creates this margin comment —
+ * places this mini editor's own selection inside the comment's content and
+ * focuses it, then reports back via `onFocused` so the parent clears the
+ * flag. The *main* document's own selection, for a brand-new margin
+ * comment, already lands right after the whole node rather than inside it
+ * (`pmCommands.ts`'s own `beginCommentThread`) — its content is hidden
+ * there regardless of display mode, so there's nothing to focus into on
+ * that side; this detached editor is the only place a margin comment's
+ * text can actually be typed, and the only thing missing, before this,
+ * was ever actually focusing it.
  */
-function CommentMarginEditor({ mainView, commentId }: { mainView: EditorView; commentId: string }) {
+function CommentMarginEditor({ mainView, commentId, autoFocus, onFocused }: { mainView: EditorView; commentId: string; autoFocus: boolean; onFocused: (commentId: string) => void }) {
   const containerRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
@@ -282,6 +306,23 @@ function CommentMarginEditor({ mainView, commentId }: { mainView: EditorView; co
         mainView.dispatch(mainView.state.tr.replaceWith(freshThread.pos, freshThread.pos + freshThread.node.nodeSize, updatedNode))
       },
     })
+
+    if (autoFocus) {
+      let threadPos = -1
+      let threadNodeSize = 0
+      miniView.state.doc.descendants((n, pos) => {
+        if (n.type.name !== 'comment_thread' || n.attrs.id !== commentId) return true
+        threadPos = pos
+        threadNodeSize = n.nodeSize
+        return false
+      })
+      if (threadPos >= 0) {
+        const endPos = threadPos + threadNodeSize - 1
+        miniView.dispatch(miniView.state.tr.setSelection(TextSelection.near(miniView.state.doc.resolve(endPos), -1)))
+      }
+      miniView.focus()
+      onFocused(commentId)
+    }
 
     return () => miniView.destroy()
     // Deliberately just `[mainView, commentId]` — this effect owns the mini

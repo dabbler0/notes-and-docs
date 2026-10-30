@@ -674,25 +674,44 @@ export function insertCommentThreadNode(doc: PMNode, pos: number, commentId: str
  *
  * `text`, when given, seeds the new comment's own body up front and
  * lands the cursor right *after* the whole new node instead of inside
- * it. Top-level creation never needs this — passing nothing leaves the
- * body empty and the cursor inside it, ready to type directly, no popup,
- * the same way a footnote's body works. But confirmed live: typing
- * immediately after creating a *nested* comment_thread (a reply, or
- * "comment on a span within this comment" — `CommentThreadView`'s own
- * toolbar) doesn't reliably land inside it — ProseMirror's own native-
- * input handling resolves the very next keystroke one level too shallow,
- * into the *parent's* own content, even though the model-level selection
- * set here is already correct immediately beforehand (confirmed by
- * inspecting `view.state.selection` directly, not just the DOM). Nothing
- * about *this* function's own position math is at fault; it's specific
- * to ProseMirror handling a keystroke right after a brand-new nested,
- * non-atom inline NodeView. The reliable fix is not to depend on that at
- * all for a nested comment: `CommentThreadView`'s reply/comment-on-a-span
- * buttons collect the text with a small prompt first (see their own
- * doc comments) and pass it straight in here already-known, so the only
- * thing left to position afterward is the ordinary, unproblematic "right
- * after a node that already has real content" case. Returns the new
- * comment's own id.
+ * it. An `'inline'`-displayed top-level comment with no `text` doesn't
+ * need this — its content renders visibly right there in the main
+ * document (`pmNodeViews.ts`'s own `CommentThreadView`), so leaving the
+ * body empty and the cursor inside it is exactly "ready to type
+ * directly, no popup," the same way a footnote's body works. A
+ * `'margin'`-displayed one is different: its own content is hidden in
+ * the main document no matter what (`CommentThreadView` only shows a
+ * margin comment's body in `CommentsPanel.tsx`'s own detached editor) —
+ * confirmed live, landing the *main* editor's selection inside that
+ * hidden content anyway (as this used to, unconditionally) leaves the
+ * browser with no real place to put a visible caret, and it falls back
+ * to the nearest visible, still-editable sibling instead: the tiny 6px
+ * marker dot, which then visibly "accepts" typed text by wrapping it one
+ * character per line inside its own near-zero width — not a comment
+ * editor at all, just a DOM-focus-resolution accident. So a margin
+ * comment's own cursor always lands right after the whole node instead
+ * (the same safe "node already has real content" case `text` gives any
+ * comment), whether or not `text` was given — the actual place to type is
+ * `CommentsPanel.tsx`'s detached editor, which `EssayWorkspace.tsx`'s own
+ * `beginComment` is responsible for focusing once it mounts.
+ *
+ * Confirmed live, separately: typing immediately after creating a
+ * *nested* comment_thread (a reply, or "comment on a span within this
+ * comment" — `CommentThreadView`'s own toolbar) doesn't reliably land
+ * inside it either, even with `displayMode: 'inline'` — ProseMirror's own
+ * native-input handling resolves the very next keystroke one level too
+ * shallow, into the *parent's* own content, even though the model-level
+ * selection set here is already correct immediately beforehand (confirmed
+ * by inspecting `view.state.selection` directly, not just the DOM).
+ * Nothing about *this* function's own position math is at fault there
+ * either; it's specific to ProseMirror handling a keystroke right after a
+ * brand-new nested, non-atom inline NodeView. The reliable fix is not to
+ * depend on that at all for a nested comment: `CommentThreadView`'s
+ * reply/comment-on-a-span buttons collect the text with a small prompt
+ * first (see their own doc comments) and pass it straight in here
+ * already-known, so the only thing left to position afterward is the
+ * ordinary, unproblematic "right after a node that already has real
+ * content" case. Returns the new comment's own id.
  */
 export function beginCommentThread(view: EditorView, displayMode: 'margin' | 'inline', from?: number, to?: number, text?: string): string {
   const commentId = id()
@@ -713,7 +732,8 @@ export function beginCommentThread(view: EditorView, displayMode: 'margin' | 'in
   }
   const node = buildCommentThreadNode(commentId, displayMode, Date.now(), text)
   tr.insert(threadPos, node)
-  tr.setSelection(TextSelection.create(tr.doc, text ? threadPos + node.nodeSize : threadPos + 1))
+  const landInside = displayMode === 'inline' && !text
+  tr.setSelection(TextSelection.create(tr.doc, landInside ? threadPos + 1 : threadPos + node.nodeSize))
   view.dispatch(tr)
   view.focus()
   return commentId

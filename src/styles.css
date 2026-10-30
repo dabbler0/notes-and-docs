@@ -2222,13 +2222,6 @@ select {
   outline: none;
 }
 
-.comment-inline-summary {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-}
-
 .comment-checkbox-row {
   display: flex;
   align-items: flex-start;
