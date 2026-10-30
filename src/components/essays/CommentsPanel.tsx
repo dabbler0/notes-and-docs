@@ -7,8 +7,7 @@ import { keymap } from 'prosemirror-keymap'
 import { history, undo, redo } from 'prosemirror-history'
 import { essaySchema } from '../../lib/pmSchema'
 import { CommentThreadView, findCommentThreadMarker } from './pmNodeViews'
-import { topLevelCommentThreads, commentAnchorText, findCommentThread, deleteCommentThread } from './pmCommands'
-import { confirmDialog } from '../../lib/confirm'
+import { topLevelCommentThreads, commentAnchorText, findCommentThread } from './pmCommands'
 
 /**
  * Comments shown in the margin, each aligned with its own anchor in the
@@ -148,18 +147,12 @@ export function CommentsPanel({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [doc, mode])
 
-  async function handleDelete(commentId: string) {
-    if (!view) return
-    if (!(await confirmDialog('Delete this comment, and everything replied or commented on it?', { confirmLabel: 'Delete', danger: true }))) return
-    deleteCommentThread(view, commentId)
-  }
-
   function handleFocused(commentId: string) {
     if (focusNewCommentId === commentId) onFocusedNewComment?.()
   }
 
   const cards = marginRows.map(({ node }) => (
-    <CommentRow key={node.attrs.id} doc={doc} view={view} node={node} onDelete={handleDelete} autoFocus={focusNewCommentId === node.attrs.id} onFocused={handleFocused} />
+    <CommentRow key={node.attrs.id} doc={doc} view={view} node={node} autoFocus={focusNewCommentId === node.attrs.id} onFocused={handleFocused} />
   ))
 
   if (mode === 'list') {
@@ -179,7 +172,7 @@ export function CommentsPanel({
       <div className="margin-comments-inner" ref={innerRef} style={{ height: canvasHeight, transform: `translateY(${-scrollTop}px)` }}>
         {marginRows.map(({ node }) => (
           <div className="comment-thread-root" key={node.attrs.id} data-comment-thread-id={node.attrs.id} style={{ top: positions.get(node.attrs.id) ?? 0 }}>
-            <CommentRow doc={doc} view={view} node={node} onDelete={handleDelete} autoFocus={focusNewCommentId === node.attrs.id} onFocused={handleFocused} />
+            <CommentRow doc={doc} view={view} node={node} autoFocus={focusNewCommentId === node.attrs.id} onFocused={handleFocused} />
           </div>
         ))}
       </div>
@@ -191,25 +184,26 @@ export function CommentsPanel({
  * One top-level comment's own row in the panel — always a `displayMode:
  * 'margin'` one (`CommentsPanel`'s own `marginRows` filters out every
  * `'inline'` one before this ever gets called: an inline comment's real,
- * directly-editable content, and its own resolve/reply/delete toolbar,
- * already render live in the main document, so it has no row here at
- * all — see `pmNodeViews.ts`'s own `CommentThreadView`). Mounts
- * `CommentMarginEditor` — the comment's real, directly-editable content,
- * just relocated into this panel instead of the main document flow
- * (`CommentThreadView` hides its own wrapper there for exactly this case).
+ * directly-editable content, and its own resolve/delete toolbar, already
+ * render live in the main document, so it has no row here at all — see
+ * `pmNodeViews.ts`'s own `CommentThreadView`). Mounts `CommentMarginEditor`
+ * — the comment's real, directly-editable content, just relocated into
+ * this panel instead of the main document flow (`CommentThreadView` hides
+ * its own wrapper there for exactly this case) — and nothing else: that
+ * editor's own embedded toolbar (resolve, margin/inline toggle, delete) is
+ * the one and only set of comment-level actions, so there's no second,
+ * redundant Delete button sitting outside it.
  */
 function CommentRow({
   doc,
   view,
   node,
-  onDelete,
   autoFocus,
   onFocused,
 }: {
   doc: PMNode
   view: EditorView | null
   node: PMNode
-  onDelete: (commentId: string) => void
   autoFocus: boolean
   onFocused: (commentId: string) => void
 }) {
@@ -219,9 +213,6 @@ function CommentRow({
     <div className={`comment-item${node.attrs.resolved ? ' resolved' : ''}`}>
       {anchorText && <div className="anchor">“{anchorText}”</div>}
       {view && <CommentMarginEditor mainView={view} commentId={commentId} autoFocus={autoFocus} onFocused={onFocused} />}
-      <button className="icon-btn" title="Delete this comment (and anything nested under it)" onClick={() => onDelete(commentId)}>
-        × Delete
-      </button>
     </div>
   )
 }
@@ -237,12 +228,28 @@ function CommentRow({
  * a minimal synthetic `{doc: [section: [section_title, paragraph: [node]]]}`
  * shell, reusing the *same* `essaySchema` instance directly (no parallel
  * schema, no serialization round-trip — the node is already a real
- * `essaySchema` node, just given somewhere valid to sit) so its own nested
- * replies/comments-on-a-span, if any, render through the exact same
- * `CommentThreadView` recursively. `forceVisible: true` on that NodeView is
- * what makes the comment's own content actually show here despite
- * `displayMode: 'margin'` normally hiding it (see that NodeView's own doc
- * comment) — this is the one place that override is used.
+ * `essaySchema` node, just given somewhere valid to sit). `forceVisible:
+ * true` on that NodeView is what makes the comment's own content actually
+ * show here despite `displayMode: 'margin'` normally hiding it (see that
+ * NodeView's own doc comment) — this is the one place that override is
+ * used. The wrapper section's own title has no meaning here (there's no
+ * real section being titled) and would otherwise render as a big,
+ * pointlessly-editable `<h2>` — the `section_title` entry in `nodeViews`
+ * below replaces it with an inert, zero-size placeholder (no `contentDOM`,
+ * so nothing can even be typed into it), existing purely to satisfy the
+ * schema's own `section` content expression, which requires one.
+ *
+ * `comment_thread`'s own `realView` (fifth constructor arg, `pmNodeViews.ts`)
+ * is `mainView` here, not this detached editor's own `miniView` — a
+ * structural edit (delete, promote) dispatched against `miniView` instead
+ * would remove/replace the node from *this* synthetic wrapper doc, which
+ * the `dispatchTransaction` below has no sensible way to translate into an
+ * equivalent edit on the real document (there's no node left at that path
+ * to read back out and sync over) — confirmed live, it throws. Resolving
+ * and toggling margin/inline are plain attribute changes, not restructuring
+ * edits, so those still go through `miniView` as normal (`CommentThreadView`'s
+ * own default, un-overridden `view`) and sync back exactly like any other
+ * local edit.
  *
  * Every local edit re-finds the comment's current position in the *real*
  * document fresh (`findCommentThread`) and writes the updated node back via
@@ -294,14 +301,15 @@ function CommentMarginEditor({ mainView, commentId, autoFocus, onFocused }: { ma
         ],
       }),
       nodeViews: {
-        comment_thread: (node, v, getPos) => new CommentThreadView(node, v, getPos as () => number | undefined, true),
+        comment_thread: (node, v, getPos) => new CommentThreadView(node, v, getPos as () => number | undefined, true, mainView),
+        section_title: () => ({ dom: Object.assign(document.createElement('span'), { style: 'display:none' }) }),
       },
       dispatchTransaction(tr) {
         const newState = miniView.state.apply(tr)
         miniView.updateState(newState)
         if (!tr.docChanged) return
         const freshThread = findCommentThread(mainView.state.doc, commentId)
-        if (!freshThread) return // the comment was deleted elsewhere (e.g. this panel's own Delete button) while this editor was still open
+        if (!freshThread) return // the comment was deleted elsewhere (e.g. its own embedded Delete button, dispatched against mainView directly — see this component's own doc comment) while this editor was still open
         const updatedNode = newState.doc.firstChild!.lastChild!.firstChild!
         mainView.dispatch(mainView.state.tr.replaceWith(freshThread.pos, freshThread.pos + freshThread.node.nodeSize, updatedNode))
       },

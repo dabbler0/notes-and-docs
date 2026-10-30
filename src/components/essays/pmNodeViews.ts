@@ -3,17 +3,7 @@ import { TextSelection } from 'prosemirror-state'
 import type { EditorView, NodeView, ViewMutationRecord } from 'prosemirror-view'
 import { citationLabelOpen } from '../../lib/bibtex'
 import { renderMathHtml } from '../../lib/math'
-import { promptDialog } from '../../lib/prompt'
-import {
-  demoteSectionAt,
-  deleteDivider,
-  setCommentThreadResolved,
-  replyToCommentThread,
-  beginCommentThread,
-  deleteCommentThread,
-  setCommentThreadDisplayMode,
-  promoteCommentThread,
-} from './pmCommands'
+import { demoteSectionAt, deleteDivider, setCommentThreadResolved, deleteCommentThread, setCommentThreadDisplayMode, promoteCommentThread } from './pmCommands'
 import type { Source } from '../../models/types'
 
 /** The one thing `pmCitationArrowPlugin.ts` needs back out of a citation's own DOM — there's no public ProseMirror API to recover a NodeView instance from a position, only its DOM (`view.nodeDOM`), so `CitationView` stashes itself on its own root element for that plugin to read via `getCitationView` below. */
@@ -655,14 +645,17 @@ export class CommentThreadView implements NodeView {
   private modeBtn: HTMLButtonElement
   private getPos: () => number | undefined
   private view: EditorView
+  /** The view a *structural* edit (delete, promote — anything that removes or replaces this node outright, rather than just changing one of its attrs) should actually dispatch against. Defaults to `view` itself; `CommentsPanel.tsx`'s own detached margin editor (`CommentMarginEditor`) passes the *real* main `EditorView` here instead — see this node view's own doc comment on `forceVisible` for why a structural edit dispatched against the detached editor's own synthetic wrapper doc can't work the way an attr change can. */
+  private realView: EditorView
   private node: PMNode
-  /** True only inside `CommentsPanel.tsx`'s own detached margin editor (`CommentMarginEditor`) — the one place a margin-mode top-level comment's own content needs to actually show despite `displayMode: 'margin'` normally hiding it here (the whole reason that detached editor exists at all). Doesn't affect a nested reply/comment-on-a-span, which already always renders in place regardless of this flag. */
+  /** True only inside `CommentsPanel.tsx`'s own detached margin editor (`CommentMarginEditor`) — the one place a margin-mode top-level comment's own content needs to actually show despite `displayMode: 'margin'` normally hiding it here (the whole reason that detached editor exists at all). */
   private forceVisible: boolean
 
-  constructor(node: PMNode, view: EditorView, getPos: () => number | undefined, forceVisible = false) {
+  constructor(node: PMNode, view: EditorView, getPos: () => number | undefined, forceVisible = false, realView?: EditorView) {
     this.node = node
     this.getPos = getPos
     this.view = view
+    this.realView = realView ?? view
     this.forceVisible = forceVisible
     this.dom = document.createElement('comment-thread')
     this.dom.className = 'pm-comment-thread'
@@ -680,37 +673,16 @@ export class CommentThreadView implements NodeView {
     this.modeBtn = buildCommentThreadToolbarButton('→▤', 'Show this comment in the margin instead of inline', () => {
       setCommentThreadDisplayMode(this.view, this.node.attrs.id, this.node.attrs.displayMode === 'inline' ? 'margin' : 'inline')
     })
-    const commentOnSelectionBtn = buildCommentThreadToolbarButton('“”', 'Comment on the selected text within this comment', () => {
-      const { empty, from, to } = this.view.state.selection
-      if (empty) return
-      // Captured before the `await` below, not re-read from
-      // `this.view.state.selection` afterward — see `beginCommentThread`'s
-      // own doc comment on why this is collected via a prompt rather than
-      // left for live typing, and `promptDialog`'s own async gap could in
-      // principle see other edits land first (unlikely, but the captured
-      // range stays valid either way, mapped through nothing in between).
-      promptDialog('Comment on the selected text:').then((text) => {
-        if (!text) return
-        beginCommentThread(this.view, 'inline', from, to, text)
-      })
-    })
-    const replyBtn = buildCommentThreadToolbarButton('↩', 'Reply', () => {
-      const commentId = this.node.attrs.id
-      promptDialog('Write a reply:').then((text) => {
-        if (!text) return
-        replyToCommentThread(this.view, commentId, text)
-      })
-    })
     const promoteBtn = buildCommentThreadToolbarButton('⇧¶', 'Promote to permanent prose (deletes the comment, keeps the text)', () => {
-      promoteCommentThread(this.view, this.node.attrs.id)
+      promoteCommentThread(this.realView, this.node.attrs.id)
     })
-    const deleteBtn = buildCommentThreadToolbarButton('×', 'Delete this comment (and anything nested under it)', () => {
-      deleteCommentThread(this.view, this.node.attrs.id)
+    const deleteBtn = buildCommentThreadToolbarButton('×', 'Delete this comment', () => {
+      deleteCommentThread(this.realView, this.node.attrs.id)
     })
     const toolbar = document.createElement('span')
     toolbar.className = 'pm-comment-thread-toolbar'
     toolbar.contentEditable = 'false'
-    toolbar.append(this.resolveBtn, commentOnSelectionBtn, replyBtn, this.modeBtn, promoteBtn, deleteBtn)
+    toolbar.append(this.resolveBtn, this.modeBtn, promoteBtn, deleteBtn)
 
     this.wrapper.append(this.contentDOM, toolbar)
     this.dom.append(this.marker, this.wrapper)
