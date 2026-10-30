@@ -1,4 +1,4 @@
-import { Schema, type NodeSpec, type MarkSpec } from 'prosemirror-model'
+import { Schema, Node as PMNode, type NodeSpec, type MarkSpec } from 'prosemirror-model'
 
 /**
  * Ported verbatim from the standalone prototype (`pm-editor/src/schema.ts`
@@ -450,3 +450,97 @@ const marks: Record<string, MarkSpec> = {
 }
 
 export const essaySchema = new Schema({ nodes, marks })
+
+/** Loose on purpose — see `lib/pmMigration.ts`'s own identically-named type alias for why: this file only ever reshapes plain JSON here, never real `PMNode` instances. */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+type PMJson = any
+
+/**
+ * Converts a legacy `comment_text`-marked text run (`attrs: { commentId }`)
+ * into a real `comment_thread` node wrapping the exact same content, with
+ * the mark itself stripped. `comment_text` was a mark that existed in this
+ * schema only briefly, mid-session, for a short-lived design where an
+ * inline top-level comment's own body lived directly in the document as
+ * ordinary typable text (right after its `comment_anchor`) rather than as
+ * its own node — superseded by `comment_thread` before this ever shipped
+ * broadly, but a document saved to real storage during that window still
+ * has it, and this schema no longer declares `comment_text` as a mark type
+ * at all, so `Schema#nodeFromJSON` (and therefore `Node.fromJSON`) throws
+ * immediately on any such document — "There is no mark type comment_text
+ * in this schema" — before this function would ever get a chance to run on
+ * it as a real `PMNode`. Has to work on the plain JSON directly, for
+ * exactly that reason, which is also why this lives here next to
+ * `essayDocFromJSON` rather than with every other migration in
+ * `lib/pmMigration.ts` — those all run against already-parseable `PMNode`
+ * trees; this one exists specifically because that path isn't available.
+ *
+ * Adjacent text runs sharing the same `commentId` (an ordinary bold word in
+ * the middle of an otherwise-plain comment body is two text nodes, not
+ * one) are merged into that one node's own content, in document order —
+ * the exact shape a live-created inline comment would already have if it
+ * had been created after `comment_thread` existed, with the mark's own
+ * `commentId` carried over as the new node's `id`. `resolved`/`createdAt`/
+ * `updatedAt` default to `false`/`0`/`0` — not recoverable from the mark
+ * alone — since converting this span at all is enough to make the document
+ * parse again; whatever richer metadata the matching `Comment` record (if
+ * one's still sitting in `essay.comments` — see `models/essaysMigrations.ts`'s
+ * `migrateCommentThreadsIntoDoc`) carries is a separate, later concern this
+ * function knows nothing about, and `foldCommentsIntoDoc`'s own dedup
+ * (skipping a comment id that already has a `comment_thread` node
+ * somewhere in the doc) keeps that later step from ever creating a second,
+ * conflicting node for the same id.
+ */
+function convertLegacyCommentTextSpans(node: PMJson): PMJson {
+  if (node === null || typeof node !== 'object') return node
+  if (Array.isArray(node)) return node.map(convertLegacyCommentTextSpans)
+  const next: PMJson = { ...node }
+  if (Array.isArray(next.content)) {
+    const content = next.content as PMJson[]
+    const result: PMJson[] = []
+    let i = 0
+    while (i < content.length) {
+      const commentId = legacyCommentTextId(content[i])
+      if (commentId) {
+        const group: PMJson[] = []
+        while (i < content.length && legacyCommentTextId(content[i]) === commentId) {
+          group.push(stripCommentTextMark(content[i]))
+          i++
+        }
+        result.push({ type: 'comment_thread', attrs: { id: commentId, resolved: false, createdAt: 0, updatedAt: 0, displayMode: 'inline' }, content: group })
+        continue
+      }
+      result.push(convertLegacyCommentTextSpans(content[i]))
+      i++
+    }
+    next.content = result
+  }
+  return next
+}
+
+function legacyCommentTextId(item: PMJson): string | null {
+  if (item === null || typeof item !== 'object' || item.type !== 'text' || !Array.isArray(item.marks)) return null
+  const mark = (item.marks as PMJson[]).find((m) => m?.type === 'comment_text')
+  return mark?.attrs?.commentId ?? null
+}
+
+function stripCommentTextMark(item: PMJson): PMJson {
+  const marks = (item.marks as PMJson[]).filter((m) => m.type !== 'comment_text')
+  const next = { ...item }
+  if (marks.length) next.marks = marks
+  else delete next.marks
+  return next
+}
+
+/**
+ * The one safe way to turn stored `doc` JSON into a real `PMNode` —
+ * sanitizes a legacy `comment_text` mark out first (see
+ * `convertLegacyCommentTextSpans`'s own doc comment), then parses
+ * normally. Every call site that reads a whole `essay.doc`/historical
+ * snapshot `doc` off of storage and needs the real, live `PMNode` for it
+ * should call this instead of `Node.fromJSON(essaySchema, ...)` directly —
+ * that call throws outright on any already-stored document still carrying
+ * the dead mark, which this avoids.
+ */
+export function essayDocFromJSON(json: unknown): PMNode {
+  return PMNode.fromJSON(essaySchema, convertLegacyCommentTextSpans(json))
+}

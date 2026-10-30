@@ -375,6 +375,35 @@ describe('migrateCommentThreadsIntoDoc', () => {
     expect(found).toBe(true)
   })
 
+  it("converts a stray legacy comment_text-marked span into a real comment_thread node, even when essay.comments is already empty (a document saved during that mark's own short-lived window, with no matching Comment record)", async () => {
+    const { docs } = createFakeBackend()
+    const doc = {
+      type: 'doc',
+      content: [
+        {
+          type: 'section',
+          attrs: { id: 'root' },
+          content: [
+            { type: 'section_title', content: [{ type: 'text', text: 'My Essay' }] },
+            { type: 'paragraph', content: [{ type: 'text', text: 'Comment body.', marks: [{ type: 'comment_text', attrs: { commentId: 'c1' } }] }] },
+          ],
+        },
+      ],
+    }
+    await docs.put('essays', essay({ id: 'e1', title: 'My Essay', rootNodeId: 'root', doc }))
+
+    await migrateCommentThreadsIntoDoc.run(docs)
+
+    const result = (await docs.list<Essay>('essays')).find((e) => e.id === 'e1')!
+    expect(JSON.stringify(result.doc)).not.toContain('comment_text')
+    const pm = PMNode.fromJSON(essaySchema, result.doc) // throws if the mark is still there, or the doc is otherwise invalid
+    let found = false
+    pm.descendants((n) => {
+      if (n.type.name === 'comment_thread' && n.attrs.id === 'c1') found = true
+    })
+    expect(found).toBe(true)
+  })
+
   it('skips an essay with no comments to fold (idempotent)', async () => {
     const { docs } = createFakeBackend()
     const doc = docWithAnchor('ignored')

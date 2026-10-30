@@ -95,8 +95,8 @@ import { notifySyncApplied } from './syncEvents'
 import type { Essay, Source } from '../models/types'
 import { mergeEssayContent, deepEqual, type EssayMergeSnapshot } from '../lib/essayMerge'
 import { addToGraveyard } from '../models/graveyardRepo'
-import { essaySchema } from '../lib/pmSchema'
-import { Node as PMNode, Fragment, DOMSerializer } from 'prosemirror-model'
+import { essaySchema, essayDocFromJSON } from '../lib/pmSchema'
+import { Fragment, DOMSerializer } from 'prosemirror-model'
 
 // How long a single Firestore round trip gets before this gives up on it —
 // long enough that a genuinely slow connection still succeeds, short enough
@@ -793,7 +793,7 @@ interface EssaySyncBase extends EssayMergeSnapshot {
 
 /** Serializes a handful of plain PM JSON nodes (`EssayMergeConflict.nodes` — the losing side of a genuine merge conflict) to HTML via the schema's own `toDOM`, the same technique `pmCommands.ts`'s own `sliceToHtml` uses for "Send to graveyard" — kept as its own small, self-contained helper here rather than importing that one directly, which would mean this data-layer module reaching into `components/essays/` for it. */
 function conflictNodesToHtml(nodes: unknown[]): string {
-  const pmNodes = nodes.map((n) => PMNode.fromJSON(essaySchema, n))
+  const pmNodes = nodes.map((n) => essayDocFromJSON(n))
   const fragment = Fragment.fromArray(pmNodes)
   const dom = DOMSerializer.fromSchema(essaySchema).serializeFragment(fragment)
   const div = document.createElement('div')

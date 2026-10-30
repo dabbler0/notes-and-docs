@@ -35,8 +35,8 @@ import { getChildIds, parseSegments } from './childMarkers'
 import { extractLegacyCitationNote } from './bibtex'
 import { id } from './id'
 import { diffSnapshots, reconstructSnapshot, reconstructSnapshotText } from './essayHistory'
-import { essaySchema } from './pmSchema'
-import { commentAnchorEndPos } from '../components/essays/pmCommands'
+import { essaySchema, essayDocFromJSON } from './pmSchema'
+import { commentAnchorEndPos, findCommentThread } from '../components/essays/pmCommands'
 import type { Comment, Essay, EssayCommitEntry, EssayNode, EssaySnapshot, GraveyardFragment, Source } from '../models/types'
 
 /** Loose on purpose — this file only ever builds plain JSON objects matching `pmSchema.ts`'s own shape, checked for real by round-tripping through `Node.fromJSON(essaySchema, ...)` in tests, not by a parallel hand-maintained TypeScript type here. */
@@ -705,6 +705,14 @@ export function foldCommentsIntoDoc(doc: PMNode, comments: Comment[]): { doc: PM
   const topLevel = comments.filter((c) => c.parentId == null).sort((a, b) => a.createdAt - b.createdAt)
   let tr = new Transform(doc)
   for (const c of topLevel) {
+    // A comment_thread for this id may already be sitting in the doc —
+    // most notably, a legacy `comment_text`-marked span already converted
+    // into one by `essayDocFromJSON` (`pmSchema.ts`'s own doc comment) by
+    // the time this runs, while its matching `Comment` record (with an
+    // empty, never-synced `body` from that same short-lived design) is
+    // still sitting in `comments`. Inserting a second node for the same id
+    // would be a genuine duplicate, not a harmless no-op — skip it instead.
+    if (findCommentThread(tr.doc, c.id)) continue
     const node = buildThreadNode(c)
     if (c.anchorKind === 'text') {
       const endPos = commentAnchorEndPos(tr.doc, c.id)
@@ -856,8 +864,8 @@ export function refoldEssayHistoryComments(oldCommits: EssayCommitEntry[]): { co
     const snapshot: EssaySnapshot = text ? JSON.parse(text) : { title: '', doc: null }
     let foldedDoc = snapshot.doc
     const comments = snapshot.comments ?? []
-    if (snapshot.doc && comments.length > 0) {
-      const liveDoc = PMNode.fromJSON(essaySchema, snapshot.doc)
+    if (snapshot.doc) {
+      const liveDoc = essayDocFromJSON(snapshot.doc)
       const folded = foldCommentsIntoDoc(liveDoc, comments)
       warnings.push(...folded.warnings)
       foldedDoc = folded.doc.toJSON()

@@ -64,14 +64,13 @@
  * comment to show for it) was a real bug here before `migrateComments` was
  * exported and wired in below, not a merely theoretical one.
  */
-import { Node as PMNode } from 'prosemirror-model'
 import type { Migration } from '../storage/migrations'
 import type { DocStore } from '../storage/types'
 import { getChildIds } from '../lib/childMarkers'
 import { diffSnapshots, snapshotText } from '../lib/essayHistory'
 import { id } from '../lib/id'
 import { migrateEssay, migrateEssayHistory, foldCommentsIntoDoc, refoldEssayHistoryComments } from '../lib/pmMigration'
-import { essaySchema } from '../lib/pmSchema'
+import { essayDocFromJSON } from '../lib/pmSchema'
 import { migrateComments } from './essaysRepo'
 import type { Essay, EssayCommitEntry, EssayNode, LegacyEssaySnapshot, Source } from './types'
 
@@ -241,16 +240,30 @@ export const migratePMDocuments: Migration = {
  * through `migratePMDocuments` under an older build still has that same
  * side array sitting there, exactly as exposed before.
  *
- * Skips an essay outright once `essay.comments` is already empty/absent —
- * covers both "never had any comments to begin with" and "already folded by
- * a previous run of this very migration," so this is safely idempotent
- * without needing its own separate marker. Also re-walks that essay's
- * existing `essayHistory` chain (`refoldEssayHistoryComments`) — same
- * "convert the *entire* history, not just the live doc" principle
- * `migratePMDocumentsRun` above already follows for the tree->PM
- * conversion, and for the same reason: reverting into an old commit
- * shouldn't land on a doc that still has its comments living in a
- * now-dead side field.
+ * Skips an essay outright once `essay.comments` is already empty/absent
+ * AND its own stored `doc` JSON has no `comment_text` mark anywhere in it
+ * — covers "never had any comments to begin with," "already folded by a
+ * previous run of this very migration," and "nothing here for the legacy
+ * `comment_text` mark to fix either," so this is safely idempotent
+ * without needing its own separate marker. That check is a cheap string
+ * search on the raw JSON rather than "parse, then compare the result
+ * against the original" — parsing through `essaySchema` fills in every
+ * attr's own default (`section.collapsed`, say) even when nothing else
+ * changed, which would make *every* essay look "changed" by this pass and
+ * get needlessly rewritten. `essayDocFromJSON` is what makes `essay.doc`
+ * parseable at all for an essay saved during the short window
+ * `comment_text` lived in this schema — without it, this migration (and
+ * everything else that reads `essay.doc`) would simply throw on such an
+ * essay, never reaching the comments-array fold this function exists for
+ * in the first place.
+ *
+ * Also re-walks that essay's existing `essayHistory` chain
+ * (`refoldEssayHistoryComments`) whenever anything about the live doc
+ * changed — same "convert the *entire* history, not just the live doc"
+ * principle `migratePMDocumentsRun` above already follows for the
+ * tree->PM conversion, and for the same reason: reverting into an old
+ * commit shouldn't land on a doc that still has its comments living in a
+ * now-dead side field, or still carries the dead `comment_text` mark.
  *
  * `foldCommentsIntoDoc`'s own warnings (an orphaned anchor, a missing
  * section) are deliberately not surfaced anywhere — same precedent
@@ -264,10 +277,17 @@ export const migratePMDocuments: Migration = {
 async function migrateCommentThreadsIntoDocRun(ctx: DocStore): Promise<void> {
   const essays = await ctx.list<Essay>(ESSAYS)
   for (const essay of essays) {
-    if (essay.deleted || !essay.doc || !essay.comments?.length) continue
-    const liveDoc = PMNode.fromJSON(essaySchema, essay.doc)
-    const { doc: folded } = foldCommentsIntoDoc(liveDoc, essay.comments)
-    essay.doc = folded.toJSON()
+    if (essay.deleted || !essay.doc) continue
+    const hadComments = !!essay.comments?.length
+    const hasLegacyCommentText = JSON.stringify(essay.doc).includes('"comment_text"')
+    if (!hadComments && !hasLegacyCommentText) continue
+
+    let liveDoc = essayDocFromJSON(essay.doc)
+    if (hadComments) {
+      const { doc: folded } = foldCommentsIntoDoc(liveDoc, essay.comments!)
+      liveDoc = folded
+    }
+    essay.doc = liveDoc.toJSON()
     delete essay.comments
     await ctx.put(ESSAYS, essay)
 

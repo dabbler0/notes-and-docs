@@ -6,7 +6,7 @@ import { keymap } from 'prosemirror-keymap'
 import { history, undo, redo } from 'prosemirror-history'
 import { splitListItem, sinkListItem } from 'prosemirror-schema-list'
 import { Node as PMNode } from 'prosemirror-model'
-import { essaySchema } from '../../lib/pmSchema'
+import { essaySchema, essayDocFromJSON } from '../../lib/pmSchema'
 import { saveEssay } from '../../models/essaysRepo'
 import { createCitationView, SectionView, FootnoteView, CommentThreadView, createMathView, SlideBreakView, FragmentBreakView } from './pmNodeViews'
 import { splitIntoSection, preventJoinIntoSectionTitle, dedupeSectionIds, pasteFlatSectionsFromHtml } from './pmCommands'
@@ -133,7 +133,7 @@ export function PMEssayEditor({
 
   useEffect(() => {
     if (!containerRef.current) return
-    const parsedDoc = PMNode.fromJSON(essaySchema, record.doc)
+    const parsedDoc = essayDocFromJSON(record.doc)
     // Repairs a record whose own stored `doc` *already* has duplicate
     // section ids (see `dedupeSectionIds`'s own doc comment, pmCommands.ts,
     // for the real paste-driven corruption path and its confusing
