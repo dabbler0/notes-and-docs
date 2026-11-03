@@ -118,22 +118,38 @@ export function insertFootnote(view: EditorView): void {
 }
 
 /**
- * A block quote pulled from a source, followed by its own citation — same
- * shape `insertQuote` in the old `EssayWorkspace.tsx` produced
- * (`<blockquote class="quote">` + a citation paragraph right after it).
- * The new `blockquote` node carries no `sourceId`/`page` attrs of its own
- * — same as a migrated essay's own blockquotes never got them either (see
- * `pmMigration.ts`'s own `blockquoteToPM`, which never special-cased a
- * `.quote` class) — the citation node right after it is already the real,
- * structural record of which source/page this quote came from.
+ * A block quote pulled from a source, with its own citation as a second
+ * paragraph nested *inside* the blockquote — right under the quoted text,
+ * not a separate block after it. `blockquote`'s own content model
+ * (`pmSchema.ts`) is `paragraph+`, so this is just two paragraphs instead
+ * of one, both still inside the one `blockquote` node. The new `blockquote`
+ * node carries no `sourceId`/`page` attrs of its own — same as a migrated
+ * essay's own blockquotes never got them either (see `pmMigration.ts`'s
+ * own `blockquoteToPM`, which never special-cased a `.quote` class) — the
+ * citation node is already the real, structural record of which
+ * source/page this quote came from.
+ *
+ * Built as one single node (both paragraphs created up front, inserted in
+ * one `replaceSelectionWith` call) rather than inserting the blockquote
+ * first and the citation paragraph after, at whatever position the
+ * selection happened to land on next — confirmed live, that second step
+ * was a real, if intermittent, bug: `replaceSelectionWith`'s own selection
+ * placement (`Selection.near`, prosemirror-state) searches *forward* for
+ * the nearest valid cursor position, which stays safely inside the
+ * blockquote's own last paragraph when there's more content after it in
+ * the same section, but lands in the *next section entirely* once the
+ * blockquote is the last block in its own section — silently splicing the
+ * citation into whatever section happened to follow instead of under the
+ * quote at all. Building one node with both paragraphs already inside it
+ * sidesteps the whole class of bug: there's no second, independently-
+ * positioned insert left to go wrong.
  */
 export function insertQuoteBlock(view: EditorView, source: Source, quoteText: string, page: number): void {
   const { state } = view
-  const quoteNode = essaySchema.nodes.blockquote.create(null, essaySchema.nodes.paragraph.create(null, essaySchema.text(quoteText)))
   const citationNode = essaySchema.nodes.citation.create({ sourceId: source.id, note: resolveNote(source, { page }) })
   const citationPara = essaySchema.nodes.paragraph.create(null, citationNode)
+  const quoteNode = essaySchema.nodes.blockquote.create(null, [essaySchema.nodes.paragraph.create(null, essaySchema.text(quoteText)), citationPara])
   const tr = state.tr.replaceSelectionWith(quoteNode, false)
-  tr.insert(tr.selection.to, citationPara)
   view.dispatch(tr)
   view.focus()
 }
