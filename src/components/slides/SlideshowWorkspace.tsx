@@ -11,6 +11,7 @@ import { getAuthorName } from '../../lib/authorPreference'
 import { insertCitation, insertQuoteBlock, insertQuoteInline, insertSlideBreak, insertFragmentBreak, splitIntoSection } from '../essays/pmCommands'
 import { PMEssayEditor } from '../essays/PMEssayEditor'
 import { SlidePresenter } from './SlidePresenter'
+import { exportSlideshowPdf } from './exportSlidesPdf'
 import { CitationPickerDialog } from '../essays/CitationPickerDialog'
 import { QuoteInsertDialog } from '../essays/QuoteInsertDialog'
 import { Icon } from '../Icon'
@@ -101,6 +102,14 @@ export function SlideshowWorkspace({ slideshowId, onBack }: { slideshowId: strin
           onBlur={saveTitle}
           style={{ border: 'none', outline: 'none', background: 'transparent', fontSize: 16, fontWeight: 700, flex: 1, minWidth: 0 }}
         />
+        <button
+          className="btn btn-sm"
+          disabled={!doc}
+          title="Open every slide as its own printable page in a new tab, then open the browser's print dialog — choose “Save as PDF.”"
+          onClick={() => doc && exportSlideshowPdf(doc, sources.current, title, getAuthorName())}
+        >
+          ⬇ <span className="btn-label">Export PDF</span>
+        </button>
         <button className="btn btn-primary btn-sm" disabled={!doc} onClick={() => setPresenting(true)}>
           ▶ <span className="btn-label">Present</span>
         </button>
