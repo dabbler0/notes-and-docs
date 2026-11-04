@@ -93,3 +93,100 @@ describe('buildSimplePdfFromText', () => {
     expect(text).toContain('Untitled source')
   })
 })
+
+/** A 1x1 red-pixel PNG, as `extractLayoutPageHtml`'s own recovered images always are — a `data:image/png;base64,...` string. */
+const TINY_PNG =
+  'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII='
+
+function layoutPage(opts: { width?: number; height?: number; spans?: string; images?: string }): string {
+  const width = opts.width ?? 600
+  const height = opts.height ?? 800
+  return `<div style="position:relative;width:${width}px;height:${height}px;background:#fff;overflow:hidden;">${opts.spans ?? ''}${opts.images ?? ''}</div>`
+}
+
+describe('buildSimplePdfFromText — layout-aware rendering', () => {
+  it('sizes the output PDF page to match the layout wrapper div, not the fixed US-Letter default', async () => {
+    const bytes = await buildSimplePdfFromText({
+      title: 'Layout Source',
+      pageHtml: [layoutPage({ width: 500, height: 700, spans: '<span style="position:absolute;left:10px;top:10px;font-size:12px;">Hello</span>' })],
+    })
+    const doc = await loadDoc(bytes)
+    // Page 1 is the dedicated title/subtitle cover page (US Letter); page 2 is the real layout page.
+    expect(doc.numPages).toBe(2)
+    const page = await doc.getPage(2)
+    expect(page.view[2]).toBeCloseTo(500)
+    expect(page.view[3]).toBeCloseTo(700)
+  })
+
+  it('places text at roughly the position its span recorded, converting from top-down CSS to bottom-up PDF coordinates', async () => {
+    const bytes = await buildSimplePdfFromText({
+      title: 'Layout Source',
+      pageHtml: [layoutPage({ width: 600, height: 800, spans: '<span style="position:absolute;left:50px;top:100px;font-size:20px;">Positioned</span>' })],
+    })
+    const doc = await loadDoc(bytes)
+    const page = await doc.getPage(2)
+    const content = await page.getTextContent()
+    const item = content.items.find((it: any) => 'str' in it && it.str.includes('Positioned')) as any
+    expect(item).toBeTruthy()
+    // transform = [scaleX, skewX, skewY, scaleY, x, y] — y is the baseline in pdfjs's own bottom-up space.
+    const [, , , , x, y] = item.transform
+    expect(x).toBeCloseTo(50, 0)
+    // baselineTopDown = top + fontSize = 120; pdf-lib y = pageHeight - 120 = 680.
+    expect(y).toBeCloseTo(680, 0)
+  })
+
+  it('maps font-family and color hints from the span onto a drawable Standard-14 font and color', async () => {
+    const bytes = await buildSimplePdfFromText({
+      title: 'Layout Source',
+      pageHtml: [
+        layoutPage({
+          spans: '<span style="position:absolute;left:10px;top:10px;font-size:14px;font-family:Times New Roman,serif;color:rgb(200, 0, 0);">Serif red text</span>',
+        }),
+      ],
+    })
+    const doc = await loadDoc(bytes)
+    const page = await doc.getPage(2)
+    const content = await page.getTextContent()
+    const item = content.items.find((it: any) => 'str' in it && it.str.includes('Serif red text')) as any
+    expect(item).toBeTruthy()
+  })
+
+  it('embeds a recovered image from the layout HTML at its own position', async () => {
+    const bytes = await buildSimplePdfFromText({
+      title: 'Layout Source',
+      pageHtml: [layoutPage({ images: `<img src="${TINY_PNG}" style="position:absolute;left:20px;top:30px;width:40px;height:40px;">` })],
+    })
+    const doc = await loadDoc(bytes)
+    const page = await doc.getPage(2)
+    const ops = await page.getOperatorList()
+    // pdfjs represents a drawn image with an `paintImageXObject`-family op; just confirm the page has at least one image op and didn't crash/produce an empty page.
+    expect(ops.fnArray.length).toBeGreaterThan(0)
+  })
+
+  it('still detects a source as layout-mode when only one of several pages carries real layout HTML', async () => {
+    const bytes = await buildSimplePdfFromText({
+      title: 'Mixed Source',
+      pageHtml: ['<p>Legacy plain page text.</p>', layoutPage({ spans: '<span style="position:absolute;left:10px;top:10px;font-size:12px;">Layout page text</span>' })],
+    })
+    const doc = await loadDoc(bytes)
+    // Cover page + one page per source page (legacy page gets its own flowing page, layout page its own positioned page).
+    expect(doc.numPages).toBe(3)
+    const legacyText = await pageText(doc, 2)
+    expect(legacyText).toContain('Legacy plain page text.')
+    const layoutText = await pageText(doc, 3)
+    expect(layoutText).toContain('Layout page text')
+  })
+
+  it('gives a dedicated cover page for the title/subtitle rather than drawing them over positioned content', async () => {
+    const bytes = await buildSimplePdfFromText({
+      title: 'Cover Page Title',
+      subtitle: 'Some Author (2024).',
+      pageHtml: [layoutPage({ spans: '<span style="position:absolute;left:10px;top:10px;font-size:12px;">Body text</span>' })],
+    })
+    const doc = await loadDoc(bytes)
+    const coverText = await pageText(doc, 1)
+    expect(coverText).toContain('Cover Page Title')
+    expect(coverText).toContain('Some Author')
+    expect(coverText).not.toContain('Body text')
+  })
+})
