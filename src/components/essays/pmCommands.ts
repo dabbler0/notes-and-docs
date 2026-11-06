@@ -265,17 +265,18 @@ function insertEmptySection(state: EditorState, dispatch?: (tr: Transaction) => 
  * own nesting depth.
  */
 /**
- * Shift-Space inside a list item splits the current paragraph into a new
+ * Shift-Enter inside a list item splits the current paragraph into a new
  * paragraph *within that same list item*, rather than starting a new list
  * item the way Enter (bound to `splitListItem`) does — the list-item-local
  * counterpart to `splitIntoSection`'s "new (sub)section" gesture, for
  * multi-paragraph list items. `list_item`'s own schema (`pmSchema.ts`,
  * `content: 'paragraph block*'`) already allows more than one paragraph;
- * nothing before this bound a key to actually produce one. Declines (so
- * Shift-Space falls through to its ordinary behavior — a literal space)
+ * nothing before this bound a key to actually produce one. Declines
  * whenever the cursor isn't directly inside a list item's own paragraph,
  * which keeps this from firing on a plain, non-list paragraph or on a
- * block nested *inside* one (a blockquote dropped into a list item, say).
+ * block nested *inside* one (a blockquote dropped into a list item, say) —
+ * and leaves Shift-Enter's own (unbound, so default-browser) behavior
+ * untouched in those cases.
  */
 export function splitListItemParagraph(state: EditorState, dispatch?: (tr: Transaction) => void): boolean {
   const { $from } = state.selection

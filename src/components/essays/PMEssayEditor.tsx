@@ -173,9 +173,9 @@ export function PMEssayEditor({
           Enter: splitListItem(essaySchema.nodes.list_item),
           // See `splitListItemParagraph`'s own doc comment — a new
           // paragraph *within* the current list item, not a new item.
-          // Declines outside a list item, so Shift-Space still just
-          // types a space anywhere else.
-          'Shift-Space': splitListItemParagraph,
+          // Declines outside a list item, leaving Shift-Enter's own
+          // unbound (default browser) behavior untouched everywhere else.
+          'Shift-Enter': splitListItemParagraph,
           // Captured unconditionally — even outside a list, Tab's default
           // browser behavior (moving focus to the next focusable element
           // entirely out of the editor) is worse than doing nothing, so
