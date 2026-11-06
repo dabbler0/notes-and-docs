@@ -1,6 +1,7 @@
 import { Fragment, Slice, DOMSerializer, DOMParser as PMDOMParser } from 'prosemirror-model'
 import { Transform } from 'prosemirror-transform'
 import { TextSelection } from 'prosemirror-state'
+import { splitBlock } from 'prosemirror-commands'
 import type { EditorState, Transaction } from 'prosemirror-state'
 import type { EditorView } from 'prosemirror-view'
 import type { Node as PMNode, Mark, ResolvedPos } from 'prosemirror-model'
@@ -263,6 +264,26 @@ function insertEmptySection(state: EditorState, dispatch?: (tr: Transaction) => 
  * file) — resolving just inside it (`pos + 1`) lands at this section's
  * own nesting depth.
  */
+/**
+ * Shift-Space inside a list item splits the current paragraph into a new
+ * paragraph *within that same list item*, rather than starting a new list
+ * item the way Enter (bound to `splitListItem`) does — the list-item-local
+ * counterpart to `splitIntoSection`'s "new (sub)section" gesture, for
+ * multi-paragraph list items. `list_item`'s own schema (`pmSchema.ts`,
+ * `content: 'paragraph block*'`) already allows more than one paragraph;
+ * nothing before this bound a key to actually produce one. Declines (so
+ * Shift-Space falls through to its ordinary behavior — a literal space)
+ * whenever the cursor isn't directly inside a list item's own paragraph,
+ * which keeps this from firing on a plain, non-list paragraph or on a
+ * block nested *inside* one (a blockquote dropped into a list item, say).
+ */
+export function splitListItemParagraph(state: EditorState, dispatch?: (tr: Transaction) => void): boolean {
+  const { $from } = state.selection
+  if ($from.parent.type !== essaySchema.nodes.paragraph) return false
+  if ($from.node(-1)?.type !== essaySchema.nodes.list_item) return false
+  return splitBlock(state, dispatch)
+}
+
 export function demoteSectionAt(view: EditorView, pos: number): boolean {
   const $pos = view.state.doc.resolve(pos + 1)
   const sectionDepth = $pos.depth

@@ -9,7 +9,7 @@ import { Node as PMNode } from 'prosemirror-model'
 import { essaySchema, essayDocFromJSON } from '../../lib/pmSchema'
 import { saveEssay } from '../../models/essaysRepo'
 import { createCitationView, SectionView, FootnoteView, CommentThreadView, createMathView, SlideBreakView, FragmentBreakView } from './pmNodeViews'
-import { splitIntoSection, preventJoinIntoSectionTitle, dedupeSectionIds, pasteFlatSectionsFromHtml } from './pmCommands'
+import { splitIntoSection, splitListItemParagraph, preventJoinIntoSectionTitle, dedupeSectionIds, pasteFlatSectionsFromHtml } from './pmCommands'
 import { createCitationArrowPlugin } from './pmCitationArrowPlugin'
 import { createActiveSectionPlugin } from './pmActiveSectionPlugin'
 import { createSectionIdDedupePlugin } from './pmSectionIdPlugin'
@@ -171,6 +171,11 @@ export function PMEssayEditor({
           'Mod-i': toggleMark(essaySchema.marks.em),
           'Mod-u': toggleMark(essaySchema.marks.underline),
           Enter: splitListItem(essaySchema.nodes.list_item),
+          // See `splitListItemParagraph`'s own doc comment — a new
+          // paragraph *within* the current list item, not a new item.
+          // Declines outside a list item, so Shift-Space still just
+          // types a space anywhere else.
+          'Shift-Space': splitListItemParagraph,
           // Captured unconditionally — even outside a list, Tab's default
           // browser behavior (moving focus to the next focusable element
           // entirely out of the editor) is worse than doing nothing, so
