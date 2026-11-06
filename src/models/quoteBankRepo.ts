@@ -62,24 +62,28 @@ export async function getQuoteBankEntry(entryId: string): Promise<QuoteBankEntry
   return backend.docs.get<QuoteBankEntry>(COLLECTION, entryId)
 }
 
-async function createEntry(kind: QuoteBankEntryKind, sourceId: string, page: number, quoteText: string, annotation: string): Promise<QuoteBankEntry> {
+async function createEntry(kind: QuoteBankEntryKind, sourceId: string, page: number, quoteText: string, annotation: string, pageEnd?: number): Promise<QuoteBankEntry> {
   const now = Date.now()
-  const entry: QuoteBankEntry = { id: id(), sourceId, page, quoteText, annotation, kind, createdAt: now, updatedAt: now }
+  const entry: QuoteBankEntry = { id: id(), sourceId, page, quoteText, annotation, kind, createdAt: now, updatedAt: now, ...(pageEnd ? { pageEnd } : {}) }
   await backend.docs.put(COLLECTION, entry)
   return entry
 }
 
 /** Saves a quote-bank quote — a preparation for essay insertion. See
- * `addMarginAnnotation` for the "note to self" counterpart. */
-export async function addQuoteToBank(sourceId: string, page: number, quoteText: string, annotation: string): Promise<QuoteBankEntry> {
-  return createEntry('quote', sourceId, page, quoteText, annotation)
+ * `addMarginAnnotation` for the "note to self" counterpart. `pageEnd`,
+ * when given, is the page range's own last page (see `QuoteBankEntry.pageEnd`'s
+ * own doc comment) — only ever meaningful for a hand-typed page, so the
+ * only caller that ever passes one is `SourceWorkspace.tsx`'s own
+ * no-viewer manual-entry form. */
+export async function addQuoteToBank(sourceId: string, page: number, quoteText: string, annotation: string, pageEnd?: number): Promise<QuoteBankEntry> {
+  return createEntry('quote', sourceId, page, quoteText, annotation, pageEnd)
 }
 
 /** Saves a margin annotation — same shape as a quote-bank quote (see
  * `QuoteBankEntry`'s own doc comment), just tagged `kind: 'annotation'` so
  * it's excluded from the quote bank and the quote-insertion dialog. */
-export async function addMarginAnnotation(sourceId: string, page: number, quoteText: string, annotation: string): Promise<QuoteBankEntry> {
-  return createEntry('annotation', sourceId, page, quoteText, annotation)
+export async function addMarginAnnotation(sourceId: string, page: number, quoteText: string, annotation: string, pageEnd?: number): Promise<QuoteBankEntry> {
+  return createEntry('annotation', sourceId, page, quoteText, annotation, pageEnd)
 }
 
 export async function updateQuoteAnnotation(entry: QuoteBankEntry, annotation: string): Promise<void> {
@@ -89,9 +93,10 @@ export async function updateQuoteAnnotation(entry: QuoteBankEntry, annotation: s
 }
 
 /**
- * Corrects a quote's own `page` after the fact — meant for an entry whose
- * page was typed by hand in the first place (`SourceWorkspace.tsx`'s own
- * `manualPage`, used whenever a source has nothing to highlight a real
+ * Corrects a quote's own `page` (and optionally `pageEnd` — see
+ * `QuoteBankEntry`'s own doc comment) after the fact — meant for an entry
+ * whose page was typed by hand in the first place (`SourceWorkspace.tsx`'s
+ * own `manualPage`, used whenever a source has nothing to highlight a real
  * selection on — see `hasQuotableText`), where there's no PDF/text
  * location it's tied to and a typo is otherwise permanent. Nothing stops
  * calling this on a PDF-derived quote too — `page` is the only location
@@ -99,9 +104,15 @@ export async function updateQuoteAnnotation(entry: QuoteBankEntry, annotation: s
  * re-matches `quoteText` against whichever page this says, rather than
  * any separately-stored coordinates) — but `QuoteBankView.tsx` only
  * exposes the edit control where there's no source viewer to desync from.
+ * `pageEnd` is cleared (not merely left alone) whenever the caller omits
+ * it, so correcting a ranged quote back down to a single page actually
+ * drops the stale range rather than leaving it stranded past the new
+ * `page`.
  */
-export async function updateQuotePage(entry: QuoteBankEntry, page: number): Promise<void> {
+export async function updateQuotePage(entry: QuoteBankEntry, page: number, pageEnd?: number): Promise<void> {
   entry.page = page
+  if (pageEnd) entry.pageEnd = pageEnd
+  else delete entry.pageEnd
   entry.updatedAt = Date.now()
   await backend.docs.put(COLLECTION, entry)
 }

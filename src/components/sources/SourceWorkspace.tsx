@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'preact/hooks'
 import { Modal } from '../Modal'
 import { ReaderMode } from './ReaderMode'
-import { displayAuthors, displayTitle, citationPage, formatBibtex, formatCitation, parseBibtex } from '../../lib/bibtex'
+import { displayAuthors, displayTitle, formatBibtex, formatCitation, parseBibtex, formatPageRangeInput, parsePageRangeInput, pageNote } from '../../lib/bibtex'
 import { downloadBlob, filenameFor } from '../../lib/download'
 import { EpubExportDialog } from './EpubExportDialog'
 import { loadPdf } from '../../lib/pdf'
@@ -88,6 +88,10 @@ export function SourceWorkspace({
   // viewer's own `page` — 0 means "no page given," same convention
   // QuoteInsertDialog's manual-entry path already uses.
   const [manualPage, setManualPage] = useState(0)
+  // See `manualPage`'s own doc comment — the page-*range*'s own last page,
+  // only ever set alongside it by the same text field (`parsePageRangeInput`),
+  // never independently.
+  const [manualPageEnd, setManualPageEnd] = useState<number | undefined>(undefined)
   const [savingQuote, setSavingQuote] = useState(false)
   // Which kind the hand-typed form's own "Added!" confirmation is for —
   // `null` means neither button is mid-confirmation. Two buttons (one per
@@ -391,10 +395,11 @@ export function SourceWorkspace({
     setSavingQuote(true)
     try {
       const save = kind === 'annotation' ? addMarginAnnotation : addQuoteToBank
-      await save(source.id, hasViewer ? page : manualPage, pendingQuote.trim(), quoteAnnotation.trim())
+      await save(source.id, hasViewer ? page : manualPage, pendingQuote.trim(), quoteAnnotation.trim(), hasViewer ? undefined : manualPageEnd)
       setPendingQuote('')
       setQuoteAnnotation('')
       setManualPage(0)
+      setManualPageEnd(undefined)
       setSavedKind(kind)
       refreshQuotes()
       setTimeout(() => setSavedKind(null), 1500)
@@ -730,7 +735,7 @@ export function SourceWorkspace({
           <div className="card quote-bank-card quote-bank-card-clickable" key={q.id} onClick={() => handleViewQuote(q)}>
             <blockquote className={`quote-bank-text${cardClassName ? ` ${cardClassName}` : ''}`}>“{q.quoteText}”</blockquote>
             {q.annotation && <p className="quote-bank-annotation">{q.annotation}</p>}
-            <div className="card-meta">{citationPage(source, q.page) ? `p. ${citationPage(source, q.page)}` : `Page ${q.page}`}</div>
+            <div className="card-meta">{pageNote(source, q.page, q.pageEnd) || (q.pageEnd && q.pageEnd > q.page ? `Pages ${q.page}-${q.pageEnd}` : `Page ${q.page}`)}</div>
             <div className="quote-bank-actions">
               <button
                 type="button"
@@ -874,12 +879,15 @@ export function SourceWorkspace({
                       />
                     </label>
                     <input
-                      type="number"
-                      min="1"
-                      placeholder="Page (optional)"
-                      value={manualPage > 0 ? String(manualPage) : ''}
-                      onInput={(e) => setManualPage(Number((e.target as HTMLInputElement).value) || 0)}
-                      style={{ width: 160, flexShrink: 0 }}
+                      type="text"
+                      placeholder="Page or range (optional) — e.g. 42 or 42-45"
+                      value={manualPage > 0 ? formatPageRangeInput(manualPage, manualPageEnd) : ''}
+                      onInput={(e) => {
+                        const parsed = parsePageRangeInput((e.target as HTMLInputElement).value)
+                        setManualPage(parsed?.page ?? 0)
+                        setManualPageEnd(parsed?.pageEnd)
+                      }}
+                      style={{ width: 220, flexShrink: 0 }}
                     />
                   </div>
                   <input style={{ marginTop: 6 }} placeholder="Note (optional) — why this is worth keeping, or what it's about" value={quoteAnnotation} onInput={(e) => setQuoteAnnotation((e.target as HTMLInputElement).value)} />

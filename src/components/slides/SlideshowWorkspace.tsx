@@ -76,16 +76,16 @@ export function SlideshowWorkspace({ slideshowId, onBack }: { slideshowId: strin
     view.focus()
   }
 
-  function handleInsertQuoteBlock(source: Source, quote: string, page: number) {
+  function handleInsertQuoteBlock(source: Source, quote: string, page: number, pageEnd?: number) {
     setShowQuoteDialog(false)
     sources.current.set(source.id, source)
-    runView((view) => insertQuoteBlock(view, source, quote, page))
+    runView((view) => insertQuoteBlock(view, source, quote, page, pageEnd))
   }
 
-  function handleInsertQuoteInline(source: Source, quote: string, page: number) {
+  function handleInsertQuoteInline(source: Source, quote: string, page: number, pageEnd?: number) {
     setShowQuoteDialog(false)
     sources.current.set(source.id, source)
-    runView((view) => insertQuoteInline(view, source, quote, page))
+    runView((view) => insertQuoteInline(view, source, quote, page, pageEnd))
   }
 
   if (!deck) return <div className="page-pad">Loading…</div>

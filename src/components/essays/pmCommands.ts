@@ -65,8 +65,8 @@ export function preventJoinIntoSectionTitle(state: EditorState): boolean {
 }
 
 /** `citationHtml`'s own `note` formatting (`lib/bibtex.ts`) — an explicit note wins, otherwise `pageNote` derives "p. N" from a page number (empty if the source has no page numbers at all). Shared by every insertion command below, same as the old HTML-chip path shared it through `citationHtml` itself. */
-function resolveNote(source: Source, opts: { note?: string; page?: number }): string | null {
-  const note = opts.note?.trim() || pageNote(source, opts.page)
+function resolveNote(source: Source, opts: { note?: string; page?: number; pageEnd?: number }): string | null {
+  const note = opts.note?.trim() || pageNote(source, opts.page, opts.pageEnd)
   return note || null
 }
 
@@ -145,9 +145,9 @@ export function insertFootnote(view: EditorView): void {
  * sidesteps the whole class of bug: there's no second, independently-
  * positioned insert left to go wrong.
  */
-export function insertQuoteBlock(view: EditorView, source: Source, quoteText: string, page: number): void {
+export function insertQuoteBlock(view: EditorView, source: Source, quoteText: string, page: number, pageEnd?: number): void {
   const { state } = view
-  const citationNode = essaySchema.nodes.citation.create({ sourceId: source.id, note: resolveNote(source, { page }) })
+  const citationNode = essaySchema.nodes.citation.create({ sourceId: source.id, note: resolveNote(source, { page, pageEnd }) })
   const citationPara = essaySchema.nodes.paragraph.create(null, citationNode)
   const quoteNode = essaySchema.nodes.blockquote.create(null, [essaySchema.nodes.paragraph.create(null, essaySchema.text(quoteText)), citationPara])
   const tr = state.tr.replaceSelectionWith(quoteNode, false)
@@ -156,10 +156,10 @@ export function insertQuoteBlock(view: EditorView, source: Source, quoteText: st
 }
 
 /** A quote excerpt set inline, mid-sentence — `quote_inline`-marked text (curly quotes, matching the old app's own rendering) plus the same trailing citation, right at the cursor with no paragraph break. */
-export function insertQuoteInline(view: EditorView, source: Source, quoteText: string, page: number): void {
+export function insertQuoteInline(view: EditorView, source: Source, quoteText: string, page: number, pageEnd?: number): void {
   const { state } = view
   const mark = essaySchema.marks.quote_inline.create({ sourceId: source.id, page })
-  const citationNode = essaySchema.nodes.citation.create({ sourceId: source.id, note: resolveNote(source, { page }) })
+  const citationNode = essaySchema.nodes.citation.create({ sourceId: source.id, note: resolveNote(source, { page, pageEnd }) })
   const tr = state.tr.insertText(`“${quoteText}”`)
   tr.addMark(tr.selection.to - quoteText.length - 2, tr.selection.to, mark)
   tr.insertText(' ')

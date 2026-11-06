@@ -379,9 +379,45 @@ export function citationNoteSeparator(_style: CitationStyle = 'author-date'): st
  * to show, so a caller can splice it straight into a template without an
  * extra null check.
  */
-export function pageNote(source: Source, page: number | undefined): string {
+export function pageNote(source: Source, page: number | undefined, pageEnd?: number): string {
   const p = citationPage(source, page)
-  return p ? `p. ${p}` : ''
+  if (!p) return ''
+  if (pageEnd && page !== undefined && pageEnd > page) {
+    const end = citationPage(source, pageEnd)
+    if (end && end > p) return `pp. ${p}–${end}`
+  }
+  return `p. ${p}`
+}
+
+/**
+ * Parses a hand-typed "page" field that may be a single page ("42") or an
+ * inclusive range ("42-45", "42 – 45", an em/en dash or a plain hyphen, any
+ * amount of surrounding whitespace) — the one place every manual-page-entry
+ * UI (`SourceWorkspace.tsx`'s no-PDF quote form, `QuoteBankView.tsx`'s "Edit
+ * page") turns typed text into `QuoteBankEntry.page`/`pageEnd`. `null` for
+ * anything that isn't a positive whole number (or range of them) at all —
+ * the same "nothing usable was typed" signal every caller already treats as
+ * "leave it alone." A range whose second number isn't strictly greater than
+ * the first collapses to a plain single page (the first number) rather than
+ * either rejecting the whole input or storing a backwards/zero-width range.
+ */
+export function parsePageRangeInput(input: string): { page: number; pageEnd?: number } | null {
+  const trimmed = input.trim()
+  if (!trimmed) return null
+  const range = /^(\d+)\s*[-‐-―]\s*(\d+)$/.exec(trimmed)
+  if (range) {
+    const start = parseInt(range[1], 10)
+    const end = parseInt(range[2], 10)
+    if (!Number.isFinite(start) || start <= 0) return null
+    return Number.isFinite(end) && end > start ? { page: start, pageEnd: end } : { page: start }
+  }
+  const page = parseInt(trimmed, 10)
+  return Number.isFinite(page) && page > 0 ? { page } : null
+}
+
+/** The inverse of `parsePageRangeInput`, for pre-filling an edit field from an already-saved entry — `"42"` or `"42-45"`. */
+export function formatPageRangeInput(page: number, pageEnd?: number): string {
+  return pageEnd && pageEnd > page ? `${page}-${pageEnd}` : String(page)
 }
 
 /**
@@ -453,8 +489,8 @@ export function pageNote(source: Source, page: number | undefined): string {
  * from exported output too, so it never surfaces as a stray invisible
  * character anywhere downstream.
  */
-export function citationHtml(source: Source, opts: { page?: number; note?: string } = {}): string {
-  const note = opts.note?.trim() || pageNote(source, opts.page)
+export function citationHtml(source: Source, opts: { page?: number; pageEnd?: number; note?: string } = {}): string {
+  const note = opts.note?.trim() || pageNote(source, opts.page, opts.pageEnd)
   const base = escapeHtml(citationLabelOpen(source.bibtex))
   const middle = note ? escapeHtml(citationNoteSeparator() + note) : '​'
   const noteAttr = note ? ` data-note="${escapeAttr(note)}"` : ''

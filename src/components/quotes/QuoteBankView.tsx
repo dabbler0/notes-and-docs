@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'preact/hooks'
 import { deleteQuoteFromBank, listQuoteBank, matchesQuoteQuery, updateQuotePage } from '../../models/quoteBankRepo'
 import { hasQuotableText, listSources } from '../../models/sourcesRepo'
-import { citationLabel, citationPage, displayAuthors, displayTitle } from '../../lib/bibtex'
+import { citationLabel, displayAuthors, displayTitle, formatPageRangeInput, parsePageRangeInput, pageNote } from '../../lib/bibtex'
 import { onSyncApplied } from '../../sync/syncEvents'
 import { confirmDialog } from '../../lib/confirm'
 import { promptDialog } from '../../lib/prompt'
@@ -57,13 +57,16 @@ export function QuoteBankView() {
     reload()
   }
 
-  /** Only offered where the page was typed by hand in the first place — see `updateQuotePage`'s own doc comment. */
+  /** Only offered where the page was typed by hand in the first place — see `updateQuotePage`'s own doc comment. Accepts a single page ("42") or an inclusive range ("42-45") — see `parsePageRangeInput`. */
   async function handleEditPage(entry: QuoteBankEntry) {
-    const input = await promptDialog('Page number for this quote?', { defaultValue: entry.page > 0 ? String(entry.page) : '', placeholder: 'e.g. 42' })
+    const input = await promptDialog('Page (or page range) for this quote?', {
+      defaultValue: entry.page > 0 ? formatPageRangeInput(entry.page, entry.pageEnd) : '',
+      placeholder: 'e.g. 42 or 42-45',
+    })
     if (input === null) return
-    const page = parseInt(input.trim(), 10)
-    if (!Number.isFinite(page) || page <= 0) return
-    await updateQuotePage(entry, page)
+    const parsed = parsePageRangeInput(input)
+    if (!parsed) return
+    await updateQuotePage(entry, parsed.page, parsed.pageEnd)
     reload()
   }
 
@@ -96,7 +99,7 @@ export function QuoteBankView() {
                 <blockquote className="quote-bank-text">“{e.quoteText}”</blockquote>
                 {e.annotation && <p className="quote-bank-annotation">{e.annotation}</p>}
                 <div className="card-meta">
-                  {source ? citationLabel(source.bibtex, citationPage(source, e.page) ? `p. ${citationPage(source, e.page)}` : undefined) : '(source no longer available)'}
+                  {source ? citationLabel(source.bibtex, pageNote(source, e.page, e.pageEnd) || undefined) : '(source no longer available)'}
                 </div>
                 <div className="quote-bank-actions">
                   {source && hasQuotableText(source) ? (

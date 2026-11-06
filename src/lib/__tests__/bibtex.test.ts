@@ -1,5 +1,16 @@
 import { describe, expect, it } from 'vitest'
-import { citationHtml, citationLabel, citationPage, extractLegacyCitationNote, formatCitation, pageNote, renderCitationLabel, trailingCitationFields } from '../bibtex'
+import {
+  citationHtml,
+  citationLabel,
+  citationPage,
+  extractLegacyCitationNote,
+  formatCitation,
+  formatPageRangeInput,
+  pageNote,
+  parsePageRangeInput,
+  renderCitationLabel,
+  trailingCitationFields,
+} from '../bibtex'
 import type { BibtexEntry, Source } from '../../models/types'
 
 function source(overrides: Partial<Source> = {}): Source {
@@ -76,6 +87,71 @@ describe('pageNote', () => {
   it('is the empty string, not null, when there is nothing to show', () => {
     expect(pageNote(source(), undefined)).toBe('')
     expect(pageNote(source({ noPageNumbers: true }), 12)).toBe('')
+  })
+
+  it('formats a page range as "pp. N–M" when pageEnd is strictly past page', () => {
+    expect(pageNote(source(), 42, 45)).toBe('pp. 42–45')
+  })
+
+  it('applies the same offset to both ends of a range', () => {
+    expect(pageNote(source({ pageOffset: 3 }), 42, 45)).toBe('pp. 39–42')
+  })
+
+  it('falls back to a plain single page when pageEnd is not actually past page', () => {
+    expect(pageNote(source(), 42, 42)).toBe('p. 42')
+    expect(pageNote(source(), 42, 40)).toBe('p. 42')
+    expect(pageNote(source(), 42, undefined)).toBe('p. 42')
+  })
+
+  it('omits the page entirely for a no-page-numbers source, even with a range given', () => {
+    expect(pageNote(source({ noPageNumbers: true }), 42, 45)).toBe('')
+  })
+})
+
+describe('parsePageRangeInput', () => {
+  it('parses a single page', () => {
+    expect(parsePageRangeInput('42')).toEqual({ page: 42 })
+    expect(parsePageRangeInput('  42  ')).toEqual({ page: 42 })
+  })
+
+  it('parses a hyphenated range, with or without surrounding whitespace', () => {
+    expect(parsePageRangeInput('42-45')).toEqual({ page: 42, pageEnd: 45 })
+    expect(parsePageRangeInput('42 - 45')).toEqual({ page: 42, pageEnd: 45 })
+    expect(parsePageRangeInput('42-  45')).toEqual({ page: 42, pageEnd: 45 })
+  })
+
+  it('parses an en-dash or em-dash range the same as a hyphen', () => {
+    expect(parsePageRangeInput('42–45')).toEqual({ page: 42, pageEnd: 45 })
+    expect(parsePageRangeInput('42—45')).toEqual({ page: 42, pageEnd: 45 })
+  })
+
+  it('collapses a backwards or zero-width range down to a plain single page, rather than rejecting it', () => {
+    expect(parsePageRangeInput('45-42')).toEqual({ page: 45 })
+    expect(parsePageRangeInput('42-42')).toEqual({ page: 42 })
+  })
+
+  it('returns null for empty, whitespace-only, or non-numeric input', () => {
+    expect(parsePageRangeInput('')).toBeNull()
+    expect(parsePageRangeInput('   ')).toBeNull()
+    expect(parsePageRangeInput('abc')).toBeNull()
+    expect(parsePageRangeInput('0')).toBeNull()
+    expect(parsePageRangeInput('-5')).toBeNull()
+  })
+})
+
+describe('formatPageRangeInput', () => {
+  it('formats a single page with no pageEnd', () => {
+    expect(formatPageRangeInput(42)).toBe('42')
+    expect(formatPageRangeInput(42, undefined)).toBe('42')
+  })
+
+  it('formats a real range as "N-M"', () => {
+    expect(formatPageRangeInput(42, 45)).toBe('42-45')
+  })
+
+  it('falls back to a plain page when pageEnd is not actually past page', () => {
+    expect(formatPageRangeInput(42, 42)).toBe('42')
+    expect(formatPageRangeInput(42, 40)).toBe('42')
   })
 })
 

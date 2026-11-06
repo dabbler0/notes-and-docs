@@ -2,13 +2,13 @@ import { useEffect, useState } from 'preact/hooks'
 import { Modal } from '../Modal'
 import { ReaderMode } from '../sources/ReaderMode'
 import { Icon } from '../Icon'
-import { citationLabel, citationPage, displayAuthors, displayTitle } from '../../lib/bibtex'
+import { citationLabel, displayAuthors, displayTitle, formatPageRangeInput, parsePageRangeInput, pageNote } from '../../lib/bibtex'
 import { describeOcrError, ocrImage } from '../../lib/ocr'
 import { getSource, listSources, matchesSourceQuery, touchSourceViewed } from '../../models/sourcesRepo'
 import { listMarginAnnotationsForSource, listQuoteBank, listQuotesForSource, matchesQuoteQuery } from '../../models/quoteBankRepo'
 import type { QuoteBankEntry, Source } from '../../models/types'
 
-type Picked = { source: Source; quote: string; page: number }
+type Picked = { source: Source; quote: string; page: number; pageEnd?: number }
 
 /**
  * One quote-selection interface feeding two insert actions, rather than two
@@ -25,13 +25,17 @@ export function QuoteInsertDialog({
   onInsertInline,
 }: {
   onClose: () => void
-  onInsertBlock: (source: Source, quote: string, page: number) => void
-  onInsertInline: (source: Source, quote: string, page: number) => void
+  onInsertBlock: (source: Source, quote: string, page: number, pageEnd?: number) => void
+  onInsertInline: (source: Source, quote: string, page: number, pageEnd?: number) => void
 }) {
   const [tab, setTab] = useState<'source' | 'bank'>('source')
   const [pdfSource, setPdfSource] = useState<Source | null>(null)
   const [loadingSource, setLoadingSource] = useState(false)
   const [pdfPage, setPdfPage] = useState(1)
+  // Only ever set via the no-viewer manual page-range field below — a real
+  // drag-selection always lands on one definite page, so nothing else sets
+  // this.
+  const [pdfPageEnd, setPdfPageEnd] = useState<number | undefined>(undefined)
   // Which page a selection actually came from — not necessarily `pdfPage`
   // itself once a two-page spread is showing in `ReaderMode` (see its own
   // `onSelectionChange` doc comment). Falls back to `pdfPage` whenever
@@ -49,8 +53,6 @@ export function QuoteInsertDialog({
   const [picked, setPicked] = useState<Picked | null>(null)
   const [ocrBusy, setOcrBusy] = useState(false)
 
-  const active: Picked | null = tab === 'source' ? (pdfSource ? { source: pdfSource, quote: pdfQuote, page: pdfQuotePage || pdfPage } : null) : picked
-  const quote = active?.quote.trim() ?? ''
   const hasPdf = !!pdfSource?.pdfBlobId
   // A text-only source (its PDF discarded via "Discard PDF, keep text
   // only" — see SourceWorkspace) still has real pages to browse and
@@ -58,6 +60,10 @@ export function QuoteInsertDialog({
   // only a source with neither falls back to typing the quote in by hand.
   const hasExtractedText = !!pdfSource && pdfSource.pageCount > 0
   const hasViewer = hasPdf || hasExtractedText
+
+  const active: Picked | null =
+    tab === 'source' ? (pdfSource ? { source: pdfSource, quote: pdfQuote, page: pdfQuotePage || pdfPage, pageEnd: hasViewer ? undefined : pdfPageEnd } : null) : picked
+  const quote = active?.quote.trim() ?? ''
 
   function refreshHighlightQuotes(sourceId: string) {
     Promise.all([listQuotesForSource(sourceId), listMarginAnnotationsForSource(sourceId)]).then(([qs, anns]) => setHighlightQuotes([...qs, ...anns]))
@@ -73,6 +79,7 @@ export function QuoteInsertDialog({
   async function handlePickSource(s: Source) {
     setPdfQuote('')
     setPdfQuotePage(0)
+    setPdfPageEnd(undefined)
     setLoadingSource(true)
     try {
       const full = (await getSource(s.id)) ?? s
@@ -188,15 +195,16 @@ export function QuoteInsertDialog({
                   />
                 </label>
                 <input
-                  type="number"
-                  min="1"
-                  placeholder="Page (optional)"
-                  value={pdfPage > 0 ? String(pdfPage) : ''}
+                  type="text"
+                  placeholder="Page or range (optional) — e.g. 42 or 42-45"
+                  value={pdfPage > 0 ? formatPageRangeInput(pdfPage, pdfPageEnd) : ''}
                   onInput={(e) => {
-                    setPdfPage(Number((e.target as HTMLInputElement).value) || 0)
+                    const parsed = parsePageRangeInput((e.target as HTMLInputElement).value)
+                    setPdfPage(parsed?.page ?? 0)
+                    setPdfPageEnd(parsed?.pageEnd)
                     setPdfQuotePage(0)
                   }}
-                  style={{ width: 160, flexShrink: 0 }}
+                  style={{ width: 200, flexShrink: 0 }}
                 />
               </div>
             )}
@@ -207,6 +215,7 @@ export function QuoteInsertDialog({
                 setPdfSource(null)
                 setPdfQuote('')
                 setPdfQuotePage(0)
+                setPdfPageEnd(undefined)
                 setHighlightQuotes([])
               }}
             >
@@ -224,10 +233,10 @@ export function QuoteInsertDialog({
         <button className="btn" onClick={onClose}>
           Cancel
         </button>
-        <button className="btn btn-primary" disabled={!quote} onClick={() => active && onInsertBlock(active.source, quote, active.page)}>
+        <button className="btn btn-primary" disabled={!quote} onClick={() => active && onInsertBlock(active.source, quote, active.page, active.pageEnd)}>
           <Icon name="quote" /> Insert as block quote
         </button>
-        <button className="btn btn-primary" disabled={!quote} onClick={() => active && onInsertInline(active.source, quote, active.page)}>
+        <button className="btn btn-primary" disabled={!quote} onClick={() => active && onInsertInline(active.source, quote, active.page, active.pageEnd)}>
           <Icon name="quote-inline" /> Insert as inline quote
         </button>
       </div>
@@ -236,7 +245,7 @@ export function QuoteInsertDialog({
 }
 
 function pickedKey(p: Picked): string {
-  return `${p.source.id}:${p.quote}:${p.page}`
+  return `${p.source.id}:${p.quote}:${p.page}:${p.pageEnd ?? ''}`
 }
 
 /**
@@ -312,13 +321,13 @@ function QuoteBankPicker({ selectedId, onSelect }: { selectedId: string | null; 
           // — it still shows up in the Quotes tab itself, just not offered
           // for insertion here.
           if (!source) return null
-          const key = pickedKey({ source, quote: e.quoteText, page: e.page })
+          const key = pickedKey({ source, quote: e.quoteText, page: e.page, pageEnd: e.pageEnd })
           return (
-            <div className={`card${selectedId === key ? ' card-selected' : ''}`} key={e.id} onClick={() => onSelect({ source, quote: e.quoteText, page: e.page })}>
+            <div className={`card${selectedId === key ? ' card-selected' : ''}`} key={e.id} onClick={() => onSelect({ source, quote: e.quoteText, page: e.page, pageEnd: e.pageEnd })}>
               <div className="card-title">
                 “{e.quoteText.length > 140 ? e.quoteText.slice(0, 140) + '…' : e.quoteText}”
               </div>
-              <div className="card-meta">{citationLabel(source.bibtex, citationPage(source, e.page) ? `p. ${citationPage(source, e.page)}` : undefined)}</div>
+              <div className="card-meta">{citationLabel(source.bibtex, pageNote(source, e.page, e.pageEnd) || undefined)}</div>
               {e.annotation && <div className="card-meta">{e.annotation}</div>}
             </div>
           )

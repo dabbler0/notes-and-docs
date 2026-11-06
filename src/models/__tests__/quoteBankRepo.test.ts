@@ -10,6 +10,7 @@ import {
   listQuoteBank,
   listQuoteBankEntriesForSource,
   listQuotesForSource,
+  updateQuotePage,
 } from '../quoteBankRepo'
 
 interface FakeStorageModule {
@@ -112,5 +113,32 @@ describe('addQuoteToBank / addMarginAnnotation', () => {
     const annotation = await addMarginAnnotation('source-a', 1, 'a note', '')
     expect(quote.kind).toBe('quote')
     expect(annotation.kind).toBe('annotation')
+  })
+
+  it('stores an optional pageEnd for a hand-typed page range', async () => {
+    const quote = await addQuoteToBank('source-a', 42, 'a ranged quote', '', 45)
+    expect(quote.page).toBe(42)
+    expect(quote.pageEnd).toBe(45)
+  })
+
+  it('leaves pageEnd unset entirely when not given, rather than storing it as undefined', async () => {
+    const quote = await addQuoteToBank('source-a', 1, 'a plain quote', '')
+    expect('pageEnd' in quote).toBe(false)
+  })
+})
+
+describe('updateQuotePage', () => {
+  it('sets both page and pageEnd', async () => {
+    const quote = await addQuoteToBank('source-a', 1, 'a quote', '')
+    await updateQuotePage(quote, 42, 45)
+    expect(quote.page).toBe(42)
+    expect(quote.pageEnd).toBe(45)
+  })
+
+  it('clears a previously-set pageEnd when the caller omits it — correcting a ranged quote back down to a single page', async () => {
+    const quote = await addQuoteToBank('source-a', 42, 'a ranged quote', '', 45)
+    await updateQuotePage(quote, 50)
+    expect(quote.page).toBe(50)
+    expect('pageEnd' in quote).toBe(false)
   })
 })

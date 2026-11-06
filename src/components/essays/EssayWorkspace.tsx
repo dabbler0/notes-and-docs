@@ -246,18 +246,18 @@ export function EssayWorkspace({
     if (view) insertCitation(view, source, note)
   }
 
-  function handleInsertQuoteBlock(source: Source, quote: string, page: number) {
+  function handleInsertQuoteBlock(source: Source, quote: string, page: number, pageEnd?: number) {
     setShowQuoteDialog(false)
     sources.set(source.id, source)
     const view = viewRef.current
-    if (view) insertQuoteBlock(view, source, quote, page)
+    if (view) insertQuoteBlock(view, source, quote, page, pageEnd)
   }
 
-  function handleInsertQuoteInline(source: Source, quote: string, page: number) {
+  function handleInsertQuoteInline(source: Source, quote: string, page: number, pageEnd?: number) {
     setShowQuoteDialog(false)
     sources.set(source.id, source)
     const view = viewRef.current
-    if (view) insertQuoteInline(view, source, quote, page)
+    if (view) insertQuoteInline(view, source, quote, page, pageEnd)
   }
 
   function handleInsertSourceLink(source: Source) {

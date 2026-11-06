@@ -137,4 +137,19 @@ describe('insertQuoteBlock', () => {
     expect(firstSection!.childCount).toBe(2) // section_title + the one original paragraph
     expect(secondSection!.childCount).toBe(2)
   })
+
+  it('cites a "pp. N–M" page range when pageEnd is given, not just the starting page', () => {
+    const doc = parse({ type: 'doc', content: [section('root', 'Essay', [paragraph('before')])] })
+    const pos = doc.content.size - 1
+    const { view, getTransaction } = fakeView(doc, pos)
+    insertQuoteBlock(view, source, 'a quoted line', 42, 45)
+    const result = getTransaction().doc
+
+    const bq = findBlockquote(result)!
+    let citationNote: string | null = null
+    bq.node.child(1).forEach((n) => {
+      if (n.type.name === 'citation') citationNote = n.attrs.note
+    })
+    expect(citationNote).toBe('pp. 42–45')
+  })
 })

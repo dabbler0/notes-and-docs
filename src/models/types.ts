@@ -148,6 +148,20 @@ export interface QuoteBankEntry {
   id: string
   sourceId: string
   page: number
+  /**
+   * The last page of an inclusive page *range* this quote was attributed
+   * to ("pp. 42–45" rather than just "p. 42") — set only for a
+   * hand-typed page (see `updateQuotePage`'s own doc comment on why a
+   * PDF/text-derived quote never has one: there's a real highlighted span
+   * there, not freeform text, so "page" already means exactly one page).
+   * Absent — not merely unset — for a single-page attribution, same as
+   * every other optional field here that predates a later addition: a
+   * range is the exception, not the rule, so nothing reads this without
+   * also checking it's actually present (`citationPage`/`pageNote` in
+   * `lib/bibtex.ts` take it as a separate, optional argument rather than
+   * folding it into `page` itself).
+   */
+  pageEnd?: number
   quoteText: string
   /** Free-text note — why this quote was worth keeping, or what this
    * margin annotation is actually about. */
