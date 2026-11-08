@@ -635,15 +635,32 @@ function ReaderPdfPage({
     }
   }, [doc, page, containerSize.width, containerSize.height, searchQuery, activeMatch, quotes])
 
+  // `selectionchange`, not `mouseup` — on a touchscreen, extending a
+  // selection past the initial long-press-selected word happens entirely
+  // through the browser's own native drag handles, which (confirmed live,
+  // iOS/Android) never fire a `mouseup` anywhere in the document while
+  // they're being dragged, only `selectionchange`. A `mouseup`-only
+  // listener saw just the first word, if anything — this fires on every
+  // intermediate step of the drag too (cheap: a `Range` walk over however
+  // much text is currently selected), so the quote bar's own preview stays
+  // live the whole time, settling on the real final selection the moment a
+  // handle is released, same as it already did for a mouse drag. Guarded
+  // to this page's own text layer (`selectionchange` fires for *any*
+  // selection change anywhere in the document, including, say, a drag
+  // inside the page-jump field) — `sel.anchorNode` is where the selection
+  // *started*, which is enough to tell this page's own selection apart
+  // from the other one's in a two-page spread, the same page the previous
+  // `mouseup` listener had no way to distinguish at all.
   useEffect(() => {
     const handler = () => {
       const sel = document.getSelection()
       if (!sel || sel.isCollapsed || sel.rangeCount === 0) return
+      if (!textLayerRef.current || !sel.anchorNode || !textLayerRef.current.contains(sel.anchorNode)) return
       const text = reconstructSelectedText(sel.getRangeAt(0), pageItemsRef.current)
       if (text.trim()) onSelectionChange(text)
     }
-    document.addEventListener('mouseup', handler)
-    return () => document.removeEventListener('mouseup', handler)
+    document.addEventListener('selectionchange', handler)
+    return () => document.removeEventListener('selectionchange', handler)
   }, [onSelectionChange])
 
   if (error) return <p className="empty-state" style={{ color: '#eee' }}>{error}</p>
@@ -720,7 +737,14 @@ function ReaderTextPage({
       doc.querySelector('.text-search-hit-active')?.scrollIntoView({ block: 'center', behavior: 'smooth' })
       setContentBox(measureContentBox(doc))
       if (onSelectionChange) {
-        doc.addEventListener('mouseup', () => {
+        // `selectionchange`, not `mouseup` — see `ReaderPdfPage`'s own
+        // listener (its doc comment covers why touch selection needs
+        // this). Already scoped to this one page: `selectionchange` on an
+        // iframe's own `contentDocument` only ever fires for a selection
+        // made inside that iframe, never the parent document or the other
+        // page in a two-page spread, so no extra containment check is
+        // needed here the way the non-iframe PDF path needs one.
+        doc.addEventListener('selectionchange', () => {
           const sel = doc.getSelection()
           const text = sel ? sel.toString() : ''
           if (text.trim()) onSelectionChange(text)

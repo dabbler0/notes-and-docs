@@ -2919,6 +2919,46 @@ select {
   opacity: 0.08;
 }
 
+/* On a narrow phone screen the fit-to-screen page already fills nearly the
+   whole width, so this strip's full 72px (meant to sit in the unused
+   margin on a wide desktop window) ends up overlapping a real chunk of the
+   page's own content at each edge instead — exactly the text most worth
+   highlighting (the start/end of a line, a margin note) sits underneath an
+   invisible, higher-paint-order tap target for turning the page instead of
+   selecting anything, which is a real part of why touch selection on
+   mobile feels broken rather than just fiddly. Narrowed down to something
+   that still catches an intentional edge tap without eating into the page. */
+@media (max-width: 720px) {
+  .reader-mode-page-nav {
+    width: 28px;
+  }
+}
+
+/* The quote-saving bar (below) packs a preview, a fixed-220px annotation
+   field, and three buttons into one unwrapped row — comfortably fits a
+   desktop window, but on a phone-width screen it simply overflows off the
+   right edge with no wrap, since `display: flex` alone never wraps. The
+   "+ Add to quote bank"/"+ Save as annotation" buttons end up pushed
+   off-screen entirely, so a selection *was* being made and recognized
+   (see `ReaderMode.tsx`'s own `selectionchange` doc comment for the other,
+   detection half of this), there was just nothing reachable on screen to
+   actually act on it with. Wrapping the preview onto its own full-width
+   line, and letting the annotation field shrink instead of holding a fixed
+   220px, keeps every control on screen and reachable. */
+@media (max-width: 720px) {
+  .reader-mode-quote-bar {
+    flex-wrap: wrap;
+    padding: 10px 12px;
+  }
+  .reader-mode-quote-preview {
+    flex-basis: 100%;
+  }
+  .reader-mode-quote-annotation {
+    width: auto;
+    flex: 1 1 120px;
+  }
+}
+
 /* The page indicator/jump control — a little more substantial than a bare
    label (it's also how you jump to a page and switch to a two-page spread),
    but kept in the same low-key register as the exit button: a translucent
