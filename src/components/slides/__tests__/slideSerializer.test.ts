@@ -44,3 +44,30 @@ describe('serializeDeck — title slide', () => {
     expect(slides[0].html).toContain('&lt;b&gt;bold&lt;/b&gt; &amp; more')
   })
 })
+
+describe('serializeDeck — inline quotes', () => {
+  /** `insertQuoteInline` (pmCommands.ts) bakes the surrounding curly quotes into the text itself before applying the mark — exactly reproduced here, rather than a plain `'Quoted text'` with no quote characters at all, since the bug this guards against only shows up with real, already-quoted text underneath the mark. */
+  function quoteInlineDoc(): PMNode {
+    return PMNode.fromJSON(essaySchema, {
+      type: 'doc',
+      content: [
+        section('root', '', [{ type: 'paragraph', content: [{ type: 'text', text: '“Quoted text”', marks: [{ type: 'quote_inline', attrs: { sourceId: 's1', page: 1 } }] }] }]),
+      ],
+    })
+  }
+
+  it('wraps the already-quoted text in a plain styled span, not a <q> element', () => {
+    const slides = serializeDeck(quoteInlineDoc(), noSources, 'My Deck', 'Jane Author')
+    const slideWithQuote = slides.find((s) => s.html.includes('Quoted text'))!
+    expect(slideWithQuote.html).toContain('<span class="slide-quote-inline">“Quoted text”</span>')
+    expect(slideWithQuote.html).not.toContain('<q>')
+    expect(slideWithQuote.html).not.toContain('</q>')
+  })
+
+  it('never doubles the quote characters — exactly the two pairs already in the text, no more', () => {
+    const slides = serializeDeck(quoteInlineDoc(), noSources, 'My Deck', 'Jane Author')
+    const slideWithQuote = slides.find((s) => s.html.includes('Quoted text'))!
+    expect(slideWithQuote.html.match(/“/g)).toHaveLength(1)
+    expect(slideWithQuote.html.match(/”/g)).toHaveLength(1)
+  })
+})
