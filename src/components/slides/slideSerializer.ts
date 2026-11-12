@@ -241,12 +241,13 @@ export interface SerializedSlide {
   notes: string
 }
 
-/** The deck's own fixed opening slide — generated fresh every time from `Slideshow.title` and the globally configured author name (`lib/authorPreference.ts`), never stored as real document content. */
-function renderTitleSlide(deckTitle: string, authorName: string): SerializedSlide {
+/** The deck's own fixed opening slide — generated fresh every time from `Slideshow.title`/`Slideshow.subtitle` and the globally configured author name (`lib/authorPreference.ts`), never stored as real document content. */
+function renderTitleSlide(deckTitle: string, deckSubtitle: string, authorName: string): SerializedSlide {
   return {
     html: `<div class="slide-inner slide-layout-title">
       <div class="title-rule"></div>
       <h1 class="deck-title">${escapeHtml(deckTitle)}</h1>
+      ${deckSubtitle.trim() ? `<div class="deck-subtitle">${escapeHtml(deckSubtitle.trim())}</div>` : ''}
       <div class="title-rule"></div>
       ${authorName ? `<div class="deck-authors">${escapeHtml(authorName)}</div>` : ''}
     </div>`,
@@ -304,9 +305,9 @@ interface SectionContext {
   eyebrow: string
 }
 
-export function serializeDeck(doc: PMNode, sources: Map<string, Source>, deckTitle: string, authorName: string): SerializedSlide[] {
+export function serializeDeck(doc: PMNode, sources: Map<string, Source>, deckTitle: string, authorName: string, deckSubtitle = ''): SerializedSlide[] {
   const citedIds = collectCitedSourceIds(doc)
-  const slides: SerializedSlide[] = [renderTitleSlide(deckTitle, authorName)]
+  const slides: SerializedSlide[] = [renderTitleSlide(deckTitle, deckSubtitle, authorName)]
 
   let acc: SlideAccumulator | null = null
   let fragmentIndex = -1

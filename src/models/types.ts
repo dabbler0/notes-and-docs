@@ -473,6 +473,15 @@ export interface Project {
 export interface Slideshow {
   id: string
   title: string
+  /** Shown under the title on the deck's own generated title slide (see
+   * `slideSerializer.ts`'s `renderTitleSlide`) — a one-line subhead ("A
+   * talk on…", a conference/course name, a date), the same role a
+   * subtitle plays on a paper's own title page. Absent, not merely blank,
+   * for a deck with none: every reader renders it as an empty string
+   * either way, but this keeps a deck created before this field existed
+   * indistinguishable from one where a subtitle was typed in and then
+   * cleared back out. */
+  subtitle?: string
   doc: unknown
   createdAt: number
   updatedAt: number

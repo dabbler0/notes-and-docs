@@ -214,6 +214,13 @@
   margin: 0 0 18px;
 }
 
+.slide-layout-title .deck-subtitle {
+  font-size: 22px;
+  font-weight: 400;
+  color: var(--slide-muted);
+  margin: -8px 0 18px;
+}
+
 .slide-layout-title .deck-authors {
   font-size: 16px;
   color: var(--slide-muted);

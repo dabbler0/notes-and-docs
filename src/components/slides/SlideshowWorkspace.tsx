@@ -31,6 +31,7 @@ import type { Slideshow, Source } from '../../models/types'
 export function SlideshowWorkspace({ slideshowId, onBack }: { slideshowId: string; onBack: () => void }) {
   const [deck, setDeck] = useState<Slideshow | null>(null)
   const [title, setTitle] = useState('')
+  const [subtitle, setSubtitle] = useState('')
   // A stable Map *instance*, never replaced — same reason and same shape as
   // `EssayWorkspace.tsx`'s own `sources` ref: the `citation` NodeView closes
   // over this object once, at mount, and only ever re-renders a chip's own
@@ -51,6 +52,7 @@ export function SlideshowWorkspace({ slideshowId, onBack }: { slideshowId: strin
       if (!d) return
       setDeck(d)
       setTitle(d.title)
+      setSubtitle(d.subtitle ?? '')
     }
     load()
   }, [slideshowId])
@@ -58,6 +60,12 @@ export function SlideshowWorkspace({ slideshowId, onBack }: { slideshowId: strin
   async function saveTitle() {
     if (!deck) return
     deck.title = title
+    await saveSlideshow(deck)
+  }
+
+  async function saveSubtitle() {
+    if (!deck) return
+    deck.subtitle = subtitle
     await saveSlideshow(deck)
   }
 
@@ -96,17 +104,26 @@ export function SlideshowWorkspace({ slideshowId, onBack }: { slideshowId: strin
         <button className="btn btn-ghost btn-sm" onClick={onBack}>
           ← <span className="btn-label">All drafts</span>
         </button>
-        <input
-          value={title}
-          onInput={(e) => setTitle((e.target as HTMLInputElement).value)}
-          onBlur={saveTitle}
-          style={{ border: 'none', outline: 'none', background: 'transparent', fontSize: 16, fontWeight: 700, flex: 1, minWidth: 0 }}
-        />
+        <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minWidth: 0 }}>
+          <input
+            value={title}
+            onInput={(e) => setTitle((e.target as HTMLInputElement).value)}
+            onBlur={saveTitle}
+            style={{ border: 'none', outline: 'none', background: 'transparent', fontSize: 16, fontWeight: 700, width: '100%' }}
+          />
+          <input
+            value={subtitle}
+            onInput={(e) => setSubtitle((e.target as HTMLInputElement).value)}
+            onBlur={saveSubtitle}
+            placeholder="Subtitle (optional) — shown under the title on the title slide"
+            style={{ border: 'none', outline: 'none', background: 'transparent', fontSize: 12.5, color: 'var(--muted)', width: '100%' }}
+          />
+        </div>
         <button
           className="btn btn-sm"
           disabled={!doc}
           title="Open every slide as its own printable page in a new tab, then open the browser's print dialog — choose “Save as PDF.”"
-          onClick={() => doc && exportSlideshowPdf(doc, sources.current, title, getAuthorName())}
+          onClick={() => doc && exportSlideshowPdf(doc, sources.current, title, getAuthorName(), subtitle)}
         >
           ⬇ <span className="btn-label">Export PDF</span>
         </button>
@@ -183,7 +200,7 @@ export function SlideshowWorkspace({ slideshowId, onBack }: { slideshowId: strin
 
       {showQuoteDialog && <QuoteInsertDialog onClose={() => setShowQuoteDialog(false)} onInsertBlock={handleInsertQuoteBlock} onInsertInline={handleInsertQuoteInline} />}
 
-      {presenting && doc && <SlidePresenter doc={doc} sources={sources.current} deckTitle={title} authorName={getAuthorName()} onClose={() => setPresenting(false)} />}
+      {presenting && doc && <SlidePresenter doc={doc} sources={sources.current} deckTitle={title} deckSubtitle={subtitle} authorName={getAuthorName()} onClose={() => setPresenting(false)} />}
     </div>
   )
 }

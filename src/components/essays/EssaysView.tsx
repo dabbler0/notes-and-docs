@@ -504,6 +504,7 @@ export function EssaysView() {
               <div className="card" key={deck.id} onClick={() => setOpenSlideshowId(deck.id)}>
                 <span className="badge">Slideshow</span>
                 <div className="card-title">{deck.title}</div>
+                {deck.subtitle && <div className="card-meta">{deck.subtitle}</div>}
                 <div className="card-meta">Updated {new Date(deck.updatedAt).toLocaleString()}</div>
                 <button className="btn btn-sm btn-ghost btn-danger" style={{ alignSelf: 'flex-start' }} onClick={(ev) => handleDeleteSlideshow(deck.id, ev)}>
                   Delete

@@ -17,12 +17,14 @@ export function SlidePresenter({
   doc,
   sources,
   deckTitle,
+  deckSubtitle,
   authorName,
   onClose,
 }: {
   doc: PMNode
   sources: Map<string, Source>
   deckTitle: string
+  deckSubtitle?: string
   authorName: string
   onClose: () => void
 }) {
@@ -31,7 +33,7 @@ export function SlidePresenter({
 
   useEffect(() => {
     if (!revealRootRef.current || !slidesRef.current) return
-    const slides = serializeDeck(doc, sources, deckTitle, authorName)
+    const slides = serializeDeck(doc, sources, deckTitle, authorName, deckSubtitle)
     slidesRef.current.innerHTML = slides.map((s) => `<section>${s.html}</section>`).join('')
 
     const deck = new Reveal(revealRootRef.current, {
