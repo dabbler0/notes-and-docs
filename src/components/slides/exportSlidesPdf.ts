@@ -38,8 +38,15 @@ function scriptSafe(s: string): string {
  * first becomes current), reveal.js's print view lays out every slide at
  * once, so this just runs over all of them in a single pass.
  */
-export function exportSlideshowPdf(doc: PMNode, sources: Map<string, Source>, deckTitle: string, authorName: string, deckSubtitle = ''): void {
-  const slides = serializeDeck(doc, sources, deckTitle, authorName, deckSubtitle)
+export function exportSlideshowPdf(
+  doc: PMNode,
+  sources: Map<string, Source>,
+  deckTitle: string,
+  authorName: string,
+  deckSubtitle = '',
+  opts: { affiliation?: string; date?: string } = {},
+): void {
+  const slides = serializeDeck(doc, sources, deckTitle, authorName, deckSubtitle, opts)
   const win = window.open('', '_blank')
   if (!win) {
     alert('Your browser blocked the print preview pop-up — allow pop-ups for this page and try again.')

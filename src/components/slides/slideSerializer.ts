@@ -1,5 +1,6 @@
 import type { Node as PMNode } from 'prosemirror-model'
 import { citationLabel, formatCitation } from '../../lib/bibtex'
+import { attributionDateText } from '../../lib/renderDate'
 import type { Source } from '../../models/types'
 
 /**
@@ -249,15 +250,31 @@ export interface SerializedSlide {
   notes: string
 }
 
-/** The deck's own fixed opening slide — generated fresh every time from `Slideshow.title`/`Slideshow.subtitle` and the globally configured author name (`lib/authorPreference.ts`), never stored as real document content. */
-function renderTitleSlide(deckTitle: string, deckSubtitle: string, authorName: string): SerializedSlide {
+/**
+ * The deck's own fixed opening slide — generated fresh every time from
+ * `Slideshow.title`/`Slideshow.subtitle`, the globally configured author
+ * name (`lib/authorPreference.ts`), and optionally an affiliation/date,
+ * never stored as real document content.
+ *
+ * `affiliation`, when given, is appended to the author line itself
+ * ("Jane Author, Some University") — `SlideshowWorkspace.tsx` resolves
+ * whether to pass one at all (the global affiliation, or nothing) via its
+ * own per-present/-export "include affiliation" checkbox. `date` renders
+ * on its own line right beneath, via `attributionDateText`
+ * (`lib/renderDate.ts`) — a specific picked date, or, when absent, today's
+ * own date at render time — so that line always renders whenever the
+ * author line does, same as the essay print export's `.print-date`.
+ */
+function renderTitleSlide(deckTitle: string, deckSubtitle: string, authorName: string, affiliation?: string, date?: string): SerializedSlide {
+  const trimmedAffiliation = affiliation?.trim()
+  const authorLine = trimmedAffiliation ? `${authorName}, ${trimmedAffiliation}` : authorName
   return {
     html: `<div class="slide-inner slide-layout-title">
       <div class="title-rule"></div>
       <h1 class="deck-title">${escapeHtml(deckTitle)}</h1>
       ${deckSubtitle.trim() ? `<div class="deck-subtitle">${escapeHtml(deckSubtitle.trim())}</div>` : ''}
       <div class="title-rule"></div>
-      ${authorName ? `<div class="deck-authors">${escapeHtml(authorName)}</div>` : ''}
+      ${authorName ? `<div class="deck-authors">${escapeHtml(authorLine)}</div><div class="deck-date">${escapeHtml(attributionDateText(date))}</div>` : ''}
     </div>`,
     notes: '',
   }
@@ -313,9 +330,16 @@ interface SectionContext {
   eyebrow: string
 }
 
-export function serializeDeck(doc: PMNode, sources: Map<string, Source>, deckTitle: string, authorName: string, deckSubtitle = ''): SerializedSlide[] {
+export function serializeDeck(
+  doc: PMNode,
+  sources: Map<string, Source>,
+  deckTitle: string,
+  authorName: string,
+  deckSubtitle = '',
+  opts: { affiliation?: string; date?: string } = {},
+): SerializedSlide[] {
   const citedIds = collectCitedSourceIds(doc)
-  const slides: SerializedSlide[] = [renderTitleSlide(deckTitle, deckSubtitle, authorName)]
+  const slides: SerializedSlide[] = [renderTitleSlide(deckTitle, deckSubtitle, authorName, opts.affiliation, opts.date)]
 
   let acc: SlideAccumulator | null = null
   let fragmentIndex = -1

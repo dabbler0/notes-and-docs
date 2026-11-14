@@ -29,3 +29,32 @@ export function setAuthorName(name: string): void {
     /* ignore — purely a per-device convenience, nothing to recover */
   }
 }
+
+/**
+ * The institutional affiliation shown alongside the author name on the
+ * same attribution line — same "global, per-device" shape as
+ * `getAuthorName`/`setAuthorName` above (one value, not re-typed per
+ * essay/slideshow), and the same reasoning for staying in plain
+ * localStorage rather than synced account metadata. Kept entirely
+ * separate from whether it's actually *shown* in any one render — that's
+ * each export/present flow's own per-render checkbox (`ExportDialog.tsx`,
+ * `SlideshowWorkspace.tsx`), not a property of the affiliation string
+ * itself.
+ */
+const AUTHOR_AFFILIATION_KEY = 'marginal.authorAffiliation.v1'
+
+export function getAuthorAffiliation(): string {
+  try {
+    return localStorage.getItem(AUTHOR_AFFILIATION_KEY)?.trim() ?? ''
+  } catch {
+    return ''
+  }
+}
+
+export function setAuthorAffiliation(affiliation: string): void {
+  try {
+    localStorage.setItem(AUTHOR_AFFILIATION_KEY, affiliation.trim())
+  } catch {
+    /* ignore — purely a per-device convenience, nothing to recover */
+  }
+}

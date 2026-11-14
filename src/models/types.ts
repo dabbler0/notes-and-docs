@@ -386,6 +386,20 @@ export interface Essay {
    */
   authorNote?: string
   /**
+   * A specific date to show beneath the author line in a print/PDF
+   * export — an `<input type="date">`'s own "YYYY-MM-DD" value, picked
+   * from `EssayWorkspace`'s own date field sitting next to the author
+   * chip. Absent (not merely blank) means "no specific date chosen" —
+   * every render falls back to the date of the render itself
+   * (`lib/renderDate.ts`'s `attributionDateText`) rather than, say,
+   * showing no date at all; clearing a previously-picked date back out
+   * returns to exactly that same default-to-render-date behavior, not to
+   * "no date line." Same institutional-affiliation-adjacent reasoning as
+   * `authorNote`: shown only alongside a set author name, in every print
+   * mode but Substack.
+   */
+  date?: string
+  /**
    * This essay's own content as a single, real ProseMirror document — the
    * "maximal" single-document model that replaces the old `EssayNode` tree
    * glued together by `childMarkers.ts`'s HTML marker divs (`rootNodeId`,
@@ -482,6 +496,14 @@ export interface Slideshow {
    * indistinguishable from one where a subtitle was typed in and then
    * cleared back out. */
   subtitle?: string
+  /**
+   * A specific date to show beneath the author line on the deck's own
+   * title slide — same "YYYY-MM-DD", same default-to-render-date-when-
+   * absent behavior as `Essay.date`'s own doc comment (`lib/renderDate.ts`'s
+   * `attributionDateText` is the one function both this and that read
+   * through). Picked from `SlideshowWorkspace`'s own date field.
+   */
+  date?: string
   doc: unknown
   createdAt: number
   updatedAt: number

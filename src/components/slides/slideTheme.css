@@ -232,6 +232,13 @@
   line-height: 1.6;
 }
 
+/** Right beneath `.deck-authors` — see `renderTitleSlide`'s own doc comment (`slideSerializer.ts`) for when this renders (always, alongside the author line) and where its text comes from. */
+.slide-layout-title .deck-date {
+  font-size: 14px;
+  color: var(--slide-muted);
+  margin-top: 2px;
+}
+
 /* ---- Bibliography layout ---- */
 
 .bibliography-body {

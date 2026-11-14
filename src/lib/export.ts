@@ -14,6 +14,7 @@ import { citationLabel, citationLabelAuthorTitle, formatBibtex, formatCitation, 
 import { renderMathHtml } from './math'
 import { isAbstractTitle } from './treeNumbering'
 import { nodeFootnotes } from '../models/essaysRepo'
+import { attributionDateText } from './renderDate'
 import type { BibtexEntry, Essay, EssayNode, Source } from '../models/types'
 
 // ---- Markdown --------------------------------------------------------
@@ -833,15 +834,29 @@ export function addPrintChrome(bodyHtml: string): string {
  * `<h1>`/title-rule already in place) and before `floatPrintFootnotes`
  * (needs the `<ol class="print-footnotes">` it adds a `<li>` to, or
  * creates, to still be a real element in the markup it hands back).
+ *
+ * `opts.affiliation`, when given, is appended to the same line after the
+ * author's own name ("Jane Smith, Some University") — `ExportDialog.tsx`
+ * resolves whether to pass one at all (the globally-configured
+ * `lib/authorPreference.ts` value, or nothing) via its own per-export
+ * "include affiliation" checkbox, so this function itself doesn't need
+ * to know that setting exists at all; it just renders whatever string
+ * it's handed, or nothing. `opts.date` adds a second `.print-date` line
+ * right beneath the author line — `attributionDateText`
+ * (`lib/renderDate.ts`) resolves a specific picked date, or (when
+ * `opts.date` is absent — the essay's own "no specific date chosen"
+ * state) today's date at render time, so this line always renders
+ * whenever the author line does.
  */
-export function addAuthorAttribution(bodyHtml: string, authorName: string, authorNote?: string): string {
+export function addAuthorAttribution(bodyHtml: string, authorName: string, opts: { authorNote?: string; affiliation?: string; date?: string } = {}): string {
   const doc = new DOMParser().parseFromString(bodyHtml, 'text/html')
   const h1 = doc.body.querySelector('h1')
   if (!h1) return bodyHtml
   const p = doc.createElement('p')
   p.className = 'print-author'
-  p.appendChild(doc.createTextNode(authorName))
-  const note = authorNote?.trim()
+  const affiliation = opts.affiliation?.trim()
+  p.appendChild(doc.createTextNode(affiliation ? `${authorName}, ${affiliation}` : authorName))
+  const note = opts.authorNote?.trim()
   if (note) {
     const sup = doc.createElement('sup')
     sup.className = 'print-footnote-ref'
@@ -866,6 +881,10 @@ export function addAuthorAttribution(bodyHtml: string, authorName: string, autho
     list.insertBefore(li, list.firstChild)
   }
   h1.after(p)
+  const dateP = doc.createElement('p')
+  dateP.className = 'print-date'
+  dateP.appendChild(doc.createTextNode(attributionDateText(opts.date)))
+  p.after(dateP)
   return doc.body.innerHTML
 }
 

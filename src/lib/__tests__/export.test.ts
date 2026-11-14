@@ -916,9 +916,9 @@ describe('addAuthorAttribution', () => {
     return addPrintChrome(markdownToHtml(essayToMarkdown(makeEssay('root'), new Map([['root', root]]))))
   }
 
-  it('inserts an author line right after the title, before the title rule', () => {
+  it('inserts an author line right after the title, then a date line, before the title rule', () => {
     const html = addAuthorAttribution(renderedTitleAndRule(), 'Jane Author')
-    expect(html).toMatch(/<h1>Test Essay<\/h1><p class="print-author">Jane Author<\/p><hr class="print-title-rule">/)
+    expect(html).toMatch(/<h1>Test Essay<\/h1><p class="print-author">Jane Author<\/p><p class="print-date">[^<]+<\/p><hr class="print-title-rule">/)
   })
 
   it('adds no footnote marker when no author note is given', () => {
@@ -928,13 +928,13 @@ describe('addAuthorAttribution', () => {
   })
 
   it('adds a footnote marker and a matching footnote-list entry when an author note is given', () => {
-    const html = addAuthorAttribution(renderedTitleAndRule(), 'Jane Author', 'Thanks to Bob for comments.')
+    const html = addAuthorAttribution(renderedTitleAndRule(), 'Jane Author', { authorNote: 'Thanks to Bob for comments.' })
     expect(html).toContain('<p class="print-author">Jane Author<sup class="print-footnote-ref"><a href="#fn-authornote">*</a></sup></p>')
     expect(html).toContain('<ol class="print-footnotes"><li id="fn-authornote">Thanks to Bob for comments.</li></ol>')
   })
 
   it('creates the footnote list from scratch when the essay has no other footnotes', () => {
-    const html = addAuthorAttribution(renderedTitleAndRule(), 'Jane Author', 'A note.')
+    const html = addAuthorAttribution(renderedTitleAndRule(), 'Jane Author', { authorNote: 'A note.' })
     expect(html).toContain('<hr><ol class="print-footnotes">')
   })
 
@@ -946,36 +946,57 @@ describe('addAuthorAttribution', () => {
       footnotes: [{ id: 'f1', content: '<p>A real footnote.</p>' }],
     })
     const withChrome = addPrintChrome(markdownToHtml(essayToMarkdown(makeEssay('root'), new Map([['root', root]]))))
-    const html = addAuthorAttribution(withChrome, 'Jane Author', 'An author note.')
+    const html = addAuthorAttribution(withChrome, 'Jane Author', { authorNote: 'An author note.' })
     const list = html.match(/<ol class="print-footnotes">(.*)<\/ol>/)![1]
     expect(list.startsWith('<li id="fn-authornote">An author note.</li>')).toBe(true)
     expect(list).toContain('A real footnote.')
   })
 
   it('escapes the author name and note, and allows basic inline Markdown in the note', () => {
-    const html = addAuthorAttribution(renderedTitleAndRule(), 'Jane <Author>', 'See *this* for more.')
+    const html = addAuthorAttribution(renderedTitleAndRule(), 'Jane <Author>', { authorNote: 'See *this* for more.' })
     expect(html).toContain('<p class="print-author">Jane &lt;Author&gt;<sup')
     expect(html).toContain('<li id="fn-authornote">See <em>this</em> for more.</li>')
   })
 
   it('turns line breaks the author typed into the note into real <br> tags, rather than collapsing them', () => {
-    const html = addAuthorAttribution(renderedTitleAndRule(), 'Jane Author', 'Thanks to Bob.\nAll errors are my own.')
+    const html = addAuthorAttribution(renderedTitleAndRule(), 'Jane Author', { authorNote: 'Thanks to Bob.\nAll errors are my own.' })
     expect(html).toContain('<li id="fn-authornote">Thanks to Bob.<br>All errors are my own.</li>')
   })
 
   it('applies inline Markdown (and escaping) within each line of a multi-line note independently', () => {
-    const html = addAuthorAttribution(renderedTitleAndRule(), 'Jane Author', '*Thanks* to Bob.\nSee <Smith 2020>.')
+    const html = addAuthorAttribution(renderedTitleAndRule(), 'Jane Author', { authorNote: '*Thanks* to Bob.\nSee <Smith 2020>.' })
     expect(html).toContain('<li id="fn-authornote"><em>Thanks</em> to Bob.<br>See &lt;Smith 2020&gt;.</li>')
   })
 
-  it('is a no-op when the note is blank or whitespace-only', () => {
-    const html = addAuthorAttribution(renderedTitleAndRule(), 'Jane Author', '   ')
+  it('is a no-op (for the footnote) when the note is blank or whitespace-only', () => {
+    const html = addAuthorAttribution(renderedTitleAndRule(), 'Jane Author', { authorNote: '   ' })
     expect(html).not.toContain('print-footnote-ref')
   })
 
   it('is a no-op on a body with no <h1> at all', () => {
     const html = addAuthorAttribution('<p>no heading here</p>', 'Jane Author')
     expect(html).toBe('<p>no heading here</p>')
+  })
+
+  it('appends the affiliation to the author line, comma-separated, when given', () => {
+    const html = addAuthorAttribution(renderedTitleAndRule(), 'Jane Author', { affiliation: 'Some University' })
+    expect(html).toContain('<p class="print-author">Jane Author, Some University</p>')
+  })
+
+  it('omits the affiliation entirely when not given, or blank', () => {
+    expect(addAuthorAttribution(renderedTitleAndRule(), 'Jane Author')).toContain('<p class="print-author">Jane Author</p>')
+    expect(addAuthorAttribution(renderedTitleAndRule(), 'Jane Author', { affiliation: '   ' })).toContain('<p class="print-author">Jane Author</p>')
+  })
+
+  it('renders a specific picked date exactly, rather than falling back to today', () => {
+    const html = addAuthorAttribution(renderedTitleAndRule(), 'Jane Author', { date: '2024-03-07' })
+    expect(html).toContain('<p class="print-date">March 7, 2024</p>')
+  })
+
+  it("falls back to today's own date when none is picked", () => {
+    const html = addAuthorAttribution(renderedTitleAndRule(), 'Jane Author')
+    const today = new Date().toLocaleDateString(undefined, { year: 'numeric', month: 'long', day: 'numeric' })
+    expect(html).toContain(`<p class="print-date">${today}</p>`)
   })
 })
 

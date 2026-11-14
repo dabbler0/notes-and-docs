@@ -19,6 +19,8 @@ export function SlidePresenter({
   deckTitle,
   deckSubtitle,
   authorName,
+  deckAffiliation,
+  deckDate,
   onClose,
 }: {
   doc: PMNode
@@ -26,6 +28,9 @@ export function SlidePresenter({
   deckTitle: string
   deckSubtitle?: string
   authorName: string
+  /** Already resolved by the caller (`SlideshowWorkspace.tsx`'s own "include affiliation" checkbox) — omitted entirely when that's unchecked, not merely passed-but-ignored. */
+  deckAffiliation?: string
+  deckDate?: string
   onClose: () => void
 }) {
   const revealRootRef = useRef<HTMLDivElement>(null)
@@ -33,7 +38,7 @@ export function SlidePresenter({
 
   useEffect(() => {
     if (!revealRootRef.current || !slidesRef.current) return
-    const slides = serializeDeck(doc, sources, deckTitle, authorName, deckSubtitle)
+    const slides = serializeDeck(doc, sources, deckTitle, authorName, deckSubtitle, { affiliation: deckAffiliation, date: deckDate })
     slidesRef.current.innerHTML = slides.map((s) => `<section>${s.html}</section>`).join('')
 
     const deck = new Reveal(revealRootRef.current, {

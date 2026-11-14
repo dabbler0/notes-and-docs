@@ -43,6 +43,30 @@ describe('serializeDeck — title slide', () => {
     const slides = serializeDeck(minimalDoc(), noSources, 'My Deck', 'Jane Author', '<b>bold</b> & more')
     expect(slides[0].html).toContain('&lt;b&gt;bold&lt;/b&gt; &amp; more')
   })
+
+  it('appends the affiliation to the author line, comma-separated, when given', () => {
+    const slides = serializeDeck(minimalDoc(), noSources, 'My Deck', 'Jane Author', '', { affiliation: 'Some University' })
+    expect(slides[0].html).toContain('<div class="deck-authors">Jane Author, Some University</div>')
+  })
+
+  it('omits the affiliation entirely when not given, or blank', () => {
+    expect(serializeDeck(minimalDoc(), noSources, 'My Deck', 'Jane Author')[0].html).toContain('<div class="deck-authors">Jane Author</div>')
+    expect(serializeDeck(minimalDoc(), noSources, 'My Deck', 'Jane Author', '', { affiliation: '   ' })[0].html).toContain('<div class="deck-authors">Jane Author</div>')
+  })
+
+  it('renders a specific picked date exactly, rather than falling back to today', () => {
+    const slides = serializeDeck(minimalDoc(), noSources, 'My Deck', 'Jane Author', '', { date: '2024-03-07' })
+    expect(slides[0].html).toContain('<div class="deck-date">March 7, 2024</div>')
+  })
+
+  it("falls back to today's own date when none is picked, but only alongside an author name", () => {
+    const withAuthor = serializeDeck(minimalDoc(), noSources, 'My Deck', 'Jane Author')[0].html
+    const today = new Date().toLocaleDateString(undefined, { year: 'numeric', month: 'long', day: 'numeric' })
+    expect(withAuthor).toContain(`<div class="deck-date">${today}</div>`)
+
+    const withoutAuthor = serializeDeck(minimalDoc(), noSources, 'My Deck', '')[0].html
+    expect(withoutAuthor).not.toContain('deck-date')
+  })
 })
 
 describe('serializeDeck — inline quotes', () => {

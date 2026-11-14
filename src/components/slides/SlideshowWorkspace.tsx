@@ -7,7 +7,7 @@ import './slideTheme.css'
 import { getSlideshow, saveSlideshow } from '../../models/slideshowsRepo'
 import { listSources } from '../../models/sourcesRepo'
 import { essaySchema } from '../../lib/pmSchema'
-import { getAuthorName } from '../../lib/authorPreference'
+import { getAuthorAffiliation, getAuthorName } from '../../lib/authorPreference'
 import { insertCitation, insertQuoteBlock, insertQuoteInline, insertSlideBreak, insertFragmentBreak, splitIntoSection } from '../essays/pmCommands'
 import { PMEssayEditor } from '../essays/PMEssayEditor'
 import { SlidePresenter } from './SlidePresenter'
@@ -32,6 +32,13 @@ export function SlideshowWorkspace({ slideshowId, onBack }: { slideshowId: strin
   const [deck, setDeck] = useState<Slideshow | null>(null)
   const [title, setTitle] = useState('')
   const [subtitle, setSubtitle] = useState('')
+  const [date, setDate] = useState('')
+  // Per-present/-export, not persisted on the deck itself — same "checked
+  // fresh each time, not re-asked-for-every-essay" shape
+  // `ExportDialog.tsx`'s own `includeAffiliation` state uses. Defaults on:
+  // the common case is "yes, show whatever affiliation is configured,"
+  // not "no."
+  const [includeAffiliation, setIncludeAffiliation] = useState(true)
   // A stable Map *instance*, never replaced — same reason and same shape as
   // `EssayWorkspace.tsx`'s own `sources` ref: the `citation` NodeView closes
   // over this object once, at mount, and only ever re-renders a chip's own
@@ -53,6 +60,7 @@ export function SlideshowWorkspace({ slideshowId, onBack }: { slideshowId: strin
       setDeck(d)
       setTitle(d.title)
       setSubtitle(d.subtitle ?? '')
+      setDate(d.date ?? '')
     }
     load()
   }, [slideshowId])
@@ -66,6 +74,14 @@ export function SlideshowWorkspace({ slideshowId, onBack }: { slideshowId: strin
   async function saveSubtitle() {
     if (!deck) return
     deck.subtitle = subtitle
+    await saveSlideshow(deck)
+  }
+
+  /** `value`: an `<input type="date">`'s own "YYYY-MM-DD" value, or `''` to clear it back to "no specific date — default to the render date" (see `Slideshow.date`'s own doc comment). */
+  async function saveDate(value: string) {
+    if (!deck) return
+    setDate(value)
+    deck.date = value || undefined
     await saveSlideshow(deck)
   }
 
@@ -123,13 +139,37 @@ export function SlideshowWorkspace({ slideshowId, onBack }: { slideshowId: strin
           className="btn btn-sm"
           disabled={!doc}
           title="Open every slide as its own printable page in a new tab, then open the browser's print dialog — choose “Save as PDF.”"
-          onClick={() => doc && exportSlideshowPdf(doc, sources.current, title, getAuthorName(), subtitle)}
+          onClick={() => doc && exportSlideshowPdf(doc, sources.current, title, getAuthorName(), subtitle, { affiliation: includeAffiliation ? getAuthorAffiliation() : undefined, date })}
         >
           ⬇ <span className="btn-label">Export PDF</span>
         </button>
         <button className="btn btn-primary btn-sm" disabled={!doc} onClick={() => setPresenting(true)}>
           ▶ <span className="btn-label">Present</span>
         </button>
+      </div>
+
+      {/* The title slide's own author-line settings — a specific date
+          (persisted on the deck, defaulting to the date of the render
+          when left blank — see `Slideshow.date`'s own doc comment) and
+          whether to include the globally-configured institutional
+          affiliation at all (session-only, same as `ExportDialog.tsx`'s
+          own identical checkbox for essays — not every deck by the same
+          author necessarily wants it shown). Applies to both Present and
+          Export PDF, since both render the exact same title slide. */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 16, padding: '8px 20px', borderBottom: '1px solid var(--border)', flexWrap: 'wrap' }}>
+        <label className="muted" style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12.5 }}>
+          Date
+          <input type="date" value={date} onChange={(e) => saveDate((e.target as HTMLInputElement).value)} title="Date shown beneath your name on the title slide — defaults to the render date if left blank" />
+        </label>
+        {date && (
+          <button className="btn btn-ghost btn-sm" title="Clear — defaults back to the date of the render" onClick={() => saveDate('')}>
+            ×
+          </button>
+        )}
+        <label className="muted" style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12.5 }}>
+          <input type="checkbox" checked={includeAffiliation} onChange={(e) => setIncludeAffiliation((e.target as HTMLInputElement).checked)} />
+          Include institutional affiliation
+        </label>
       </div>
 
       <div className="workspace">
@@ -200,7 +240,18 @@ export function SlideshowWorkspace({ slideshowId, onBack }: { slideshowId: strin
 
       {showQuoteDialog && <QuoteInsertDialog onClose={() => setShowQuoteDialog(false)} onInsertBlock={handleInsertQuoteBlock} onInsertInline={handleInsertQuoteInline} />}
 
-      {presenting && doc && <SlidePresenter doc={doc} sources={sources.current} deckTitle={title} deckSubtitle={subtitle} authorName={getAuthorName()} onClose={() => setPresenting(false)} />}
+      {presenting && doc && (
+        <SlidePresenter
+          doc={doc}
+          sources={sources.current}
+          deckTitle={title}
+          deckSubtitle={subtitle}
+          authorName={getAuthorName()}
+          deckAffiliation={includeAffiliation ? getAuthorAffiliation() : undefined}
+          deckDate={date}
+          onClose={() => setPresenting(false)}
+        />
+      )}
     </div>
   )
 }

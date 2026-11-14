@@ -222,6 +222,14 @@ export function EssayWorkspace({
     setEssay({ ...essay })
   }
 
+  /** `date`: an `<input type="date">`'s own "YYYY-MM-DD" value, or `''` to clear it back to "no specific date — default to the render date" (see `Essay.date`'s own doc comment). */
+  async function saveDate(date: string) {
+    if (!essay) return
+    essay.date = date || undefined
+    await saveEssay(essay)
+    setEssay({ ...essay })
+  }
+
   /**
    * "Slideshow" toolbar button — copies this essay's current content into a
    * brand-new `Slideshow` (`createSlideshowFromEssay`'s own doc comment) and
@@ -538,7 +546,7 @@ export function EssayWorkspace({
                 the same reading column `.pm-editor-root .ProseMirror`
                 itself uses (max-width: 760px), rather than in the topbar —
                 it reads as part of the essay, not as a toolbar control. */}
-            <div style={{ maxWidth: 760, marginBottom: 14 }}>
+            <div style={{ maxWidth: 760, marginBottom: 14, display: 'flex', alignItems: 'center', gap: 10 }}>
               <button
                 className="chip"
                 style={{ border: 'none', cursor: 'pointer' }}
@@ -547,6 +555,25 @@ export function EssayWorkspace({
               >
                 <Icon name="footnote" size={13} /> {getAuthorName() || 'No author name set'}
               </button>
+              {/* The date shown beneath the author line in a print/PDF
+                  export (lib/export.ts's addAuthorAttribution) — left
+                  blank, it defaults to the date of the render itself
+                  rather than showing nothing (see Essay.date's own doc
+                  comment); picking one here pins the export to that date
+                  instead, and clearing it back to blank returns to that
+                  same default-to-render-date behavior. */}
+              <input
+                type="date"
+                value={essay.date ?? ''}
+                onInput={(e) => saveDate((e.target as HTMLInputElement).value)}
+                title="Date shown beneath your name in print exports — defaults to the export date if left blank"
+                style={{ fontSize: 12.5 }}
+              />
+              {essay.date && (
+                <button className="btn btn-ghost btn-sm" title="Clear — defaults back to the date of the render" onClick={() => saveDate('')}>
+                  ×
+                </button>
+              )}
             </div>
             <PMEssayEditor
               key={docGeneration}

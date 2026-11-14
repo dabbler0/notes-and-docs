@@ -29,7 +29,7 @@ import {
 } from '../../lib/export'
 import { downloadBlob, filenameFor } from '../../lib/download'
 import { escapeHtml } from '../../lib/html'
-import { getAuthorName } from '../../lib/authorPreference'
+import { getAuthorAffiliation, getAuthorName } from '../../lib/authorPreference'
 import type { Essay, EssayNode, Source } from '../../models/types'
 // Raw CSS/JS text / a base64 data: URI (Vite's `?raw`/`?inline` query
 // suffixes — forced regardless of the normal multi-file build's own
@@ -114,6 +114,7 @@ export function ExportDialog({ essay, nodeMap, doc, onClose }: { essay: Essay; n
   const [bibliographyStyle, setBibliographyStyle] = useState<BibliographyStyle>('chicago')
   const [includeUrlWhenDoi, setIncludeUrlWhenDoi] = useState(true)
   const [printMode, setPrintMode] = useState<PrintMode>('handout')
+  const [includeAffiliation, setIncludeAffiliation] = useState(true)
   const [citationStyle, setCitationStyle] = useState<PrintCitationStyle>('author-year')
   const [citationPlacement, setCitationPlacement] = useState<PrintCitationPlacement>('inline')
   const [busy, setBusy] = useState<'md' | 'pdf' | 'tex' | null>(null)
@@ -215,7 +216,7 @@ export function ExportDialog({ essay, nodeMap, doc, onClose }: { essay: Essay; n
       let rawBodyHtml = addPrintChrome(markdownToHtml(md))
       if (citationPlacement === 'footnote') rawBodyHtml = moveFootnoteCitationsPastPeriod(rawBodyHtml)
       rawBodyHtml = ensureCitationSpacing(rawBodyHtml)
-      if (!substack && authorName) rawBodyHtml = addAuthorAttribution(rawBodyHtml, authorName, essay.authorNote)
+      if (!substack && authorName) rawBodyHtml = addAuthorAttribution(rawBodyHtml, authorName, { authorNote: essay.authorNote, affiliation: includeAffiliation ? getAuthorAffiliation() : undefined, date: essay.date })
       rawBodyHtml += doc ? pmReferencesHtml(doc, sources, bibliographyStyle, numberedReferences, { includeUrlWhenDoi }) : referencesHtml(nodeMap!, sources, bibliographyStyle, numberedReferences, { includeUrlWhenDoi })
       if (mathlikeMode) rawBodyHtml = applyMathlikeHeadings(rawBodyHtml)
       const bodyHtml = substack ? rawBodyHtml : floatPrintFootnotes(rawBodyHtml)
@@ -254,12 +255,17 @@ export function ExportDialog({ essay, nodeMap, doc, onClose }: { essay: Essay; n
            next paragraph's own top one. */
         p { margin: 0 0 ${paragraphMargin}; }
         h3, h4, h5, h6 { margin-top: 1.4em; margin-bottom: 0.3em; }
-        /* The author line addAuthorAttribution() (lib/export.ts) inserts
-           right beneath the title, above its own rule — its own margin
-           here (not the shared p rule above) keeps it snug against the
-           title and the rule on either side rather than taking on a
-           whole paragraph's own spacing. */
-        .print-author { margin: 2px 0 20px; font-style: italic; color: #444; }
+        /* The author line, and the date line right beneath it,
+           addAuthorAttribution() (lib/export.ts) inserts between the
+           title and its own rule — their own margins here (not the
+           shared p rule above) keep the pair snug against the title and
+           the rule on either side rather than each taking on a whole
+           paragraph's own spacing; the 20px gap down to the rule moves
+           onto whichever of the two actually ends up last (always
+           .print-date, since it's only ever added alongside .print-author,
+           never on its own). */
+        .print-author { margin: 2px 0 2px; font-style: italic; color: #444; }
+        .print-date { margin: 0 0 20px; font-style: italic; color: #444; font-size: 0.92em; }
         .print-title-rule { border: none; border-top: 4px solid #1a1a1a; margin: 0 0 32px; }
         .print-section-rule { border: none; border-top: 1px solid #bbb; margin: 0 0 28px; }
         blockquote { border-left: 3px solid #999; margin: 1em 0; padding-left: 1em; color: #444; }
@@ -471,6 +477,14 @@ export function ExportDialog({ essay, nodeMap, doc, onClose }: { essay: Essay; n
                 <option value="author-title">Author, title — (Smith, “A Paper”)</option>
                 <option value="numbered">Numbered — [3], matching the References list</option>
               </select>
+            </label>
+            <label
+              className="muted"
+              style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 6 }}
+              title={printMode === 'substack' ? "Substack mode doesn't show the author line at all." : 'Add your institutional affiliation (set under Sync → Your name) after your name on the same line.'}
+            >
+              <input type="checkbox" checked={includeAffiliation} disabled={printMode === 'substack'} onChange={(e) => setIncludeAffiliation((e.target as HTMLInputElement).checked)} />
+              Include institutional affiliation
             </label>
           </div>
           <button className="btn btn-primary" disabled={!!busy} onClick={exportPdf}>
