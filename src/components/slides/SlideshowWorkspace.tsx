@@ -159,7 +159,13 @@ export function SlideshowWorkspace({ slideshowId, onBack }: { slideshowId: strin
       <div style={{ display: 'flex', alignItems: 'center', gap: 16, padding: '8px 20px', borderBottom: '1px solid var(--border)', flexWrap: 'wrap' }}>
         <label className="muted" style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12.5 }}>
           Date
-          <input type="date" value={date} onChange={(e) => saveDate((e.target as HTMLInputElement).value)} title="Date shown beneath your name on the title slide — defaults to the render date if left blank" />
+          <input
+            type="date"
+            className="date-pill-input"
+            value={date}
+            onChange={(e) => saveDate((e.target as HTMLInputElement).value)}
+            title="Date shown beneath your name on the title slide — defaults to the render date if left blank"
+          />
         </label>
         {date && (
           <button className="btn btn-ghost btn-sm" title="Clear — defaults back to the date of the render" onClick={() => saveDate('')}>

@@ -564,10 +564,10 @@ export function EssayWorkspace({
                   same default-to-render-date behavior. */}
               <input
                 type="date"
+                className="date-pill-input"
                 value={essay.date ?? ''}
                 onInput={(e) => saveDate((e.target as HTMLInputElement).value)}
                 title="Date shown beneath your name in print exports — defaults to the export date if left blank"
-                style={{ fontSize: 12.5 }}
               />
               {essay.date && (
                 <button className="btn btn-ghost btn-sm" title="Clear — defaults back to the date of the render" onClick={() => saveDate('')}>

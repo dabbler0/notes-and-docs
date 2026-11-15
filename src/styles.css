@@ -692,6 +692,34 @@ select {
   color: var(--ink-dim);
 }
 
+/**
+ * A bare `<input type="date">` otherwise renders as a totally unstyled,
+ * flat-edged browser control — jarring sitting right next to this app's
+ * own consistently pill-shaped, soft-bordered chrome (`.chip` right
+ * beside it in `EssayWorkspace.tsx`, `.select-pill` elsewhere). Gives it
+ * the same small-pill treatment. `color-scheme` is already declared at
+ * `:root` (this file's own top comment) for exactly this reason — the
+ * native calendar icon/dropdown it draws already themes correctly for
+ * dark mode with nothing further needed here.
+ */
+.date-pill-input {
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 3px 10px;
+  background: var(--surface);
+  color: var(--ink);
+  font-size: 12.5px;
+  outline: none;
+}
+
+.date-pill-input:hover {
+  background: var(--surface-2);
+}
+
+.date-pill-input:focus {
+  border-color: var(--accent);
+}
+
 /* --- modal --- */
 
 .modal-backdrop {
