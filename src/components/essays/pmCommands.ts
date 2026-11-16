@@ -258,6 +258,76 @@ function insertEmptySection(state: EditorState, dispatch?: (tr: Transaction) => 
 }
 
 /**
+ * Enter, pressed on an already-empty paragraph sitting directly in a
+ * section's own body — not its first body block (there has to be real
+ * content before the split point for this to be splitting anything,
+ * rather than just relocating a section's one and only paragraph) — cuts
+ * that section into two *siblings* right there: everything from the
+ * empty paragraph onward (the paragraph itself, discarded — it was only
+ * ever the split point — plus every block after it, nested subsections
+ * included) is lifted out into a brand-new section of its own, inserted
+ * right after the original; everything before the empty line stays
+ * exactly where it was. A trailing empty paragraph splits the same way,
+ * just landing on an empty second section rather than a populated one —
+ * still a split, same as pressing Enter at the very end of an ordinary
+ * document "splits" it into the existing text plus an empty line after.
+ *
+ * Declines (returning `false`, so the key falls through to whatever
+ * `keymap(baseKeymap)`'s own default Enter chain would otherwise do —
+ * ordinary paragraph splitting) the moment any precondition doesn't
+ * hold: a non-empty selection, a cursor not actually inside an empty
+ * paragraph, or that paragraph not being a *direct* child of a section
+ * (nested inside a list/blockquote/footnote instead) — this never reaches
+ * past whichever section most immediately encloses the cursor, the same
+ * "nearest enclosing section, never any further" scoping every other
+ * section-structural command here already follows.
+ *
+ * The section being split is itself a sibling of something else — unless
+ * it's the document's own single root section (`pmSchema.ts`'s `doc: {
+ * content: "section" }`, exactly one allowed), which structurally can't
+ * have a sibling at all. Splitting the root instead inserts the new
+ * section as the root's own next *child* — a new top-level, numbered
+ * section — the same "a sibling of the root doesn't exist, so a request
+ * for one becomes a child of it instead" fallback `insertEmptySection`
+ * above (and the schema's own doc comment) already establish for "new
+ * section" from the root's own body text.
+ */
+export function splitSectionIntoSiblings(state: EditorState, dispatch?: (tr: Transaction) => void): boolean {
+  const { $from, empty } = state.selection
+  if (!empty) return false
+  if ($from.parent.type.name !== 'paragraph' || $from.parent.content.size > 0) return false
+  const paragraphDepth = $from.depth
+  const sectionDepth = paragraphDepth - 1
+  if (sectionDepth < 1 || $from.node(sectionDepth).type.name !== 'section') return false
+  if ($from.index(sectionDepth) < 2) return false // the first body block right after the title — nothing to keep before it
+
+  if (dispatch) {
+    const pStart = $from.before(paragraphDepth)
+    const pEnd = $from.after(paragraphDepth)
+    const sectionContentEnd = $from.end(sectionDepth)
+    const isRoot = sectionDepth === 1
+
+    const tailSlice = state.doc.slice(pEnd, sectionContentEnd)
+    const titleNode = essaySchema.nodes.section_title.create()
+    const bodyContent = tailSlice.content.size > 0 ? tailSlice.content : Fragment.from(essaySchema.nodes.paragraph.create())
+    const newSection = essaySchema.nodes.section.create({ id: id() }, Fragment.from(titleNode).append(bodyContent))
+
+    const tr = state.tr.delete(pStart, sectionContentEnd)
+    // Root can't have a sibling at all — land the new section as its next
+    // *child* instead (`pStart`, right where the deleted content used to
+    // start, is exactly root's own new content-end). Otherwise `pStart + 1`
+    // — right after the now-shortened section's own closing token — is
+    // the section's own sibling slot.
+    const insertPos = isRoot ? pStart : pStart + 1
+    tr.insert(insertPos, newSection)
+    // Inside the new section (+1) and inside its own (empty) title (+1) — ready to type a name for it right away, same convention `insertEmptySection` above uses.
+    tr.setSelection(TextSelection.near(tr.doc.resolve(insertPos + 2), 1))
+    dispatch(tr)
+  }
+  return true
+}
+
+/**
  * "Demote": the inverse of `splitIntoSection` — folds a section back into
  * its own parent, splicing its content (everything but its own
  * `section_title`, which is simply discarded — same as the old app's own

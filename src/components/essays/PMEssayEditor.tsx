@@ -1,7 +1,7 @@
 import { useEffect, useRef } from 'preact/hooks'
 import { EditorState } from 'prosemirror-state'
 import { EditorView } from 'prosemirror-view'
-import { baseKeymap, toggleMark } from 'prosemirror-commands'
+import { baseKeymap, chainCommands, toggleMark } from 'prosemirror-commands'
 import { keymap } from 'prosemirror-keymap'
 import { history, undo, redo } from 'prosemirror-history'
 import { splitListItem, sinkListItem } from 'prosemirror-schema-list'
@@ -9,7 +9,7 @@ import { Node as PMNode } from 'prosemirror-model'
 import { essaySchema, essayDocFromJSON } from '../../lib/pmSchema'
 import { saveEssay } from '../../models/essaysRepo'
 import { createCitationView, SectionView, FootnoteView, CommentThreadView, createMathView, SlideBreakView, FragmentBreakView } from './pmNodeViews'
-import { splitIntoSection, splitListItemParagraph, preventJoinIntoSectionTitle, dedupeSectionIds, pasteFlatSectionsFromHtml } from './pmCommands'
+import { splitIntoSection, splitListItemParagraph, splitSectionIntoSiblings, preventJoinIntoSectionTitle, dedupeSectionIds, pasteFlatSectionsFromHtml } from './pmCommands'
 import { createCitationArrowPlugin } from './pmCitationArrowPlugin'
 import { createActiveSectionPlugin } from './pmActiveSectionPlugin'
 import { createSectionIdDedupePlugin } from './pmSectionIdPlugin'
@@ -170,7 +170,14 @@ export function PMEssayEditor({
           'Mod-b': toggleMark(essaySchema.marks.strong),
           'Mod-i': toggleMark(essaySchema.marks.em),
           'Mod-u': toggleMark(essaySchema.marks.underline),
-          Enter: splitListItem(essaySchema.nodes.list_item),
+          // `splitSectionIntoSiblings` only ever fires on an already-empty
+          // paragraph sitting directly in a section's own body (not its
+          // first); everywhere else (including inside a list item) it
+          // declines, falling through to `splitListItem`, then (its own
+          // doc comment covers why that one's chained here rather than a
+          // separate binding) to `keymap(baseKeymap)`'s own default Enter
+          // right after this plugin in the list below.
+          Enter: chainCommands(splitSectionIntoSiblings, splitListItem(essaySchema.nodes.list_item)),
           // See `splitListItemParagraph`'s own doc comment — a new
           // paragraph *within* the current list item, not a new item.
           // Declines outside a list item, leaving Shift-Enter's own
