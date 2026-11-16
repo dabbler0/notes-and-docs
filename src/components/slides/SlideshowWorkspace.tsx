@@ -10,6 +10,7 @@ import { essaySchema } from '../../lib/pmSchema'
 import { getAuthorAffiliation, getAuthorName } from '../../lib/authorPreference'
 import { insertCitation, insertQuoteBlock, insertQuoteInline, insertSlideBreak, insertFragmentBreak, splitIntoSection } from '../essays/pmCommands'
 import { PMEssayEditor } from '../essays/PMEssayEditor'
+import { FindReplaceDialog } from '../essays/FindReplaceDialog'
 import { SlidePresenter } from './SlidePresenter'
 import { exportSlideshowPdf } from './exportSlidesPdf'
 import { CitationPickerDialog } from '../essays/CitationPickerDialog'
@@ -48,6 +49,7 @@ export function SlideshowWorkspace({ slideshowId, onBack }: { slideshowId: strin
   const [showCitation, setShowCitation] = useState(false)
   const [showQuoteDialog, setShowQuoteDialog] = useState(false)
   const [presenting, setPresenting] = useState(false)
+  const [showFindReplace, setShowFindReplace] = useState(false)
   const viewRef = useRef<EditorView | null>(null)
 
   useEffect(() => {
@@ -212,6 +214,10 @@ export function SlideshowWorkspace({ slideshowId, onBack }: { slideshowId: strin
             <button className="btn btn-sm icon-btn-toolbar" title="Fragmented reveal" onMouseDown={(e) => e.preventDefault()} onClick={() => runView((view) => insertFragmentBreak(view))}>
               <span className="btn-label">⋯ Fragment</span>
             </button>
+            <div className="spacer" />
+            <button className="btn btn-sm icon-btn-toolbar" title="Find & replace" onClick={() => setShowFindReplace(true)}>
+              <Icon name="search" />
+            </button>
           </div>
 
           <div className="editor-scroll doc-scroll">
@@ -258,6 +264,7 @@ export function SlideshowWorkspace({ slideshowId, onBack }: { slideshowId: strin
           onClose={() => setPresenting(false)}
         />
       )}
+      {showFindReplace && viewRef.current && <FindReplaceDialog view={viewRef.current} onClose={() => setShowFindReplace(false)} />}
     </div>
   )
 }

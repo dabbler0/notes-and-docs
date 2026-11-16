@@ -28,6 +28,7 @@ import { CommentsPanel } from './CommentsPanel'
 import { GraveyardPanel } from './GraveyardPanel'
 import { ExportDialog } from './ExportDialog'
 import { WordCountDialog } from './WordCountDialog'
+import { FindReplaceDialog } from './FindReplaceDialog'
 import { EssayHistoryPanel } from './EssayHistoryPanel'
 import {
   insertCitation,
@@ -106,6 +107,7 @@ export function EssayWorkspace({
   const [showLink, setShowLink] = useState(false)
   const [showExport, setShowExport] = useState(false)
   const [showWordCount, setShowWordCount] = useState(false)
+  const [showFindReplace, setShowFindReplace] = useState(false)
   const [showHistory, setShowHistory] = useState(false)
   /** Bumped only by a revert (`EssayHistoryPanel`'s own `onReverted`) — passed as `PMEssayEditor`'s own `key` so a revert's rewrite of `essay.doc` (done directly in storage, never through a transaction on the *live* `EditorView`) actually forces a fresh mount reading the new content, instead of leaving the live editor silently showing its own stale, pre-revert in-memory document. Ordinary typing already updates the live doc through the editor's own transactions, so nothing there needs this — only an external rewrite does. */
   const [docGeneration, setDocGeneration] = useState(0)
@@ -500,6 +502,9 @@ export function EssayWorkspace({
               </>
             )}
             <div className="spacer" />
+            <button className="btn btn-sm icon-btn-toolbar" title="Find & replace" onClick={() => setShowFindReplace(true)}>
+              <Icon name="search" />
+            </button>
             <button
               className="btn btn-sm icon-btn-toolbar"
               title="Word count"
@@ -690,6 +695,7 @@ export function EssayWorkspace({
       {showWordCount && doc && (
         <WordCountDialog doc={doc} activeSection={activeSectionForWordCount} selectedText={selectedTextForWordCount} onClose={() => setShowWordCount(false)} />
       )}
+      {showFindReplace && viewRef.current && <FindReplaceDialog view={viewRef.current} onClose={() => setShowFindReplace(false)} />}
     </div>
   )
 }

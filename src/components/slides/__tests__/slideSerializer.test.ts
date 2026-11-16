@@ -70,7 +70,7 @@ describe('serializeDeck — title slide', () => {
 })
 
 describe('serializeDeck — inline quotes', () => {
-  /** `insertQuoteInline` (pmCommands.ts) bakes the surrounding curly quotes into the text itself before applying the mark — exactly reproduced here, rather than a plain `'Quoted text'` with no quote characters at all, since the bug this guards against only shows up with real, already-quoted text underneath the mark. */
+  /** `insertQuoteInline` (pmCommands.ts) bakes the surrounding quote characters into the text itself before applying the mark — curly quotes here specifically (rather than the straight `"` it actually inserts today, or a plain `'Quoted text'` with no quote characters at all) since the bug this guards against — a `<q>` element doubling up whatever quote characters are already in the text — never cared which quote character it was; a curly pair catches it (and the regression, if `<q>` ever came back) just as well as a straight one, and this doc predates the straight-quote change. */
   function quoteInlineDoc(): PMNode {
     return PMNode.fromJSON(essaySchema, {
       type: 'doc',
