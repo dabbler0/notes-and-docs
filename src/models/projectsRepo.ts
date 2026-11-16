@@ -32,6 +32,21 @@ async function saveProject(project: Project): Promise<void> {
   await backend.docs.put(PROJECTS, project)
 }
 
+/**
+ * Sets a project's own `title` — independent of (and, once set, shown
+ * ahead of) its members' own titles, which `EssaysView.tsx` otherwise
+ * falls back to for a project with none (see `Project.title`'s own doc
+ * comment). A blank/whitespace-only title clears it back to that same
+ * fallback, same "absent, not stored as an empty string" convention
+ * every other optional title-ish field in this codebase follows.
+ */
+export async function setProjectTitle(projectId: string, title: string): Promise<void> {
+  const project = await getProject(projectId)
+  if (!project) return
+  project.title = title.trim() || undefined
+  await saveProject(project)
+}
+
 /** Every live (non-deleted, non-archived-doesn't-matter-here) essay currently carrying `projectId`. */
 async function membersOf(projectId: string): Promise<Essay[]> {
   return (await listEssays()).filter((e) => e.projectId === projectId)

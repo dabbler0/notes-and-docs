@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it } from 'vitest'
 import { createEssay, getEssay } from '../essaysRepo'
-import { getProject, groupEssays, listProjects, removeEssayFromProject } from '../projectsRepo'
+import { getProject, groupEssays, listProjects, removeEssayFromProject, setProjectTitle } from '../projectsRepo'
 
 interface FakeStorageModule {
   createFakeBackend(): unknown
@@ -120,5 +120,46 @@ describe('removeEssayFromProject', () => {
     const a = await createEssay('Essay A')
     await expect(removeEssayFromProject(a)).resolves.toBeUndefined()
     expect(await listProjects()).toHaveLength(0)
+  })
+})
+
+describe('setProjectTitle', () => {
+  it('sets the title, independent of any member essay titles', async () => {
+    const a = await createEssay('Essay A')
+    const b = await createEssay('Essay B')
+    await groupEssays(a, b)
+    const projectId = (await getEssay(a.id))!.projectId!
+
+    await setProjectTitle(projectId, 'Dissertation chapters')
+
+    expect((await getProject(projectId))?.title).toBe('Dissertation chapters')
+  })
+
+  it('trims whitespace', async () => {
+    const a = await createEssay('Essay A')
+    const b = await createEssay('Essay B')
+    await groupEssays(a, b)
+    const projectId = (await getEssay(a.id))!.projectId!
+
+    await setProjectTitle(projectId, '  Spaced Title  ')
+
+    expect((await getProject(projectId))?.title).toBe('Spaced Title')
+  })
+
+  it('clears the title back to unset for a blank or whitespace-only value, rather than storing an empty string', async () => {
+    const a = await createEssay('Essay A')
+    const b = await createEssay('Essay B')
+    await groupEssays(a, b)
+    const projectId = (await getEssay(a.id))!.projectId!
+    await setProjectTitle(projectId, 'A real title')
+
+    await setProjectTitle(projectId, '   ')
+
+    const project = await getProject(projectId)
+    expect(project?.title).toBeUndefined()
+  })
+
+  it('is a no-op for a project id that does not exist', async () => {
+    await expect(setProjectTitle('nonexistent', 'Something')).resolves.toBeUndefined()
   })
 })

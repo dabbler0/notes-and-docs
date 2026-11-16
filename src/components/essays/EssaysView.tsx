@@ -2,13 +2,13 @@ import { useEffect, useRef, useState } from 'preact/hooks'
 import { useIsMobile } from '../../lib/useIsMobile'
 import { archiveEssay, createEssay, deleteEssay, listEssays, unarchiveEssay } from '../../models/essaysRepo'
 import { mergeEssays } from '../../models/essayHistoryRepo'
-import { groupEssays, removeEssayFromProject } from '../../models/projectsRepo'
+import { groupEssays, listProjects, removeEssayFromProject, setProjectTitle } from '../../models/projectsRepo'
 import { createSlideshow, deleteSlideshow, listSlideshows } from '../../models/slideshowsRepo'
 import { onSyncApplied } from '../../sync/syncEvents'
 import { confirmDialog } from '../../lib/confirm'
 import { promptDialog } from '../../lib/prompt'
 import { Icon } from '../Icon'
-import type { Essay, Slideshow } from '../../models/types'
+import type { Essay, Project, Slideshow } from '../../models/types'
 import { EssayWorkspace } from './EssayWorkspace'
 import { ImportLatexDialog } from './ImportLatexDialog'
 import { SlideshowWorkspace } from '../slides/SlideshowWorkspace'
@@ -65,6 +65,7 @@ function buildRenderItems(visible: Essay[]): RenderItem[] {
 export function EssaysView() {
   const [essays, setEssays] = useState<Essay[]>([])
   const [slideshows, setSlideshows] = useState<Slideshow[]>([])
+  const [projects, setProjects] = useState<Map<string, Project>>(new Map())
   const [openId, setOpenId] = useState<string | null>(null)
   const [openSlideshowId, setOpenSlideshowId] = useState<string | null>(null)
   const [showNewMenu, setShowNewMenu] = useState(false)
@@ -114,6 +115,16 @@ export function EssaysView() {
   async function reload() {
     setEssays(await listEssays())
     setSlideshows(await listSlideshows())
+    setProjects(new Map((await listProjects()).map((p) => [p.id, p])))
+  }
+
+  /** The "Rename" button in an expanded project cluster's own label row — `defaultValue` seeds the dialog with whatever's already set, so re-opening it to tweak a title doesn't mean retyping it from scratch. */
+  async function handleRenameProject(projectId: string, e: Event) {
+    e.stopPropagation()
+    const title = await promptDialog('Rename this project?', { defaultValue: projects.get(projectId)?.title ?? '', placeholder: 'e.g. Dissertation chapters' })
+    if (title === null) return
+    await setProjectTitle(projectId, title)
+    await reload()
   }
 
   useEffect(() => {
@@ -456,13 +467,19 @@ export function EssaysView() {
                 >
                   ▸
                 </button>
-                <div className="card-title">{item.essays[0].title}</div>
+                <div className="card-title">{projects.get(item.projectId)?.title || item.essays[0].title}</div>
                 <div className="card-meta">Project · {item.essays.length} essays</div>
               </div>
             ) : (
               <div className="project-cluster" key={item.projectId}>
-                <div className="project-cluster-label" onClick={() => toggleProjectCollapsed(item.projectId)} title="Collapse project">
-                  ▾ Project
+                <div className="project-cluster-label">
+                  <span onClick={() => toggleProjectCollapsed(item.projectId)} title="Collapse project" className="project-cluster-label-toggle">
+                    ▾ Project
+                  </span>
+                  {projects.get(item.projectId)?.title && <span className="project-cluster-title">{projects.get(item.projectId)!.title}</span>}
+                  <button className="btn btn-ghost btn-sm project-cluster-rename" onClick={(ev) => handleRenameProject(item.projectId, ev)}>
+                    Rename
+                  </button>
                 </div>
                 {item.essays.map((e) => (
                   <EssayCard
