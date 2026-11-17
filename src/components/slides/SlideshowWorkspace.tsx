@@ -4,7 +4,7 @@ import type { EditorState, Transaction } from 'prosemirror-state'
 import { toggleMark } from 'prosemirror-commands'
 import 'reveal.js/dist/reveal.css'
 import './slideTheme.css'
-import { getSlideshow, saveSlideshow } from '../../models/slideshowsRepo'
+import { cloneSlideshow, getSlideshow, saveSlideshow } from '../../models/slideshowsRepo'
 import { listSources } from '../../models/sourcesRepo'
 import { essaySchema } from '../../lib/pmSchema'
 import { getAuthorAffiliation, getAuthorName } from '../../lib/authorPreference'
@@ -12,6 +12,10 @@ import { insertCitation, insertQuoteBlock, insertQuoteInline, insertSlideBreak, 
 import { PMEssayEditor } from '../essays/PMEssayEditor'
 import { FindReplaceDialog } from '../essays/FindReplaceDialog'
 import { AuthorNoteDialog } from '../essays/AuthorNoteDialog'
+import { SplitPickerDialog } from '../essays/SplitPickerDialog'
+import { EssayWorkspace } from '../essays/EssayWorkspace'
+import { groupDrafts } from '../../models/projectsRepo'
+import type { DraftRef } from '../../models/projectsRepo'
 import { SlidePresenter } from './SlidePresenter'
 import { exportSlideshowPdf } from './exportSlidesPdf'
 import { CitationPickerDialog } from '../essays/CitationPickerDialog'
@@ -27,10 +31,12 @@ import type { Slideshow, Source } from '../../models/types'
  * `essaySchema`-shaped, so the same editing surface that works for essays
  * already works for it, plus only two extra toolbar operations (insert
  * slide/fragment divider) that essay's own toolbar doesn't have. No comment
- * mode, history panel, or split view — a slideshow has no comment feature at
- * all, and this first pass has no history/split-view support either.
+ * mode or history panel — a slideshow has no comment feature at all, and no
+ * commit history either. Split view works the same way `EssayWorkspace`'s
+ * own does: nesting a workspace (this one, or `EssayWorkspace` — either
+ * kind can be the other side of the split) inside `.split-pane-shell`.
  */
-export function SlideshowWorkspace({ slideshowId, onBack }: { slideshowId: string; onBack: () => void }) {
+export function SlideshowWorkspace({ slideshowId, onBack, embedded = false }: { slideshowId: string; onBack: () => void; embedded?: boolean }) {
   const [deck, setDeck] = useState<Slideshow | null>(null)
   const [title, setTitle] = useState('')
   const [subtitle, setSubtitle] = useState('')
@@ -52,6 +58,9 @@ export function SlideshowWorkspace({ slideshowId, onBack }: { slideshowId: strin
   const [showQuoteDialog, setShowQuoteDialog] = useState(false)
   const [presenting, setPresenting] = useState(false)
   const [showFindReplace, setShowFindReplace] = useState(false)
+  /** Which draft (essay or slideshow) is open in the split pane, if any — see `EssayWorkspace.tsx`'s own `splitTarget` doc comment. */
+  const [splitTarget, setSplitTarget] = useState<{ kind: 'essay' | 'slideshow'; id: string } | null>(null)
+  const [showSplitPicker, setShowSplitPicker] = useState(false)
   const viewRef = useRef<EditorView | null>(null)
 
   useEffect(() => {
@@ -123,13 +132,29 @@ export function SlideshowWorkspace({ slideshowId, onBack }: { slideshowId: strin
     runView((view) => insertQuoteInline(view, source, quote, page, pageEnd))
   }
 
+  /** "Split view" → `SplitPickerDialog`'s "pick an existing project-mate" option: just opens it side by side, no data touched at all. */
+  function handleSelectExistingForSplit(other: DraftRef) {
+    setSplitTarget({ kind: other.kind, id: other.item.id })
+    setShowSplitPicker(false)
+  }
+
+  /** "Split view" → `SplitPickerDialog`'s "Clone this slideshow" option — same shape as `EssayWorkspace.tsx`'s own `handleCloneForSplit`. */
+  async function handleCloneForSplit() {
+    if (!deck) return
+    const clone = await cloneSlideshow(deck.id)
+    if (!clone) return
+    await groupDrafts({ kind: 'slideshow', item: deck }, { kind: 'slideshow', item: clone })
+    setSplitTarget({ kind: 'slideshow', id: clone.id })
+    setShowSplitPicker(false)
+  }
+
   if (!deck) return <div className="page-pad">Loading…</div>
 
   return (
     <div className="essay-workspace-root">
       <div className="topbar essay-header" style={{ borderBottom: '1px solid var(--border)', padding: '10px 20px' }}>
         <button className="btn btn-ghost btn-sm" onClick={onBack}>
-          ← <span className="btn-label">All drafts</span>
+          {embedded ? '×' : '←'} <span className="btn-label">{embedded ? 'Close' : 'All drafts'}</span>
         </button>
         <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minWidth: 0 }}>
           <input
@@ -157,6 +182,15 @@ export function SlideshowWorkspace({ slideshowId, onBack }: { slideshowId: strin
         <button className="btn btn-primary btn-sm" disabled={!doc} onClick={() => setPresenting(true)}>
           ▶ <span className="btn-label">Present</span>
         </button>
+        {!embedded && (
+          <button
+            className={`btn btn-ghost btn-sm toolbar-toggle${splitTarget ? ' active' : ''}`}
+            title="Edit a second essay or slideshow side by side with this one"
+            onClick={() => (splitTarget ? setSplitTarget(null) : setShowSplitPicker(true))}
+          >
+            <Icon name="subsection" /> <span className="btn-label">{splitTarget ? 'Close split' : 'Split view'}</span>
+          </button>
+        )}
       </div>
 
       {/* The title slide's own author-line settings — a specific date
@@ -256,6 +290,16 @@ export function SlideshowWorkspace({ slideshowId, onBack }: { slideshowId: strin
             />
           </div>
         </div>
+
+        {splitTarget && (
+          <div className="split-pane-shell">
+            {splitTarget.kind === 'slideshow' ? (
+              <SlideshowWorkspace slideshowId={splitTarget.id} embedded onBack={() => setSplitTarget(null)} />
+            ) : (
+              <EssayWorkspace essayId={splitTarget.id} embedded onBack={() => setSplitTarget(null)} />
+            )}
+          </div>
+        )}
       </div>
 
       {showCitation && (
@@ -285,6 +329,9 @@ export function SlideshowWorkspace({ slideshowId, onBack }: { slideshowId: strin
         />
       )}
       {showFindReplace && viewRef.current && <FindReplaceDialog view={viewRef.current} onClose={() => setShowFindReplace(false)} />}
+      {showSplitPicker && (
+        <SplitPickerDialog draft={{ kind: 'slideshow', item: deck }} onClose={() => setShowSplitPicker(false)} onSelectExisting={handleSelectExistingForSplit} onClone={handleCloneForSplit} />
+      )}
       {showAuthorNote && (
         <AuthorNoteDialog
           initialValue={deck.authorNote ?? ''}

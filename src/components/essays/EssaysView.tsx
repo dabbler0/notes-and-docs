@@ -2,7 +2,8 @@ import { useEffect, useRef, useState } from 'preact/hooks'
 import { useIsMobile } from '../../lib/useIsMobile'
 import { archiveEssay, createEssay, deleteEssay, listEssays, unarchiveEssay } from '../../models/essaysRepo'
 import { mergeEssays } from '../../models/essayHistoryRepo'
-import { groupEssays, listProjects, removeEssayFromProject, setProjectTitle } from '../../models/projectsRepo'
+import { groupDrafts, listProjects, removeDraftFromProject, setProjectTitle } from '../../models/projectsRepo'
+import type { DraftRef } from '../../models/projectsRepo'
 import { createSlideshow, deleteSlideshow, listSlideshows } from '../../models/slideshowsRepo'
 import { onSyncApplied } from '../../sync/syncEvents'
 import { confirmDialog } from '../../lib/confirm'
@@ -12,6 +13,31 @@ import type { Essay, Project, Slideshow } from '../../models/types'
 import { EssayWorkspace } from './EssayWorkspace'
 import { ImportLatexDialog } from './ImportLatexDialog'
 import { SlideshowWorkspace } from '../slides/SlideshowWorkspace'
+
+/**
+ * One item in the unified Drafts list — an essay or a slideshow, tagged the
+ * same way `projectsRepo.ts`'s own `DraftRef` is (and interchangeable with
+ * one: `{kind, item}` either way), so every piece of list logic below
+ * (sorting, searching, project clustering, drag-and-drop) can work over a
+ * single mixed array instead of two separate per-type ones.
+ */
+type Draft = DraftRef
+
+function draftTitle(d: Draft): string {
+  return d.item.title
+}
+function draftUpdatedAt(d: Draft): number {
+  return d.item.updatedAt
+}
+function draftCreatedAt(d: Draft): number {
+  return d.item.createdAt
+}
+function draftProjectId(d: Draft): string | undefined {
+  return d.item.projectId
+}
+function draftArchived(d: Draft): boolean {
+  return d.kind === 'essay' && !!d.item.archived
+}
 
 type SortOrder = 'updated-desc' | 'updated-asc' | 'created-desc' | 'created-asc' | 'title-asc' | 'title-desc'
 
@@ -24,39 +50,43 @@ const SORT_OPTIONS: { value: SortOrder; label: string }[] = [
   { value: 'title-desc', label: 'Title (Z–A)' },
 ]
 
-/** `listEssays()` itself already returns essays sorted by `updatedAt` descending (last edited first) — this just lets the dropdown offer the other orderings on top of that default, without needing `listEssays()` to know about any of them. */
-function sortEssays(essays: Essay[], order: SortOrder): Essay[] {
-  const sorted = [...essays]
+/** Same ordering options as before, just applied uniformly across essays and slideshows together — a slideshow sorts by exactly the same `updatedAt`/`createdAt`/`title` fields an essay does. */
+function sortDrafts(drafts: Draft[], order: SortOrder): Draft[] {
+  const sorted = [...drafts]
   switch (order) {
     case 'updated-desc':
-      return sorted.sort((a, b) => b.updatedAt - a.updatedAt)
+      return sorted.sort((a, b) => draftUpdatedAt(b) - draftUpdatedAt(a))
     case 'updated-asc':
-      return sorted.sort((a, b) => a.updatedAt - b.updatedAt)
+      return sorted.sort((a, b) => draftUpdatedAt(a) - draftUpdatedAt(b))
     case 'created-desc':
-      return sorted.sort((a, b) => b.createdAt - a.createdAt)
+      return sorted.sort((a, b) => draftCreatedAt(b) - draftCreatedAt(a))
     case 'created-asc':
-      return sorted.sort((a, b) => a.createdAt - b.createdAt)
+      return sorted.sort((a, b) => draftCreatedAt(a) - draftCreatedAt(b))
     case 'title-asc':
-      return sorted.sort((a, b) => a.title.localeCompare(b.title))
+      return sorted.sort((a, b) => draftTitle(a).localeCompare(draftTitle(b)))
     case 'title-desc':
-      return sorted.sort((a, b) => b.title.localeCompare(a.title))
+      return sorted.sort((a, b) => draftTitle(b).localeCompare(draftTitle(a)))
   }
 }
 
-/** Renders the currently-visible essay list either as plain standalone cards or, where two or more of a project's own members are both currently visible, as one `project-cluster` wrapper around them — see `EssaysView`'s own drop handler for how a card ends up in a project in the first place. A project with only one currently-visible member (its sibling filtered out by search, say) just renders as a plain card: the cluster chrome only earns its place when there's actually something to see grouped together. */
-type RenderItem = { kind: 'single'; essay: Essay } | { kind: 'cluster'; projectId: string; essays: Essay[] }
-function buildRenderItems(visible: Essay[]): RenderItem[] {
+/** Renders the currently-visible drafts either as plain standalone cards or, where two or more of a project's own members (essays, slideshows, or a mix) are both currently visible, as one `project-cluster` wrapper around them — see `EssaysView`'s own drop handler for how a card ends up in a project in the first place. A project with only one currently-visible member (its sibling filtered out by search, say) just renders as a plain card: the cluster chrome only earns its place when there's actually something to see grouped together. */
+type RenderItem = { kind: 'single'; draft: Draft } | { kind: 'cluster'; projectId: string; drafts: Draft[] }
+function buildRenderItems(visible: Draft[]): RenderItem[] {
   const counts = new Map<string, number>()
-  for (const e of visible) if (e.projectId) counts.set(e.projectId, (counts.get(e.projectId) ?? 0) + 1)
+  for (const d of visible) {
+    const pid = draftProjectId(d)
+    if (pid) counts.set(pid, (counts.get(pid) ?? 0) + 1)
+  }
   const items: RenderItem[] = []
   const seen = new Set<string>()
-  for (const e of visible) {
-    if (e.projectId && (counts.get(e.projectId) ?? 0) >= 2) {
-      if (seen.has(e.projectId)) continue
-      seen.add(e.projectId)
-      items.push({ kind: 'cluster', projectId: e.projectId, essays: visible.filter((x) => x.projectId === e.projectId) })
+  for (const d of visible) {
+    const pid = draftProjectId(d)
+    if (pid && (counts.get(pid) ?? 0) >= 2) {
+      if (seen.has(pid)) continue
+      seen.add(pid)
+      items.push({ kind: 'cluster', projectId: pid, drafts: visible.filter((x) => draftProjectId(x) === pid) })
     } else {
-      items.push({ kind: 'single', essay: e })
+      items.push({ kind: 'single', draft: d })
     }
   }
   return items
@@ -79,18 +109,20 @@ export function EssaysView() {
   const [sortOrder, setSortOrder] = useState<SortOrder>('updated-desc')
   // Drag-and-drop state for the "combine into a project" gesture — see
   // `handleDrop` below. Plain HTML5 DnD, same idiom `NodeTree.tsx` already
-  // uses for reordering sections, applied to essay cards instead of tree
+  // uses for reordering sections, applied to draft cards instead of tree
   // rows (a single drop zone per card rather than before/after/into, since
-  // there's no ordering to preserve here, only grouping).
-  const [dragEssayId, setDragEssayId] = useState<string | null>(null)
+  // there's no ordering to preserve here, only grouping). Ids are shared
+  // between essays and slideshows (`lib/id.ts`), so a plain id is enough to
+  // identify a dragged/dragged-over card regardless of which kind it is.
+  const [dragId, setDragId] = useState<string | null>(null)
   const [dragOverId, setDragOverId] = useState<string | null>(null)
   // Which projects are currently shown *expanded* (the full dashed
   // cluster, every member's own card) rather than collapsed to a single
-  // card-sized summary — see `EssayCard`'s own sibling, the
+  // card-sized summary — see `DraftCard`'s own sibling, the
   // collapsed-cluster rendering below. Starts empty: every project renders
   // collapsed by default (a project is a secondary, drill-down grouping,
   // not something that should dominate the card grid the moment two
-  // essays happen to share one) until the user expands it themselves.
+  // drafts happen to share one) until the user expands it themselves.
   const [expandedProjects, setExpandedProjects] = useState<Set<string>>(new Set())
   const rootRef = useRef<HTMLDivElement>(null)
   // Below this width, the sort dropdown / "Show archived" / "Import LaTeX
@@ -102,6 +134,14 @@ export function EssaysView() {
   // that wrapping them each onto their own row was still more chrome than
   // a phone-width browsing list needed up front.
   const isMobile = useIsMobile()
+
+  function findDraft(id: string): Draft | undefined {
+    const essay = essays.find((e) => e.id === id)
+    if (essay) return { kind: 'essay', item: essay }
+    const deck = slideshows.find((d) => d.id === id)
+    if (deck) return { kind: 'slideshow', item: deck }
+    return undefined
+  }
 
   function toggleProjectCollapsed(projectId: string) {
     setExpandedProjects((prev) => {
@@ -144,7 +184,7 @@ export function EssaysView() {
   // its full content height inside it — so this walks up to find it
   // rather than scrolling `window`, which never actually scrolls here.
   useEffect(() => {
-    if (!dragEssayId) return
+    if (!dragId) return
     const scrollEl = rootRef.current?.closest<HTMLElement>('.main-area')
     if (!scrollEl) return
     const EDGE = 72
@@ -172,7 +212,7 @@ export function EssaysView() {
       window.removeEventListener('dragover', onDragOver)
       cancelAnimationFrame(rafId)
     }
-  }, [dragEssayId])
+  }, [dragId])
 
   async function handleCreate() {
     // `window.prompt()`'s own Cancel and "OK with nothing typed" both came
@@ -218,45 +258,47 @@ export function EssaysView() {
     reload()
   }
 
-  async function handleUngroup(essay: Essay, e: Event) {
+  async function handleUngroup(draft: Draft, e: Event) {
     e.stopPropagation()
-    await removeEssayFromProject(essay)
+    await removeDraftFromProject(draft)
     reload()
   }
 
   /**
-   * Dragging one essay's card onto another's groups them into a project
-   * (`groupEssays` — see its own doc comment for exactly how, including
+   * Dragging one card onto another's groups them into a project
+   * (`groupDrafts` — see its own doc comment for exactly how, including
    * what happens when one or both are already in different projects).
-   * Dragging onto a card that *already* shares a project with the one
-   * being dragged is a different gesture entirely — merging their commit
-   * histories together (`mergeEssays`): the dropped-on card is the base,
-   * the dragged one gets appended after it and then removed, so its
-   * content becomes the merged essay's new current state. Destructive
-   * enough (to the dragged essay as a standalone essay, not to its
-   * content — see `mergeEssays`' own doc comment) to need an explicit
-   * confirmation first, unlike plain grouping.
+   * Dragging one *essay* onto another that already shares a project with
+   * it is a different gesture entirely — merging their commit histories
+   * together (`mergeEssays`): the dropped-on essay is the base, the
+   * dragged one gets appended after it and then removed, so its content
+   * becomes the merged essay's new current state. Destructive enough (to
+   * the dragged essay as a standalone essay, not to its content — see
+   * `mergeEssays`' own doc comment) to need an explicit confirmation
+   * first, unlike plain grouping. Slideshows have no commit history to
+   * merge, so dropping onto a project-mate when either side is a
+   * slideshow always just groups (a no-op if they're already grouped).
    */
   async function handleDrop(sourceId: string, targetId: string) {
-    setDragEssayId(null)
+    setDragId(null)
     setDragOverId(null)
     if (sourceId === targetId) return
-    const source = essays.find((x) => x.id === sourceId)
-    const target = essays.find((x) => x.id === targetId)
+    const source = findDraft(sourceId)
+    const target = findDraft(targetId)
     if (!source || !target) return
-    if (source.projectId && source.projectId === target.projectId) {
+    if (source.kind === 'essay' && target.kind === 'essay' && source.item.projectId && source.item.projectId === target.item.projectId) {
       if (
         !(await confirmDialog(
-          `Merge "${source.title}" into "${target.title}"? "${target.title}"'s current content becomes "${source.title}"'s current content, with "${target.title}"'s own earlier drafts kept underneath in its history — the full edit history of both essays is preserved, concatenated. "${source.title}" itself is then removed (nothing in it is lost; it lives on inside "${target.title}").`,
+          `Merge "${source.item.title}" into "${target.item.title}"? "${target.item.title}"'s current content becomes "${source.item.title}"'s current content, with "${target.item.title}"'s own earlier drafts kept underneath in its history — the full edit history of both essays is preserved, concatenated. "${source.item.title}" itself is then removed (nothing in it is lost; it lives on inside "${target.item.title}").`,
           { confirmLabel: 'Merge', danger: true },
         ))
       )
         return
-      await mergeEssays(target.id, source.id)
+      await mergeEssays(target.item.id, source.item.id)
       reload()
       return
     }
-    await groupEssays(target, source)
+    await groupDrafts(target, source)
     reload()
   }
 
@@ -295,10 +337,17 @@ export function EssaysView() {
   }
 
   const archivedCount = essays.filter((e) => e.archived).length
-  const byArchived = essays.filter((e) => (showArchived ? !!e.archived : !e.archived))
+  // Slideshows have no archived state of their own (see `draftArchived`) —
+  // toggling "Show archived" narrows down to archived essays only, the
+  // same as it always did, rather than hiding every slideshow too.
+  const allDrafts: Draft[] = [
+    ...essays.map((item): Draft => ({ kind: 'essay', item })),
+    ...slideshows.map((item): Draft => ({ kind: 'slideshow', item })),
+  ]
+  const byArchived = allDrafts.filter((d) => (showArchived ? draftArchived(d) : !draftArchived(d)))
   const trimmedQuery = query.trim().toLowerCase()
-  const bySearch = trimmedQuery ? byArchived.filter((e) => e.title.toLowerCase().includes(trimmedQuery)) : byArchived
-  const visible = sortEssays(bySearch, sortOrder)
+  const bySearch = trimmedQuery ? byArchived.filter((d) => draftTitle(d).toLowerCase().includes(trimmedQuery)) : byArchived
+  const visible = sortDrafts(bySearch, sortOrder)
 
   return (
     <div className="page-pad" ref={rootRef}>
@@ -322,7 +371,7 @@ export function EssaysView() {
                     style={{ width: '100%' }}
                     value={sortOrder}
                     onChange={(e) => setSortOrder((e.target as HTMLSelectElement).value as SortOrder)}
-                    title="Sort essays by"
+                    title="Sort drafts by"
                   >
                     {SORT_OPTIONS.map((opt) => (
                       <option key={opt.value} value={opt.value}>
@@ -351,7 +400,7 @@ export function EssaysView() {
           </div>
         ) : (
           <>
-            <select className="select-pill" value={sortOrder} onChange={(e) => setSortOrder((e.target as HTMLSelectElement).value as SortOrder)} title="Sort essays by">
+            <select className="select-pill" value={sortOrder} onChange={(e) => setSortOrder((e.target as HTMLSelectElement).value as SortOrder)} title="Sort drafts by">
               {SORT_OPTIONS.map((opt) => (
                 <option key={opt.value} value={opt.value}>
                   {opt.label}
@@ -408,53 +457,53 @@ export function EssaysView() {
       {visible.length === 0 ? (
         <p className="empty-state">
           {trimmedQuery
-            ? 'No essays match your search.'
+            ? 'No drafts match your search.'
             : showArchived
               ? 'No archived essays.'
-              : essays.length === 0
-                ? 'No essays yet. Start a new one to build up a section tree with a real commit history.'
-                : 'No active essays — everything is archived.'}
+              : allDrafts.length === 0
+                ? 'No drafts yet. Start a new essay or slideshow to build one up.'
+                : 'No active drafts — everything is archived.'}
         </p>
       ) : (
         <div className="card-grid">
           {buildRenderItems(visible).map((item) =>
             item.kind === 'single' ? (
-              <EssayCard
-                key={item.essay.id}
-                essay={item.essay}
-                dragOver={dragOverId === item.essay.id}
-                onOpen={() => setOpenId(item.essay.id)}
-                onToggleArchived={(ev) => handleToggleArchived(item.essay, ev)}
-                onDelete={(ev) => handleDelete(item.essay.id, ev)}
-                onDragStart={() => setDragEssayId(item.essay.id)}
+              <DraftCard
+                key={item.draft.item.id}
+                draft={item.draft}
+                dragOver={dragOverId === item.draft.item.id}
+                onOpen={() => (item.draft.kind === 'essay' ? setOpenId(item.draft.item.id) : setOpenSlideshowId(item.draft.item.id))}
+                onToggleArchived={item.draft.kind === 'essay' ? (ev) => handleToggleArchived(item.draft.item as Essay, ev) : undefined}
+                onDelete={(ev) => (item.draft.kind === 'essay' ? handleDelete(item.draft.item.id, ev) : handleDeleteSlideshow(item.draft.item.id, ev))}
+                onDragStart={() => setDragId(item.draft.item.id)}
                 onDragOver={(ev) => {
-                  if (!dragEssayId || dragEssayId === item.essay.id) return
+                  if (!dragId || dragId === item.draft.item.id) return
                   ev.preventDefault()
-                  setDragOverId(item.essay.id)
+                  setDragOverId(item.draft.item.id)
                 }}
                 onDragEnd={() => {
-                  setDragEssayId(null)
+                  setDragId(null)
                   setDragOverId(null)
                 }}
                 onDrop={(ev) => {
                   ev.preventDefault()
-                  if (dragEssayId) handleDrop(dragEssayId, item.essay.id)
+                  if (dragId) handleDrop(dragId, item.draft.item.id)
                 }}
               />
             ) : !expandedProjects.has(item.projectId) ? (
               <div
                 key={item.projectId}
-                className={`card project-cluster-collapsed${dragOverId === item.essays[0].id ? ' card-drag-over' : ''}`}
+                className={`card project-cluster-collapsed${dragOverId === item.drafts[0].item.id ? ' card-drag-over' : ''}`}
                 onClick={() => toggleProjectCollapsed(item.projectId)}
                 onDragOver={(ev) => {
-                  if (!dragEssayId || dragEssayId === item.essays[0].id) return
+                  if (!dragId || dragId === item.drafts[0].item.id) return
                   ev.preventDefault()
-                  setDragOverId(item.essays[0].id)
+                  setDragOverId(item.drafts[0].item.id)
                 }}
-                onDragLeave={() => setDragOverId((v) => (v === item.essays[0].id ? null : v))}
+                onDragLeave={() => setDragOverId((v) => (v === item.drafts[0].item.id ? null : v))}
                 onDrop={(ev) => {
                   ev.preventDefault()
-                  if (dragEssayId) handleDrop(dragEssayId, item.essays[0].id)
+                  if (dragId) handleDrop(dragId, item.drafts[0].item.id)
                 }}
               >
                 <button
@@ -467,8 +516,10 @@ export function EssaysView() {
                 >
                   ▸
                 </button>
-                <div className="card-title">{projects.get(item.projectId)?.title || item.essays[0].title}</div>
-                <div className="card-meta">Project · {item.essays.length} essays</div>
+                <div className="card-title">{projects.get(item.projectId)?.title || item.drafts[0].item.title}</div>
+                <div className="card-meta">
+                  Project · {item.drafts.length} {item.drafts.length === 1 ? 'draft' : 'drafts'}
+                </div>
               </div>
             ) : (
               <div className="project-cluster" key={item.projectId}>
@@ -481,28 +532,28 @@ export function EssaysView() {
                     Rename
                   </button>
                 </div>
-                {item.essays.map((e) => (
-                  <EssayCard
-                    key={e.id}
-                    essay={e}
-                    dragOver={dragOverId === e.id}
-                    onOpen={() => setOpenId(e.id)}
-                    onToggleArchived={(ev) => handleToggleArchived(e, ev)}
-                    onDelete={(ev) => handleDelete(e.id, ev)}
-                    onUngroup={(ev) => handleUngroup(e, ev)}
-                    onDragStart={() => setDragEssayId(e.id)}
+                {item.drafts.map((d) => (
+                  <DraftCard
+                    key={d.item.id}
+                    draft={d}
+                    dragOver={dragOverId === d.item.id}
+                    onOpen={() => (d.kind === 'essay' ? setOpenId(d.item.id) : setOpenSlideshowId(d.item.id))}
+                    onToggleArchived={d.kind === 'essay' ? (ev) => handleToggleArchived(d.item as Essay, ev) : undefined}
+                    onDelete={(ev) => (d.kind === 'essay' ? handleDelete(d.item.id, ev) : handleDeleteSlideshow(d.item.id, ev))}
+                    onUngroup={(ev) => handleUngroup(d, ev)}
+                    onDragStart={() => setDragId(d.item.id)}
                     onDragOver={(ev) => {
-                      if (!dragEssayId || dragEssayId === e.id) return
+                      if (!dragId || dragId === d.item.id) return
                       ev.preventDefault()
-                      setDragOverId(e.id)
+                      setDragOverId(d.item.id)
                     }}
                     onDragEnd={() => {
-                      setDragEssayId(null)
+                      setDragId(null)
                       setDragOverId(null)
                     }}
                     onDrop={(ev) => {
                       ev.preventDefault()
-                      if (dragEssayId) handleDrop(dragEssayId, e.id)
+                      if (dragId) handleDrop(dragId, d.item.id)
                     }}
                   />
                 ))}
@@ -510,26 +561,6 @@ export function EssaysView() {
             ),
           )}
         </div>
-      )}
-      {slideshows.length > 0 && (
-        <>
-          <div className="page-header" style={{ marginTop: 28 }}>
-            <h1>Slideshows</h1>
-          </div>
-          <div className="card-grid">
-            {slideshows.map((deck) => (
-              <div className="card" key={deck.id} onClick={() => setOpenSlideshowId(deck.id)}>
-                <span className="badge">Slideshow</span>
-                <div className="card-title">{deck.title}</div>
-                {deck.subtitle && <div className="card-meta">{deck.subtitle}</div>}
-                <div className="card-meta">Updated {new Date(deck.updatedAt).toLocaleString()}</div>
-                <button className="btn btn-sm btn-ghost btn-danger" style={{ alignSelf: 'flex-start' }} onClick={(ev) => handleDeleteSlideshow(deck.id, ev)}>
-                  Delete
-                </button>
-              </div>
-            ))}
-          </div>
-        </>
       )}
       {showImport && (
         <ImportLatexDialog
@@ -546,15 +577,18 @@ export function EssaysView() {
 }
 
 /**
- * One essay's own card, factored out of `EssaysView` so it can be rendered
- * either directly in the grid (a standalone essay) or nested inside a
- * `.project-cluster` wrapper (one of a project's own members) without
- * duplicating its drag handlers/markup for both cases. `draggable` is set
- * unconditionally — the whole point of the gesture is picking any card up
- * and dropping it on any other, grouped or not.
+ * One draft's own card, factored out of `EssaysView` so it can be rendered
+ * either directly in the grid (a standalone essay/slideshow) or nested
+ * inside a `.project-cluster` wrapper (one of a project's own members,
+ * essay or slideshow alike) without duplicating its drag handlers/markup
+ * for both cases. `draggable` is set unconditionally — the whole point of
+ * the gesture is picking any card up and dropping it on any other, grouped
+ * or not, essay or slideshow. A slideshow card carries the "Slideshow"
+ * badge as its distinctive marker in the now-unified list; it has no
+ * archive toggle of its own (`onToggleArchived` is simply omitted for one).
  */
-function EssayCard({
-  essay,
+function DraftCard({
+  draft,
   dragOver,
   onOpen,
   onToggleArchived,
@@ -565,10 +599,10 @@ function EssayCard({
   onDragEnd,
   onDrop,
 }: {
-  essay: Essay
+  draft: Draft
   dragOver: boolean
   onOpen: () => void
-  onToggleArchived: (e: Event) => void
+  onToggleArchived?: (e: Event) => void
   onDelete: (e: Event) => void
   /** Present only when this card is rendered inside a `.project-cluster` — a standalone card has nothing to ungroup. */
   onUngroup?: (e: Event) => void
@@ -577,28 +611,33 @@ function EssayCard({
   onDragEnd: () => void
   onDrop: (e: DragEvent) => void
 }) {
+  const archived = draft.kind === 'essay' && !!draft.item.archived
   return (
     <div
-      className={`card${essay.archived ? ' card-archived' : ''}${dragOver ? ' card-drag-over' : ''}`}
+      className={`card${archived ? ' card-archived' : ''}${dragOver ? ' card-drag-over' : ''}`}
       draggable
       onClick={onOpen}
       onDragStart={(e) => {
         onDragStart()
-        ;(e as unknown as DragEvent).dataTransfer?.setData('text/plain', essay.id)
+        ;(e as unknown as DragEvent).dataTransfer?.setData('text/plain', draft.item.id)
       }}
       onDragOver={(e) => onDragOver(e as unknown as DragEvent)}
       onDragEnd={onDragEnd}
       onDrop={(e) => onDrop(e as unknown as DragEvent)}
     >
-      {essay.archived && <span className="badge">Archived</span>}
-      <div className="card-title">{essay.title}</div>
-      <div className="card-meta">Updated {new Date(essay.updatedAt).toLocaleString()}</div>
+      {draft.kind === 'slideshow' && <span className="badge">Slideshow</span>}
+      {archived && <span className="badge">Archived</span>}
+      <div className="card-title">{draft.item.title}</div>
+      {draft.kind === 'slideshow' && draft.item.subtitle && <div className="card-meta">{draft.item.subtitle}</div>}
+      <div className="card-meta">Updated {new Date(draft.item.updatedAt).toLocaleString()}</div>
       <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-        <button className="btn btn-sm btn-ghost" style={{ alignSelf: 'flex-start' }} onClick={onToggleArchived}>
-          {essay.archived ? 'Unarchive' : 'Archive'}
-        </button>
+        {onToggleArchived && (
+          <button className="btn btn-sm btn-ghost" style={{ alignSelf: 'flex-start' }} onClick={onToggleArchived}>
+            {archived ? 'Unarchive' : 'Archive'}
+          </button>
+        )}
         {onUngroup && (
-          <button className="btn btn-sm btn-ghost" style={{ alignSelf: 'flex-start' }} onClick={onUngroup} title="Take this essay out of the project">
+          <button className="btn btn-sm btn-ghost" style={{ alignSelf: 'flex-start' }} onClick={onUngroup} title="Take this out of the project">
             Ungroup
           </button>
         )}
@@ -609,4 +648,3 @@ function EssayCard({
     </div>
   )
 }
-

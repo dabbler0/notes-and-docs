@@ -1,13 +1,8 @@
-/**
- * Owns the `projects` collection and the `Essay.projectId` grouping it backs
- * — see `Project`'s own doc comment in `models/types.ts` for what a project
- * actually is (a grouping label, not a document) and why it's auto-deleted
- * once trivial.
- */
 import { backend } from '../storage'
 import { id } from '../lib/id'
 import { listEssays, saveEssay } from './essaysRepo'
-import type { Essay, Project } from './types'
+import { listSlideshows, saveSlideshow } from './slideshowsRepo'
+import type { Essay, Project, Slideshow } from './types'
 
 const PROJECTS = 'projects'
 
@@ -32,14 +27,6 @@ async function saveProject(project: Project): Promise<void> {
   await backend.docs.put(PROJECTS, project)
 }
 
-/**
- * Sets a project's own `title` — independent of (and, once set, shown
- * ahead of) its members' own titles, which `EssaysView.tsx` otherwise
- * falls back to for a project with none (see `Project.title`'s own doc
- * comment). A blank/whitespace-only title clears it back to that same
- * fallback, same "absent, not stored as an empty string" convention
- * every other optional title-ish field in this codebase follows.
- */
 export async function setProjectTitle(projectId: string, title: string): Promise<void> {
   const project = await getProject(projectId)
   if (!project) return
@@ -47,23 +34,39 @@ export async function setProjectTitle(projectId: string, title: string): Promise
   await saveProject(project)
 }
 
-/** Every live (non-deleted, non-archived-doesn't-matter-here) essay currently carrying `projectId`. */
-async function membersOf(projectId: string): Promise<Essay[]> {
-  return (await listEssays()).filter((e) => e.projectId === projectId)
+/**
+ * A reference to one project-able draft — an essay or a slideshow — tagged
+ * so the generic grouping logic below can save/update either kind without
+ * caring which. Everything in this file that used to be essay-only now
+ * operates on these; `addEssayToProject`/`removeEssayFromProject`/
+ * `groupEssays` below are kept as thin essay-only wrappers around the
+ * generic versions, so `essayHistoryRepo.ts`'s merge flow and
+ * `EssayWorkspace.tsx`'s clone-for-split flow — both of which only ever
+ * pass plain `Essay`s — don't need to change at all.
+ */
+export type DraftRef = { kind: 'essay'; item: Essay } | { kind: 'slideshow'; item: Slideshow }
+
+function refProjectId(ref: DraftRef): string | undefined {
+  return ref.item.projectId
 }
 
-/**
- * A project left with one or zero members is meaningless (see `Project`'s
- * own doc comment) — deletes it outright and, if one member remains,
- * clears its own now-dangling `projectId` too, so a project never lingers
- * as a pointless wrapper around a single essay (or no essay at all).
- */
+async function saveRef(ref: DraftRef): Promise<void> {
+  if (ref.kind === 'essay') await saveEssay(ref.item)
+  else await saveSlideshow(ref.item)
+}
+
+async function allMembersOf(projectId: string): Promise<DraftRef[]> {
+  const essays = (await listEssays()).filter((e) => e.projectId === projectId).map((item): DraftRef => ({ kind: 'essay', item }))
+  const slideshows = (await listSlideshows()).filter((d) => d.projectId === projectId).map((item): DraftRef => ({ kind: 'slideshow', item }))
+  return [...essays, ...slideshows]
+}
+
 async function cleanupProjectIfTrivial(projectId: string): Promise<void> {
-  const members = await membersOf(projectId)
+  const members = await allMembersOf(projectId)
   if (members.length > 1) return
   for (const m of members) {
-    m.projectId = undefined
-    await saveEssay(m)
+    m.item.projectId = undefined
+    await saveRef(m)
   }
   const project = await getProject(projectId)
   if (project) {
@@ -72,53 +75,61 @@ async function cleanupProjectIfTrivial(projectId: string): Promise<void> {
   }
 }
 
-/** Puts `essay` into `projectId`, persisting the change. */
-export async function addEssayToProject(essay: Essay, projectId: string): Promise<void> {
-  essay.projectId = projectId
-  await saveEssay(essay)
+export async function addDraftToProject(ref: DraftRef, projectId: string): Promise<void> {
+  ref.item.projectId = projectId
+  await saveRef(ref)
 }
 
-/** Takes `essay` out of whichever project it's in, cleaning that project up afterward if it's now trivial (see `cleanupProjectIfTrivial`). A no-op if `essay` isn't in a project at all. */
-export async function removeEssayFromProject(essay: Essay): Promise<void> {
-  const projectId = essay.projectId
+export async function removeDraftFromProject(ref: DraftRef): Promise<void> {
+  const projectId = refProjectId(ref)
   if (!projectId) return
-  essay.projectId = undefined
-  await saveEssay(essay)
+  ref.item.projectId = undefined
+  await saveRef(ref)
   await cleanupProjectIfTrivial(projectId)
 }
 
 /**
- * The "drag one essay's card onto another's" gesture in the Drafts view
- * (`EssaysView.tsx`) — puts `target` and `source` in the same project:
- *
- * - Neither is in a project yet → a brand-new one is created for both.
- * - Exactly one already has a project → the other joins it.
- * - Both already have projects, and they're *different* ones → every essay
- *   in `source`'s project moves into `target`'s (unifying the two groups
- *   into one), and `source`'s own now-empty project is cleaned up.
- * - Both already share the same project → a no-op (this is the case
- *   `EssaysView`'s own drop handler instead treats as a *merge* request —
- *   see `mergeEssays` in `essaysRepo.ts` — so grouping never actually runs
- *   for it in practice, but staying a safe no-op here means nothing breaks
- *   if it's ever called directly for an already-grouped pair anyway).
+ * Drops `target` and `source` into the same project — creating one fresh if
+ * neither is in one yet, folding one's whole project into the other's if
+ * only one is, or merging the two projects together (every member of
+ * `source`'s project joins `target`'s) if both already have one. A no-op if
+ * they're already in the same project. See `addDraftToProject`/
+ * `cleanupProjectIfTrivial` for how membership is actually set/cleaned up.
  */
-export async function groupEssays(target: Essay, source: Essay): Promise<void> {
-  if (target.projectId && target.projectId === source.projectId) return
-  if (target.projectId) {
-    if (source.projectId) {
-      const oldProjectId = source.projectId
-      for (const sibling of await membersOf(oldProjectId)) await addEssayToProject(sibling, target.projectId)
-      await cleanupProjectIfTrivial(oldProjectId)
+export async function groupDrafts(target: DraftRef, source: DraftRef): Promise<void> {
+  const targetProjectId = refProjectId(target)
+  const sourceProjectId = refProjectId(source)
+  if (targetProjectId && targetProjectId === sourceProjectId) return
+  if (targetProjectId) {
+    if (sourceProjectId) {
+      for (const sibling of await allMembersOf(sourceProjectId)) await addDraftToProject(sibling, targetProjectId)
+      await cleanupProjectIfTrivial(sourceProjectId)
     } else {
-      await addEssayToProject(source, target.projectId)
+      await addDraftToProject(source, targetProjectId)
     }
     return
   }
-  if (source.projectId) {
-    await addEssayToProject(target, source.projectId)
+  if (sourceProjectId) {
+    await addDraftToProject(target, sourceProjectId)
     return
   }
   const project = await createProject()
-  await addEssayToProject(target, project.id)
-  await addEssayToProject(source, project.id)
+  await addDraftToProject(target, project.id)
+  await addDraftToProject(source, project.id)
+}
+
+// ---- Essay-only wrappers, kept for existing callers (essayHistoryRepo.ts's
+// merge flow, EssayWorkspace.tsx's clone-for-split flow) that only ever deal
+// in plain `Essay`s and have no reason to know `DraftRef` exists. ----
+
+export async function addEssayToProject(essay: Essay, projectId: string): Promise<void> {
+  await addDraftToProject({ kind: 'essay', item: essay }, projectId)
+}
+
+export async function removeEssayFromProject(essay: Essay): Promise<void> {
+  await removeDraftFromProject({ kind: 'essay', item: essay })
+}
+
+export async function groupEssays(target: Essay, source: Essay): Promise<void> {
+  await groupDrafts({ kind: 'essay', item: target }, { kind: 'essay', item: source })
 }

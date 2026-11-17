@@ -1,47 +1,62 @@
 import { useEffect, useState } from 'preact/hooks'
 import { Modal } from '../Modal'
 import { listEssays } from '../../models/essaysRepo'
-import type { Essay } from '../../models/types'
+import { listSlideshows } from '../../models/slideshowsRepo'
+import type { DraftRef } from '../../models/projectsRepo'
 
 /**
- * "Split view"'s own picker — same list-and-click `.citation-list`/`.card`
- * idiom `CitationPickerDialog.tsx` already uses. Offers every other essay
- * currently in the same project as `essay` (none at all if `essay` isn't in
- * a project yet — cloning is always available regardless, and itself puts
- * both essays in a project together, see `EssayWorkspace`'s own
- * `handleCloneForSplit`).
+ * "Split view" for either an essay or a slideshow — offered a `draft`
+ * (the one currently open, essay or slideshow), lists every other draft
+ * sharing its project, of either kind, plus a "Clone this ___" option that
+ * duplicates the currently open one (always the same kind as `draft` —
+ * cloning never changes what type you're editing). Picking an existing
+ * project-mate is how an essay ends up split alongside a slideshow or vice
+ * versa: both just need to already share a project (dragged onto each
+ * other in the unified Drafts list).
  */
 export function SplitPickerDialog({
-  essay,
+  draft,
   onClose,
   onSelectExisting,
   onClone,
 }: {
-  essay: Essay
+  draft: DraftRef
   onClose: () => void
-  onSelectExisting: (other: Essay) => void
+  onSelectExisting: (other: DraftRef) => void
   onClone: () => void
 }) {
-  const [projectMates, setProjectMates] = useState<Essay[]>([])
+  const [projectMates, setProjectMates] = useState<DraftRef[]>([])
 
   useEffect(() => {
-    if (!essay.projectId) return
-    listEssays().then((all) => setProjectMates(all.filter((e) => e.projectId === essay.projectId && e.id !== essay.id)))
-  }, [essay.id, essay.projectId])
+    const projectId = draft.item.projectId
+    if (!projectId) {
+      setProjectMates([])
+      return
+    }
+    Promise.all([listEssays(), listSlideshows()]).then(([essays, slideshows]) => {
+      const mates: DraftRef[] = [
+        ...essays.filter((e) => e.projectId === projectId && e.id !== draft.item.id).map((item): DraftRef => ({ kind: 'essay', item })),
+        ...slideshows.filter((d) => d.projectId === projectId && d.id !== draft.item.id).map((item): DraftRef => ({ kind: 'slideshow', item })),
+      ]
+      setProjectMates(mates)
+    })
+  }, [draft.item.id, draft.item.projectId])
 
   return (
     <Modal onClose={onClose}>
       <h2>Split view</h2>
-      <p className="muted">Edit a second essay side by side with this one.</p>
+      <p className="muted">Edit a second essay or slideshow side by side with this one.</p>
       <div className="citation-list">
         <div className="card" onClick={onClone}>
-          <div className="card-title">Clone this essay</div>
+          <div className="card-title">Clone this {draft.kind === 'essay' ? 'essay' : 'slideshow'}</div>
           <div className="card-meta">Makes an independent, editable copy — added to this project, opened alongside the original.</div>
         </div>
-        {projectMates.map((e) => (
-          <div className="card" key={e.id} onClick={() => onSelectExisting(e)}>
-            <div className="card-title">{e.title}</div>
-            <div className="card-meta">Updated {new Date(e.updatedAt).toLocaleString()}</div>
+        {projectMates.map((m) => (
+          <div className="card" key={m.item.id} onClick={() => onSelectExisting(m)}>
+            <div className="card-title">
+              {m.kind === 'slideshow' && <span className="badge">Slideshow</span>} {m.item.title}
+            </div>
+            <div className="card-meta">Updated {new Date(m.item.updatedAt).toLocaleString()}</div>
           </div>
         ))}
       </div>

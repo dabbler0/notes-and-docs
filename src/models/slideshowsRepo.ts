@@ -58,6 +58,25 @@ export async function createSlideshowFromEssay(essay: Essay): Promise<Slideshow>
 }
 
 /** Tombstoned, not hard-deleted — see `Slideshow.deleted`'s own doc comment and `deleteEssay`'s identical reasoning. */
+/** "Clone this slideshow" — `SplitPickerDialog`'s own clone option when split-viewing from a slideshow, same shape as `essaysRepo.ts`'s `cloneEssay`: a fresh id, a fresh id for every section (`cloneDocWithFreshSectionIds` — a slideshow has no comment threads to remap alongside them, unlike an essay). */
+export async function cloneSlideshow(slideshowId: string): Promise<Slideshow | undefined> {
+  const original = await getSlideshow(slideshowId)
+  if (!original) return undefined
+  const now = Date.now()
+  const clone: Slideshow = {
+    id: id(),
+    title: `Copy of ${original.title}`,
+    subtitle: original.subtitle,
+    date: original.date,
+    authorNote: original.authorNote,
+    doc: cloneDocWithFreshSectionIds(original.doc, new Map()),
+    createdAt: now,
+    updatedAt: now,
+  }
+  await backend.docs.put(SLIDESHOWS, clone)
+  return clone
+}
+
 export async function deleteSlideshow(slideshowId: string): Promise<void> {
   const deck = await getSlideshow(slideshowId)
   if (!deck) return

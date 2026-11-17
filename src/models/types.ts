@@ -448,20 +448,21 @@ export interface Essay {
 }
 
 /**
- * A lightweight grouping of essays — the "drag one essay onto another"
- * organizational unit (see `groupEssays` in `projectsRepo.ts`), not a
- * document in its own right: a project has no content of its own, only
- * whichever essays currently carry its id as their own `projectId`. Exists
- * to support split-screen editing (`EssayWorkspace`'s own "Split view",
- * which only offers other essays in the same project) and merging two
- * essays' commit histories together (`mergeEssays` in `essaysRepo.ts`,
- * which requires both essays to already share a project) — grouping two
- * essays is the prerequisite step for both.
+ * A lightweight grouping of drafts — essays, slideshows, or a mix of both —
+ * the "drag one card onto another" organizational unit (see `groupDrafts` in
+ * `projectsRepo.ts`), not a document in its own right: a project has no
+ * content of its own, only whichever essays/slideshows currently carry its
+ * id as their own `projectId`. Exists to support split-screen editing
+ * (`EssayWorkspace`'s and `SlideshowWorkspace`'s own "Split view", which only
+ * offer other drafts in the same project) and merging two essays' commit
+ * histories together (`mergeEssays` in `essaysRepo.ts`, which requires both
+ * essays to already share a project, and is essay-only — slideshows have no
+ * history to merge) — grouping two drafts is the prerequisite step for both.
  *
  * Auto-deleted (see `cleanupProjectIfTrivial` in `projectsRepo.ts`) the
- * moment it would otherwise be left with one or zero members — a project
- * of exactly one essay is meaningless (nothing to split-screen or merge
- * with), so one never lingers as a pointless wrapper around a single essay.
+ * moment it would otherwise be left with one or zero members — a project of
+ * exactly one draft is meaningless (nothing to split-screen or merge with),
+ * so one never lingers as a pointless wrapper around a single draft.
  */
 export interface Project {
   id: string
@@ -515,6 +516,14 @@ export interface Slideshow {
    * closing References slide. Absent or blank means no such slide at all.
    */
   authorNote?: string
+  /**
+   * The `Project` (see its own doc comment) this deck is currently grouped
+   * under, if any — same field, same meaning, same "drag one card onto
+   * another" gesture (`projectsRepo.ts`'s `groupDrafts`) as `Essay.projectId`,
+   * just on a slideshow instead of an essay: a project can hold either kind,
+   * or a mix of both. Absent means this deck isn't part of any project.
+   */
+  projectId?: string
   doc: unknown
   createdAt: number
   updatedAt: number

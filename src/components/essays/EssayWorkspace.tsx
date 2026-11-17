@@ -6,7 +6,8 @@ import { wrapInList } from 'prosemirror-schema-list'
 import type { EditorState, Transaction } from 'prosemirror-state'
 import { cloneEssay, getEssay, saveEssay } from '../../models/essaysRepo'
 import { createSlideshowFromEssay } from '../../models/slideshowsRepo'
-import { groupEssays } from '../../models/projectsRepo'
+import { groupDrafts } from '../../models/projectsRepo'
+import type { DraftRef } from '../../models/projectsRepo'
 import { listSources } from '../../models/sourcesRepo'
 import { addToGraveyard } from '../../models/graveyardRepo'
 import { essaySchema } from '../../lib/pmSchema'
@@ -22,6 +23,7 @@ import { PMEssayEditor, stripCollapsedAttrs } from './PMEssayEditor'
 import { NodeTree } from './NodeTree'
 import { AuthorNoteDialog } from './AuthorNoteDialog'
 import { SplitPickerDialog } from './SplitPickerDialog'
+import { SlideshowWorkspace } from '../slides/SlideshowWorkspace'
 import { CitationPickerDialog } from './CitationPickerDialog'
 import { QuoteInsertDialog } from './QuoteInsertDialog'
 import { CommentsPanel } from './CommentsPanel'
@@ -96,7 +98,8 @@ export function EssayWorkspace({
   // snapshot forever after. `reload()` and the insert-citation/quote/link
   // handlers below all mutate it in place for exactly this reason.
   const sources = useRef<Map<string, Source>>(new Map()).current
-  const [splitEssayId, setSplitEssayId] = useState<string | null>(null)
+  /** Which draft (essay or slideshow) is open in the split pane, if any — see `splitEssayId`'s own former doc comment, now generalized to either kind: the pane itself picks `EssayWorkspace` or `SlideshowWorkspace` based on `kind`. */
+  const [splitTarget, setSplitTarget] = useState<{ kind: 'essay' | 'slideshow'; id: string } | null>(null)
   const [showSplitPicker, setShowSplitPicker] = useState(false)
   const [showTree, setShowTree] = useState(true)
   const isMobile = useIsMobile()
@@ -332,8 +335,8 @@ export function EssayWorkspace({
   }
 
   /** "Split view" → `SplitPickerDialog`'s "pick an existing project-mate" option: just opens it side by side, no data touched at all. */
-  function handleSelectExistingForSplit(other: Essay) {
-    setSplitEssayId(other.id)
+  function handleSelectExistingForSplit(other: DraftRef) {
+    setSplitTarget({ kind: other.kind, id: other.item.id })
     setShowSplitPicker(false)
   }
 
@@ -342,8 +345,8 @@ export function EssayWorkspace({
     if (!essay) return
     const clone = await cloneEssay(essay.id)
     if (!clone) return
-    await groupEssays(essay, clone)
-    setSplitEssayId(clone.id)
+    await groupDrafts({ kind: 'essay', item: essay }, { kind: 'essay', item: clone })
+    setSplitTarget({ kind: 'essay', id: clone.id })
     setShowSplitPicker(false)
   }
 
@@ -391,11 +394,11 @@ export function EssayWorkspace({
         </button>
         {!embedded && !isMobile && (
           <button
-            className={`btn btn-ghost btn-sm toolbar-toggle${splitEssayId ? ' active' : ''}`}
-            title="Edit a second essay side by side with this one"
-            onClick={() => (splitEssayId ? setSplitEssayId(null) : setShowSplitPicker(true))}
+            className={`btn btn-ghost btn-sm toolbar-toggle${splitTarget ? ' active' : ''}`}
+            title="Edit a second essay or slideshow side by side with this one"
+            onClick={() => (splitTarget ? setSplitTarget(null) : setShowSplitPicker(true))}
           >
-            <Icon name="subsection" /> <span className="btn-label">{splitEssayId ? 'Close split' : 'Split view'}</span>
+            <Icon name="subsection" /> <span className="btn-label">{splitTarget ? 'Close split' : 'Split view'}</span>
           </button>
         )}
       </div>
@@ -403,7 +406,7 @@ export function EssayWorkspace({
       <div className="workspace">
         {!isMobile &&
           !embedded &&
-          !splitEssayId &&
+          !splitTarget &&
           (showTree ? (
             <div className="tree-panel-shell">
               {doc && <NodeTree doc={doc} essayTitle={essayTitle} onToggleCollapse={toggleCollapse} onScrollTo={scrollToNode} onMove={moveSection} />}
@@ -597,15 +600,19 @@ export function EssayWorkspace({
           </div>
         </div>
 
-        {splitEssayId && (
+        {splitTarget && (
           <div className="split-pane-shell">
-            <EssayWorkspace essayId={splitEssayId} embedded onBack={() => setSplitEssayId(null)} onOpenSlideshow={onOpenSlideshow} />
+            {splitTarget.kind === 'essay' ? (
+              <EssayWorkspace essayId={splitTarget.id} embedded onBack={() => setSplitTarget(null)} onOpenSlideshow={onOpenSlideshow} />
+            ) : (
+              <SlideshowWorkspace slideshowId={splitTarget.id} embedded onBack={() => setSplitTarget(null)} />
+            )}
           </div>
         )}
 
         {!isMobile &&
           !embedded &&
-          !splitEssayId &&
+          !splitTarget &&
           (rightPanel ? (
             <div className="comments-panel-shell">
               <div className="right-panel-tabs">
@@ -687,7 +694,9 @@ export function EssayWorkspace({
       )}
 
       {showAuthorNote && <AuthorNoteDialog initialValue={essay.authorNote ?? ''} onSave={saveAuthorNote} onClose={() => setShowAuthorNote(false)} />}
-      {showSplitPicker && <SplitPickerDialog essay={essay} onClose={() => setShowSplitPicker(false)} onSelectExisting={handleSelectExistingForSplit} onClone={handleCloneForSplit} />}
+      {showSplitPicker && (
+        <SplitPickerDialog draft={{ kind: 'essay', item: essay }} onClose={() => setShowSplitPicker(false)} onSelectExisting={handleSelectExistingForSplit} onClone={handleCloneForSplit} />
+      )}
       {showCitation && <CitationPickerDialog onClose={() => setShowCitation(false)} onSelect={handleInsertCitation} />}
       {showQuoteDialog && <QuoteInsertDialog onClose={() => setShowQuoteDialog(false)} onInsertBlock={handleInsertQuoteBlock} onInsertInline={handleInsertQuoteInline} />}
       {showLink && <CitationPickerDialog title="Link to a source" requireUrl onClose={() => setShowLink(false)} onSelect={handleInsertSourceLink} />}

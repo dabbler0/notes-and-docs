@@ -1,6 +1,8 @@
 import { beforeEach, describe, expect, it } from 'vitest'
 import { createEssay, getEssay } from '../essaysRepo'
-import { getProject, groupEssays, listProjects, removeEssayFromProject, setProjectTitle } from '../projectsRepo'
+import { createSlideshow, getSlideshow } from '../slideshowsRepo'
+import { getProject, groupDrafts, groupEssays, listProjects, removeDraftFromProject, removeEssayFromProject, setProjectTitle } from '../projectsRepo'
+import type { DraftRef } from '../projectsRepo'
 
 interface FakeStorageModule {
   createFakeBackend(): unknown
@@ -161,5 +163,115 @@ describe('setProjectTitle', () => {
 
   it('is a no-op for a project id that does not exist', async () => {
     await expect(setProjectTitle('nonexistent', 'Something')).resolves.toBeUndefined()
+  })
+})
+
+describe('groupDrafts — slideshows and mixed essay/slideshow membership', () => {
+  it('groups two slideshows into a brand-new project', async () => {
+    const a = await createSlideshow('Deck A')
+    const b = await createSlideshow('Deck B')
+
+    await groupDrafts({ kind: 'slideshow', item: a }, { kind: 'slideshow', item: b })
+
+    const reloadedA = (await getSlideshow(a.id))!
+    const reloadedB = (await getSlideshow(b.id))!
+    expect(reloadedA.projectId).toBeDefined()
+    expect(reloadedA.projectId).toBe(reloadedB.projectId)
+    expect(await listProjects()).toHaveLength(1)
+  })
+
+  it('groups an essay and a slideshow into the same project', async () => {
+    const essay = await createEssay('Essay A')
+    const deck = await createSlideshow('Deck A')
+
+    await groupDrafts({ kind: 'essay', item: essay }, { kind: 'slideshow', item: deck })
+
+    const reloadedEssay = (await getEssay(essay.id))!
+    const reloadedDeck = (await getSlideshow(deck.id))!
+    expect(reloadedEssay.projectId).toBeDefined()
+    expect(reloadedEssay.projectId).toBe(reloadedDeck.projectId)
+    expect(await listProjects()).toHaveLength(1)
+  })
+
+  it('folds a slideshow into an essay project, and an essay into a slideshow project', async () => {
+    const essay = await createEssay('Essay A')
+    const deckInEssayProject = await createSlideshow('Deck A')
+    await groupDrafts({ kind: 'essay', item: essay }, { kind: 'slideshow', item: deckInEssayProject })
+    const essayProjectId = (await getEssay(essay.id))!.projectId!
+
+    const essay2 = await createEssay('Essay B')
+    const deck2 = await createSlideshow('Deck B')
+    await groupDrafts({ kind: 'slideshow', item: deck2 }, { kind: 'essay', item: essay2 })
+    const deck2ProjectId = (await getSlideshow(deck2.id))!.projectId!
+    expect(deck2ProjectId).not.toBe(essayProjectId)
+
+    // Merge the two projects by dragging essay2 (deck2's project) onto essay (essay's project).
+    const essayReloaded = (await getEssay(essay.id))!
+    const essay2Reloaded = (await getEssay(essay2.id))!
+    await groupDrafts({ kind: 'essay', item: essayReloaded }, { kind: 'essay', item: essay2Reloaded })
+
+    const finalProjectIds = await Promise.all([
+      getEssay(essay.id).then((e) => e!.projectId),
+      getSlideshow(deckInEssayProject.id).then((d) => d!.projectId),
+      getEssay(essay2.id).then((e) => e!.projectId),
+      getSlideshow(deck2.id).then((d) => d!.projectId),
+    ])
+    expect(new Set(finalProjectIds).size).toBe(1)
+    expect(finalProjectIds[0]).toBe(essayProjectId) // target's own project survives
+    expect(await listProjects()).toHaveLength(1)
+  })
+
+  it('is a no-op when both drafts already share the same project', async () => {
+    const essay = await createEssay('Essay A')
+    const deck = await createSlideshow('Deck A')
+    await groupDrafts({ kind: 'essay', item: essay }, { kind: 'slideshow', item: deck })
+    const projectsBefore = await listProjects()
+
+    const essayReloaded = (await getEssay(essay.id))!
+    const deckReloaded = (await getSlideshow(deck.id))!
+    await groupDrafts({ kind: 'essay', item: essayReloaded }, { kind: 'slideshow', item: deckReloaded })
+
+    expect(await listProjects()).toHaveLength(projectsBefore.length)
+  })
+})
+
+describe('removeDraftFromProject — slideshows and mixed membership', () => {
+  it('clears a slideshow projectId and auto-deletes a project left with one member', async () => {
+    const essay = await createEssay('Essay A')
+    const deck = await createSlideshow('Deck A')
+    await groupDrafts({ kind: 'essay', item: essay }, { kind: 'slideshow', item: deck })
+    const projectId = (await getEssay(essay.id))!.projectId!
+
+    await removeDraftFromProject({ kind: 'slideshow', item: (await getSlideshow(deck.id))! })
+
+    const finalEssay = (await getEssay(essay.id))!
+    const finalDeck = (await getSlideshow(deck.id))!
+    expect(finalDeck.projectId).toBeUndefined()
+    expect(finalEssay.projectId).toBeUndefined() // the now-trivial project's last member is also cleared
+    const project = await getProject(projectId)
+    expect(project?.deleted).toBe(true)
+  })
+
+  it('leaves a mixed project with 2+ remaining members alone', async () => {
+    const essay = await createEssay('Essay A')
+    const deckA = await createSlideshow('Deck A')
+    const deckB = await createSlideshow('Deck B')
+    await groupDrafts({ kind: 'essay', item: essay }, { kind: 'slideshow', item: deckA })
+    await groupDrafts({ kind: 'essay', item: (await getEssay(essay.id))! }, { kind: 'slideshow', item: deckB })
+
+    const removed: DraftRef = { kind: 'essay', item: (await getEssay(essay.id))! }
+    await removeDraftFromProject(removed)
+
+    const finalDeckA = (await getSlideshow(deckA.id))!
+    const finalDeckB = (await getSlideshow(deckB.id))!
+    expect(finalDeckA.projectId).toBeDefined()
+    expect(finalDeckA.projectId).toBe(finalDeckB.projectId)
+    expect(await listProjects()).toHaveLength(1)
+  })
+
+  it('is a no-op for a slideshow not in any project', async () => {
+    const deck = await createSlideshow('Deck A')
+    await expect(removeDraftFromProject({ kind: 'slideshow', item: deck })).resolves.toBeUndefined()
+    expect(await listProjects()).toHaveLength(0)
   })
 })
