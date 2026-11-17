@@ -443,11 +443,16 @@ function walkInline(node: Node, marks: PMJson[], ctx: MigrateCtx, out: PMJson[])
       }
       childMarks = withAnchor
     }
-  } else if (tag === 'span' && el.classList.contains('quote-inline')) {
-    const sourceId = el.getAttribute('data-source-id')
-    const page = el.getAttribute('data-page')
-    if (sourceId) childMarks = addMark(childMarks, { type: 'quote_inline', attrs: { sourceId, page: page ? Number(page) : null } })
   }
+  // An old `<span class="quote-inline" data-source-id data-page>` (the
+  // pre-PM model's own inline-quote marker) is deliberately not special-
+  // cased here any more — it used to become a `quote_inline` mark (now
+  // removed from the schema entirely; see `pmSchema.ts`'s own doc comment
+  // on `stripQuoteInlineMark`), rendered in a distinct color. The quote
+  // characters it wrapped are already real text either way, so falling
+  // through to the plain element case below (nothing but its own
+  // `childNodes` walked, no mark added) turns it into exactly the ordinary
+  // text the quoted excerpt always was.
   for (const child of Array.from(el.childNodes)) walkInline(child, childMarks, ctx, out)
 }
 

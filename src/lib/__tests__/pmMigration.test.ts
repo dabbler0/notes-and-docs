@@ -159,6 +159,15 @@ describe('migrateEssay: inline marks', () => {
     const para = pm.firstChild!.content.content[1]
     expect(para.content.content.some((n) => n.type.name === 'hard_break')).toBe(true)
   })
+
+  it('converts an old <span class="quote-inline"> into plain, unmarked text — no special mark/rendering any more', () => {
+    const root = node({ id: 'root', draftContent: '<p>before <span class="quote-inline" data-source-id="s1" data-page="1">"quoted"</span> after</p>' })
+    const { doc } = migrateEssay(essay('root'), [root], sources)
+    const pm = assertValidDoc(doc)
+    const para = pm.firstChild!.content.content[1]
+    expect(para.textContent).toBe('before "quoted" after')
+    expect(para.content.content.every((n) => n.marks.length === 0)).toBe(true)
+  })
 })
 
 describe('migrateEssay: citations', () => {

@@ -3638,10 +3638,6 @@ select {
   color: var(--accent);
 }
 
-.pm-editor-root .ProseMirror quote-inline {
-  color: var(--ink-dim);
-}
-
 /* `comment_anchor` (pmSchema.ts) — same pink highlight the old model's own
    `mark.comment-anchor` used, just on the custom element this schema's
    `toDOM` renders instead of a real `<mark>`. */

@@ -98,14 +98,10 @@ describe('replaceAllMatches', () => {
     expect(view.state.doc.textContent).toBe('"hi"')
   })
 
-  it('preserves the mark on a single-character match that sits entirely inside a marked run — the actual motivating case', () => {
+  it('preserves the mark on a single-character match that sits entirely inside a marked run', () => {
     const doc = parse({
       type: 'doc',
-      content: [
-        section('root', '', [
-          paragraph([text('before '), text('“quoted”', [{ type: 'quote_inline', attrs: { sourceId: 's1', page: 1 } }]), text(' after')]),
-        ]),
-      ],
+      content: [section('root', '', [paragraph([text('before '), text('“quoted”', [{ type: 'em' }]), text(' after')])])],
     })
     const view = fakeView(doc)
     replaceAllMatches(view, '“', '"', true)
@@ -113,7 +109,7 @@ describe('replaceAllMatches', () => {
 
     let marked = ''
     view.state.doc.descendants((node) => {
-      if (node.isText && node.marks.some((m) => m.type.name === 'quote_inline')) marked += node.text
+      if (node.isText && node.marks.some((m) => m.type.name === 'em')) marked += node.text
     })
     expect(marked).toBe('"quoted"')
   })

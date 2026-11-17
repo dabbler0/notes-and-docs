@@ -104,28 +104,20 @@ describe('serializeDeck — acknowledgements slide', () => {
 })
 
 describe('serializeDeck — inline quotes', () => {
-  /** `insertQuoteInline` (pmCommands.ts) bakes the surrounding quote characters into the text itself before applying the mark — curly quotes here specifically (rather than the straight `"` it actually inserts today, or a plain `'Quoted text'` with no quote characters at all) since the bug this guards against — a `<q>` element doubling up whatever quote characters are already in the text — never cared which quote character it was; a curly pair catches it (and the regression, if `<q>` ever came back) just as well as a straight one, and this doc predates the straight-quote change. */
-  function quoteInlineDoc(): PMNode {
+  /** An inline quote excerpt (`insertQuoteInline`, pmCommands.ts) is ordinary unmarked text now — its own literal quote characters are already baked into the text, with no special mark/rendering layered on top (see `pmSchema.ts`'s own doc comment on `stripQuoteInlineMark` for the removed mark this guards against ever quietly reappearing). */
+  function quotedTextDoc(): PMNode {
     return PMNode.fromJSON(essaySchema, {
       type: 'doc',
-      content: [
-        section('root', '', [{ type: 'paragraph', content: [{ type: 'text', text: '“Quoted text”', marks: [{ type: 'quote_inline', attrs: { sourceId: 's1', page: 1 } }] }] }]),
-      ],
+      content: [section('root', '', [{ type: 'paragraph', content: [{ type: 'text', text: '"Quoted text"' }] }])],
     })
   }
 
-  it('wraps the already-quoted text in a plain styled span, not a <q> element', () => {
-    const slides = serializeDeck(quoteInlineDoc(), noSources, 'My Deck', 'Jane Author')
+  it('renders the quoted text plain, with no special span and no <q> element wrapping it', () => {
+    const slides = serializeDeck(quotedTextDoc(), noSources, 'My Deck', 'Jane Author')
     const slideWithQuote = slides.find((s) => s.html.includes('Quoted text'))!
-    expect(slideWithQuote.html).toContain('<span class="slide-quote-inline">“Quoted text”</span>')
+    expect(slideWithQuote.html).toContain('&quot;Quoted text&quot;')
+    expect(slideWithQuote.html).not.toContain('<span class="slide-quote-inline">')
     expect(slideWithQuote.html).not.toContain('<q>')
     expect(slideWithQuote.html).not.toContain('</q>')
-  })
-
-  it('never doubles the quote characters — exactly the two pairs already in the text, no more', () => {
-    const slides = serializeDeck(quoteInlineDoc(), noSources, 'My Deck', 'Jane Author')
-    const slideWithQuote = slides.find((s) => s.html.includes('Quoted text'))!
-    expect(slideWithQuote.html.match(/“/g)).toHaveLength(1)
-    expect(slideWithQuote.html.match(/”/g)).toHaveLength(1)
   })
 })

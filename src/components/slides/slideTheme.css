@@ -164,11 +164,6 @@
   margin-bottom: 0;
 }
 
-/** An inline quote set mid-sentence (`quote_inline`, `slideSerializer.ts`'s own `renderInline`) — same italic treatment as a blockquote excerpt, just without the rule/indent a whole separate block gets. The surrounding literal curly quotes are already part of the text itself (`insertQuoteInline`, pmCommands.ts), so this deliberately adds no quote marks of its own — see that mark's own render-site doc comment for why a semantic `<q>` would double them. */
-.slide-quote-inline {
-  font-style: italic;
-}
-
 /** A citation's own rendered label (`slideSerializer.ts`'s `renderCitationLabel`) — accent-colored and a touch bolder than surrounding text, so it reads as a distinct, structured reference rather than ordinary prose, both inline in the body and inside `.slide-citation-footer` below (its own more specific selector match here wins over that block's plain `color: var(--slide-muted)`). */
 .slide-citation-label {
   color: var(--slide-accent);

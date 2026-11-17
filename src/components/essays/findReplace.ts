@@ -9,7 +9,10 @@ import type { EditorView } from 'prosemirror-view'
  * (`pmCommands.ts`'s own `insertQuoteInline` used to wrap a quote in a
  * mismatched curly open/close pair, `“`/`”`, before it was changed to a
  * single straight `"`; a document written against the old version has no
- * other way to get its existing quotes onto the new character). Every
+ * other way to get its existing quotes onto the new character) — a use
+ * case that no longer exists now that an inline quote carries no mark of
+ * its own at all (see `insertQuoteInline`'s own doc comment), but the tool
+ * itself is ordinary general-purpose find/replace regardless. Every
  * match is a literal, Unicode-exact substring comparison — no Unicode
  * normalization, no folding visually-similar characters together — so a
  * curly quote and a straight one are never treated as "the same
@@ -65,15 +68,13 @@ export function findAllMatches(doc: PMNode, query: string, caseSensitive: boolea
  * which replacing in reverse sidesteps entirely rather than needing to
  * re-map each one through `tr.mapping`.
  *
- * `insertText`'s own mark-preserving behavior (prosemirror-state) is what
- * keeps a replaced quote character still marked `quote_inline` afterward:
- * for a match entirely inside one already-uniformly-marked run (true of
- * every single-character quote-character replacement this exists for),
- * it reuses that run's own marks for the replacement text; a replacement
- * whose match spans two differently-marked runs loses marks entirely
- * instead (prosemirror-state's own `marksAcross`, not something this
- * layer tries to work around) — an acceptable limit for a general tool
- * whose one real motivating use case never hits it.
+ * `insertText`'s own mark-preserving behavior (prosemirror-state) keeps
+ * whatever marks a replaced run already carries (bold, italic, a
+ * citation's own surrounding text, …): for a match entirely inside one
+ * already-uniformly-marked run, it reuses that run's own marks for the
+ * replacement text; a replacement whose match spans two differently-marked
+ * runs loses marks entirely instead (prosemirror-state's own
+ * `marksAcross`, not something this layer tries to work around).
  */
 export function replaceAllMatches(view: EditorView, query: string, replacement: string, caseSensitive: boolean): number {
   const matches = findAllMatches(view.state.doc, query, caseSensitive)

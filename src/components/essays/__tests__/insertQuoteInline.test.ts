@@ -47,25 +47,24 @@ function fakeView(doc: PMNode, selectionFrom: number): { view: EditorView; getTr
 }
 
 describe('insertQuoteInline', () => {
-  it('wraps the quoted text in a plain straight double quote, the same character on both sides', () => {
+  it('wraps the quoted text in a plain straight double quote, the same character on both sides, as ordinary unmarked text', () => {
     const doc = parse({ type: 'doc', content: [section('root', 'Essay', [paragraph('before ')])] })
     const pos = doc.content.size - 1 // end of "before "
     const { view, getTransaction } = fakeView(doc, pos)
     insertQuoteInline(view, source, 'a quoted phrase', 42)
     const result = getTransaction().doc
 
-    let quoted = ''
-    result.descendants((node) => {
-      if (node.isText && node.marks.some((m) => m.type.name === 'quote_inline')) quoted += node.text
-    })
-    // `insertQuoteInline` marks exactly the inserted `"quoteText"` run; a
-    // trailing space picks up the same (inclusive-by-default) mark purely
-    // as an artifact of typing right after marked text, so trim it off
-    // before comparing.
-    expect(quoted.trimEnd()).toBe('"a quoted phrase"')
+    expect(result.textContent).toContain('"a quoted phrase"')
     // Not a mismatched curly open/close pair — the whole point of the fix.
-    expect(quoted).not.toContain('“')
-    expect(quoted).not.toContain('”')
+    expect(result.textContent).not.toContain('“')
+    expect(result.textContent).not.toContain('”')
+    // No special mark at all any more — the quote characters themselves
+    // are enough to set it apart; see `insertQuoteInline`'s own doc comment.
+    let anyMarked = false
+    result.descendants((node) => {
+      if (node.isText && node.marks.length > 0) anyMarked = true
+    })
+    expect(anyMarked).toBe(false)
   })
 
   it('still adds the trailing citation right after the quoted text', () => {

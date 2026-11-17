@@ -45,15 +45,6 @@ function renderInline(node: PMNode, sources: Map<string, Source>): string {
         if (mark.type.name === 'strong') text = `<strong>${text}</strong>`
         else if (mark.type.name === 'em') text = `<em>${text}</em>`
         else if (mark.type.name === 'underline') text = `<u>${text}</u>`
-        // Not `<q>`: the text itself already carries its own literal
-        // curly quotes (`insertQuoteInline`, pmCommands.ts, inserts
-        // `"${quoteText}"` as real text before even applying this mark) —
-        // a semantic `<q>` element additionally generates its own
-        // quotation marks via the UA/CSS `quotes` property, which doubled
-        // up with the ones already in the text (`""text""`, visually,
-        // once smart-quoted). A plain styled span carries the same "this
-        // is a quoted excerpt" visual treatment with nothing auto-added.
-        else if (mark.type.name === 'quote_inline') text = `<span class="slide-quote-inline">${text}</span>`
         else if (mark.type.name === 'link' || mark.type.name === 'source_link') text = `<a href="${escapeHtml(mark.attrs.href ?? '#')}">${text}</a>`
       }
       out += text

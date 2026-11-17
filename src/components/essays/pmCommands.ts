@@ -156,23 +156,25 @@ export function insertQuoteBlock(view: EditorView, source: Source, quoteText: st
 }
 
 /**
- * A quote excerpt set inline, mid-sentence — `quote_inline`-marked text
- * plus the same trailing citation, right at the cursor with no paragraph
- * break. Wrapped in a plain straight double quote (`"`), the same
- * character on both sides — not a curly open/close pair (`“`/`”`): this
- * used to insert those instead, matching the old app's own rendering, but
- * a mismatched open/close pair isn't a character anyone can type back in
- * directly (there's no single key for either "smart quote" on an
- * ordinary keyboard), which is exactly the wrong property for something
- * that otherwise reads as ordinary, editable document text. `"` is a key
- * every keyboard already has.
+ * A quote excerpt set inline, mid-sentence — ordinary text plus the same
+ * trailing citation, right at the cursor with no paragraph break. Wrapped
+ * in a plain straight double quote (`"`), the same character on both
+ * sides — not a curly open/close pair (`“`/`”`): this used to insert those
+ * instead, matching the old app's own rendering, but a mismatched open/
+ * close pair isn't a character anyone can type back in directly (there's
+ * no single key for either "smart quote" on an ordinary keyboard), which
+ * is exactly the wrong property for something that otherwise reads as
+ * ordinary, editable document text. `"` is a key every keyboard already
+ * has. No mark applied to the quoted text itself — it used to carry a
+ * `quote_inline` mark for a distinct (light gray) rendering, removed as
+ * unnecessary: the quote characters themselves already set it apart from
+ * the surrounding prose, and the trailing citation is the real record of
+ * which source/page it came from.
  */
 export function insertQuoteInline(view: EditorView, source: Source, quoteText: string, page: number, pageEnd?: number): void {
   const { state } = view
-  const mark = essaySchema.marks.quote_inline.create({ sourceId: source.id, page })
   const citationNode = essaySchema.nodes.citation.create({ sourceId: source.id, note: resolveNote(source, { page, pageEnd }) })
   const tr = state.tr.insertText(`"${quoteText}"`)
-  tr.addMark(tr.selection.to - quoteText.length - 2, tr.selection.to, mark)
   tr.insertText(' ')
   tr.replaceSelectionWith(citationNode, false)
   tr.insertText(' ')

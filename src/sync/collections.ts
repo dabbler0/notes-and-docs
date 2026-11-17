@@ -124,5 +124,12 @@ export type SyncedCollection = (typeof SYNCED_COLLECTIONS)[number]
  *     version still has it, and a field no longer written is still a field
  *     that needs encrypting if it's still sometimes present (see that
  *     entry's own comment in `sync/syncEngine.ts`).
+ * 10 — the dead `quote_inline` mark (the old "render an inline quote
+ *      excerpt in gray" treatment — removed; see `lib/pmSchema.ts`'s own
+ *      doc comment on `stripQuoteInlineMark`) removed from every essay's
+ *      live `doc` and its entire `essayHistory` commit chain, and every
+ *      slideshow's live `doc`, same transform as local migration version 8
+ *      (`models/quoteInlineMigrations.ts`). No new or removed collection,
+ *      no field renamed — just a mark the schema itself no longer declares.
  */
-export const CURRENT_REMOTE_SCHEMA_VERSION = 9
+export const CURRENT_REMOTE_SCHEMA_VERSION = 10

@@ -7,14 +7,10 @@ import { findAllMatches, replaceAllMatches, replaceNextMatch, selectNextMatch } 
  * Find & replace against the live document — see `findReplace.ts`'s own
  * doc comment for why matching is always literal/Unicode-exact (never
  * folding a curly quote and a straight one together, say) and never
- * crosses a paragraph boundary. The one thing this actually needed to
- * exist for: `insertQuoteInline` (pmCommands.ts) used to wrap an inline
- * quote in a mismatched curly `“`/`”` pair rather than a single straight
- * `"`; a document written against that old behavior has no way to get
- * its already-inserted quotes onto the new character except a real
- * find/replace over the whole document, one pass per quote character
- * (open, then close) since they're two different characters to search
- * for.
+ * crosses a paragraph boundary. Originally built for one specific need
+ * (fixing up quote characters an old version of `insertQuoteInline` had
+ * already inserted — see `findReplace.ts`'s own doc comment), but is
+ * ordinary general-purpose find/replace from here on.
  *
  * Reads/writes `view` directly (no `onReplace` callback threaded back up
  * to the caller) — same reasoning `CitationPickerDialog`'s sibling

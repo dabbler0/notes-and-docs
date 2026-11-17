@@ -418,14 +418,6 @@ const marks: Record<string, MarkSpec> = {
       return ['a', { 'data-source-id': mark.attrs.sourceId, target: '_blank', rel: 'noopener noreferrer' }, 0]
     },
   },
-  /** A quoted excerpt's own text, wrapped so export/footnote-note logic can recover which source/page it was pulled from — the mark equivalent of the old app's `<span class="quote-inline" data-source-id data-page>`. */
-  quote_inline: {
-    attrs: { sourceId: {}, page: { default: null } },
-    parseDOM: [{ tag: 'quote-inline', getAttrs: (dom) => ({ sourceId: (dom as HTMLElement).getAttribute('data-source-id'), page: (dom as HTMLElement).getAttribute('data-page') }) }],
-    toDOM(mark) {
-      return ['quote-inline', { 'data-source-id': mark.attrs.sourceId, 'data-page': mark.attrs.page ?? undefined }]
-    },
-  },
   /** The anchor a `Comment` (a side table, same as the old app — see this file's own doc comment) points at. `commentId` only — thread/resolved/body/timestamps all live off-tree. */
   comment_anchor: {
     attrs: { commentId: {} },
@@ -532,15 +524,43 @@ function stripCommentTextMark(item: PMJson): PMJson {
 }
 
 /**
+ * Strips a now-dead `quote_inline` mark — the old "render an inline quote
+ * excerpt in gray" treatment, removed because the quote characters already
+ * baked into the text (`insertQuoteInline`, pmCommands.ts) are enough on
+ * their own to set it apart, with no separate rendering needed — out of
+ * stored JSON before parsing. Same "`Schema#nodeFromJSON` throws on an
+ * unknown mark type" problem `convertLegacyCommentTextSpans` above exists
+ * for, just a flat mark removal with no restructuring needed: the marked
+ * text was always ordinary text, nothing but the mark singled it out, so
+ * exported for `models/quoteInlineMigrations.ts` to reuse for the one-time
+ * on-disk cleanup too (removing the mark at parse time here is what keeps
+ * every doc safely readable regardless of whether that migration has run
+ * yet on this particular document).
+ */
+export function stripQuoteInlineMark(node: PMJson): PMJson {
+  if (node === null || typeof node !== 'object') return node
+  if (Array.isArray(node)) return node.map(stripQuoteInlineMark)
+  const next: PMJson = { ...node }
+  if (Array.isArray(next.marks)) {
+    const marks = (next.marks as PMJson[]).filter((m) => m?.type !== 'quote_inline')
+    if (marks.length) next.marks = marks
+    else delete next.marks
+  }
+  if (Array.isArray(next.content)) next.content = (next.content as PMJson[]).map(stripQuoteInlineMark)
+  return next
+}
+
+/**
  * The one safe way to turn stored `doc` JSON into a real `PMNode` —
- * sanitizes a legacy `comment_text` mark out first (see
- * `convertLegacyCommentTextSpans`'s own doc comment), then parses
- * normally. Every call site that reads a whole `essay.doc`/historical
- * snapshot `doc` off of storage and needs the real, live `PMNode` for it
- * should call this instead of `Node.fromJSON(essaySchema, ...)` directly —
- * that call throws outright on any already-stored document still carrying
- * the dead mark, which this avoids.
+ * sanitizes a legacy `comment_text` mark (see `convertLegacyCommentTextSpans`'s
+ * own doc comment) and a legacy `quote_inline` mark (see `stripQuoteInlineMark`'s
+ * own doc comment) out first, then parses normally. Every call site that
+ * reads a whole `essay.doc`/historical snapshot `doc` off of storage and
+ * needs the real, live `PMNode` for it should call this instead of
+ * `Node.fromJSON(essaySchema, ...)` directly — that call throws outright on
+ * any already-stored document still carrying either dead mark, which this
+ * avoids.
  */
 export function essayDocFromJSON(json: unknown): PMNode {
-  return PMNode.fromJSON(essaySchema, convertLegacyCommentTextSpans(json))
+  return PMNode.fromJSON(essaySchema, stripQuoteInlineMark(convertLegacyCommentTextSpans(json)))
 }

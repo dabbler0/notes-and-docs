@@ -88,4 +88,42 @@ describe('essayDocFromJSON', () => {
     const roundTripped = essaySchema.nodeFromJSON(result.toJSON())
     expect(roundTripped.eq(result)).toBe(true)
   })
+
+  it('strips a dead quote_inline mark instead of throwing "no mark type quote_inline", leaving the quoted text itself untouched', () => {
+    const doc = docWith([
+      {
+        type: 'paragraph',
+        content: [
+          { type: 'text', text: 'Before. ' },
+          { type: 'text', text: '"quoted"', marks: [{ type: 'quote_inline', attrs: { sourceId: 's1', page: 1 } }] },
+          { type: 'text', text: ' After.' },
+        ],
+      },
+    ])
+    // Node.fromJSON(essaySchema, doc) would throw here — that's the bug being fixed.
+    const result = essayDocFromJSON(doc)
+    expect(result.textContent).toContain('Before. "quoted" After.')
+    let anyMarked = false
+    result.descendants((n) => {
+      if (n.isText && n.marks.length > 0) anyMarked = true
+    })
+    expect(anyMarked).toBe(false)
+  })
+
+  it('strips a quote_inline mark that sits alongside a still-real mark (e.g. bold), keeping the real one', () => {
+    const doc = docWith([
+      { type: 'paragraph', content: [{ type: 'text', text: '"bold quoted"', marks: [{ type: 'quote_inline', attrs: { sourceId: 's1', page: 1 } }, { type: 'strong' }] }] },
+    ])
+    const result = essayDocFromJSON(doc)
+    let sawStrong = false
+    let sawQuoteInline = false
+    result.descendants((n) => {
+      if (n.isText) {
+        if (n.marks.some((m) => m.type.name === 'strong')) sawStrong = true
+        if (n.marks.some((m) => (m.type as unknown as { name: string }).name === 'quote_inline')) sawQuoteInline = true
+      }
+    })
+    expect(sawStrong).toBe(true)
+    expect(sawQuoteInline).toBe(false)
+  })
 })
