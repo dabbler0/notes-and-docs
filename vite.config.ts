@@ -35,7 +35,14 @@ export default defineConfig(({ mode }) => {
                 scope: '/',
                 display: 'standalone',
                 background_color: '#ffffff',
-                theme_color: '#7e14ff',
+                // Matches the app's own accent color (favicon.svg's own
+                // background fill, index.html's `<meta name="theme-color">`)
+                // — this used to be a leftover default (`#7e14ff`, a bright
+                // purple with no relation to this app's actual palette, same
+                // unreplaced-template origin as the icons right below this
+                // used to have), which showed up as the installed PWA's own
+                // splash-screen/status-bar color on Android.
+                theme_color: '#c96b4a',
                 icons: [
                   { src: '/icons/icon-192.png', sizes: '192x192', type: 'image/png' },
                   { src: '/icons/icon-512.png', sizes: '512x512', type: 'image/png' },
