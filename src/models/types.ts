@@ -400,6 +400,19 @@ export interface Essay {
    */
   date?: string
   /**
+   * A short line of text shown centered at the bottom of every page in a
+   * paginated print/PDF export (`ExportDialog.tsx`'s own `exportPdf`,
+   * every print mode but Substack — Substack has no real pages to put a
+   * running footer on) — a running head like "DRAFT — do not circulate"
+   * or "Working paper, do not cite", the same idea as a page number or a
+   * book's own running title, just author-chosen text instead. Edited
+   * from `EssayWorkspace`'s own footer-text chip, sitting right next to
+   * the author/date ones. Absent or blank means no footer line at all —
+   * the bottom-center margin box is simply left empty, same as every
+   * essay before this field existed.
+   */
+  footerText?: string
+  /**
    * This essay's own content as a single, real ProseMirror document — the
    * "maximal" single-document model that replaces the old `EssayNode` tree
    * glued together by `childMarkers.ts`'s HTML marker divs (`rootNodeId`,

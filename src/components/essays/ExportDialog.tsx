@@ -228,6 +228,7 @@ export function ExportDialog({ essay, nodeMap, doc, onClose }: { essay: Essay; n
       }
       const titleText = cssStringEscape(essay.title)
       const authorText = cssStringEscape(authorName ?? '')
+      const footerText = cssStringEscape(essay.footerText ?? '')
       const bodyFontFamily = substack ? `-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif` : `'EB Garamond', Georgia, 'Times New Roman', serif`
 
       // Shared by every mode, paginated or not — fonts, base typography,
@@ -316,6 +317,7 @@ export function ExportDialog({ essay, nodeMap, doc, onClose }: { essay: Essay; n
           margin: 1in;
           @top-left { content: "${titleText}"; font-family: 'EB Garamond', Georgia, serif; font-variant: small-caps; letter-spacing: 0.03em; font-size: 11px; color: #666; }
           ${authorName ? `@top-right { content: "${authorText}"; font-family: 'EB Garamond', Georgia, serif; font-variant: small-caps; letter-spacing: 0.03em; font-size: 11px; color: #666; }` : ''}
+          ${essay.footerText ? `@bottom-center { content: "${footerText}"; font-family: 'EB Garamond', Georgia, serif; font-variant: small-caps; letter-spacing: 0.03em; font-size: 10px; color: #666; }` : ''}
         }
         /* A book's own running folio: the page number sits in the outer
            bottom corner — left on a verso (left-hand) page, right on a
@@ -448,6 +450,14 @@ export function ExportDialog({ essay, nodeMap, doc, onClose }: { essay: Essay; n
               Renders that same Markdown (References section included) as a printable page in a new tab, then opens your browser's print dialog — choose “Save as PDF.” Adds a small-caps page header
               (title, and your name if set under Sync → Your name) and a running page number in the bottom outer corner, alternating sides like a printed book. Footnotes print at the bottom of the
               page they're referenced on.
+              {essay.footerText ? (
+                <>
+                  {' '}
+                  Also prints “{essay.footerText}” centered at the bottom of every page — set from the footer-text chip under the title, back in the editor.
+                </>
+              ) : (
+                ' Set a centered footer line for every page — "DRAFT", say — from the footer-text chip under the title, back in the editor.'
+              )}
             </p>
             <label className="field-inline">
               Print style

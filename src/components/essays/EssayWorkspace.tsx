@@ -235,6 +235,21 @@ export function EssayWorkspace({
     setEssay({ ...essay })
   }
 
+  async function saveFooterText(text: string) {
+    if (!essay) return
+    essay.footerText = text || undefined
+    await saveEssay(essay)
+    setEssay({ ...essay })
+  }
+
+  /** The footer-text chip's own click handler — prompts for the text shown centered at the bottom of every page in a print/PDF export (see `Essay.footerText`'s own doc comment), seeded with whatever's already set. */
+  async function handleEditFooterText() {
+    if (!essay) return
+    const text = await promptDialog('Footer text for every page of a print/PDF export?', { defaultValue: essay.footerText ?? '', placeholder: 'e.g. DRAFT — do not circulate' })
+    if (text === null) return
+    await saveFooterText(text.trim())
+  }
+
   /**
    * "Slideshow" toolbar button — copies this essay's current content into a
    * brand-new `Slideshow` (`createSlideshowFromEssay`'s own doc comment) and
@@ -579,6 +594,25 @@ export function EssayWorkspace({
               />
               {essay.date && (
                 <button className="btn btn-ghost btn-sm" title="Clear — defaults back to the date of the render" onClick={() => saveDate('')}>
+                  ×
+                </button>
+              )}
+              {/* A short running-head line, shown centered at the bottom of
+                  every page in a print/PDF export (Essay.footerText's own
+                  doc comment) — same "chip launches a modal, nothing
+                  editable in place" pattern as the author-name chip above,
+                  just for text this essay sets itself rather than the
+                  global author preference. */}
+              <button
+                className="chip"
+                style={{ border: 'none', cursor: 'pointer' }}
+                title="Footer text shown centered at the bottom of every page in a print/PDF export — click to edit"
+                onClick={handleEditFooterText}
+              >
+                <Icon name="text" size={13} /> {essay.footerText || 'Footer text'}
+              </button>
+              {essay.footerText && (
+                <button className="btn btn-ghost btn-sm" title="Clear footer text" onClick={() => saveFooterText('')}>
                   ×
                 </button>
               )}
