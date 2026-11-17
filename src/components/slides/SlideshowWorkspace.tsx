@@ -11,6 +11,7 @@ import { getAuthorAffiliation, getAuthorName } from '../../lib/authorPreference'
 import { insertCitation, insertQuoteBlock, insertQuoteInline, insertSlideBreak, insertFragmentBreak, splitIntoSection } from '../essays/pmCommands'
 import { PMEssayEditor } from '../essays/PMEssayEditor'
 import { FindReplaceDialog } from '../essays/FindReplaceDialog'
+import { AuthorNoteDialog } from '../essays/AuthorNoteDialog'
 import { SlidePresenter } from './SlidePresenter'
 import { exportSlideshowPdf } from './exportSlidesPdf'
 import { CitationPickerDialog } from '../essays/CitationPickerDialog'
@@ -34,6 +35,7 @@ export function SlideshowWorkspace({ slideshowId, onBack }: { slideshowId: strin
   const [title, setTitle] = useState('')
   const [subtitle, setSubtitle] = useState('')
   const [date, setDate] = useState('')
+  const [showAuthorNote, setShowAuthorNote] = useState(false)
   // Per-present/-export, not persisted on the deck itself — same "checked
   // fresh each time, not re-asked-for-every-essay" shape
   // `ExportDialog.tsx`'s own `includeAffiliation` state uses. Defaults on:
@@ -85,6 +87,13 @@ export function SlideshowWorkspace({ slideshowId, onBack }: { slideshowId: strin
     setDate(value)
     deck.date = value || undefined
     await saveSlideshow(deck)
+  }
+
+  async function saveAuthorNote(note: string) {
+    if (!deck) return
+    deck.authorNote = note || undefined
+    await saveSlideshow(deck)
+    setDeck({ ...deck })
   }
 
   /** For `view`-taking commands (`insertCitation`, `insertSlideBreak`, …), which already manage focus/selection themselves. */
@@ -141,7 +150,7 @@ export function SlideshowWorkspace({ slideshowId, onBack }: { slideshowId: strin
           className="btn btn-sm"
           disabled={!doc}
           title="Open every slide as its own printable page in a new tab, then open the browser's print dialog — choose “Save as PDF.”"
-          onClick={() => doc && exportSlideshowPdf(doc, sources.current, title, getAuthorName(), subtitle, { affiliation: includeAffiliation ? getAuthorAffiliation() : undefined, date })}
+          onClick={() => doc && exportSlideshowPdf(doc, sources.current, title, getAuthorName(), subtitle, { affiliation: includeAffiliation ? getAuthorAffiliation() : undefined, date, authorNote: deck.authorNote })}
         >
           ⬇ <span className="btn-label">Export PDF</span>
         </button>
@@ -159,6 +168,16 @@ export function SlideshowWorkspace({ slideshowId, onBack }: { slideshowId: strin
           author necessarily wants it shown). Applies to both Present and
           Export PDF, since both render the exact same title slide. */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 16, padding: '8px 20px', borderBottom: '1px solid var(--border)', flexWrap: 'wrap' }}>
+        {/* Shows the globally-configured author name (lib/authorPreference.ts)
+            — not editable in place, just a launcher for the real editable
+            field, this deck's own `authorNote` (AuthorNoteDialog). A
+            non-blank note gets its own Acknowledgements slide, right before
+            References (`slideSerializer.ts`'s own doc comment) — same chip,
+            same launcher pattern `EssayWorkspace.tsx` already uses, just
+            rendered differently once it actually reaches a slide. */}
+        <button className="chip" style={{ border: 'none', cursor: 'pointer' }} title="Thanks/acknowledgements/disclosures — shown on their own Acknowledgements slide, right before References — click to edit" onClick={() => setShowAuthorNote(true)}>
+          <Icon name="footnote" size={13} /> {getAuthorName() || 'No author name set'}
+        </button>
         <label className="muted" style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12.5 }}>
           Date
           <input
@@ -261,10 +280,19 @@ export function SlideshowWorkspace({ slideshowId, onBack }: { slideshowId: strin
           authorName={getAuthorName()}
           deckAffiliation={includeAffiliation ? getAuthorAffiliation() : undefined}
           deckDate={date}
+          deckAuthorNote={deck.authorNote}
           onClose={() => setPresenting(false)}
         />
       )}
       {showFindReplace && viewRef.current && <FindReplaceDialog view={viewRef.current} onClose={() => setShowFindReplace(false)} />}
+      {showAuthorNote && (
+        <AuthorNoteDialog
+          initialValue={deck.authorNote ?? ''}
+          description="Thanks, acknowledgements, or disclosures for this deck — shown on their own Acknowledgements slide, right before References. Leave blank for no such slide."
+          onSave={saveAuthorNote}
+          onClose={() => setShowAuthorNote(false)}
+        />
+      )}
     </div>
   )
 }

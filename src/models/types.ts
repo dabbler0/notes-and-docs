@@ -504,6 +504,17 @@ export interface Slideshow {
    * through). Picked from `SlideshowWorkspace`'s own date field.
    */
   date?: string
+  /**
+   * An optional thanks/acknowledgements/disclosures note for this deck —
+   * the same role, same inline-Markdown allowance (`*bold*`/`_italic_`/
+   * `[text](url)`), and the same `AuthorNoteDialog` editor `Essay.authorNote`
+   * already has, just rendered differently: a slide deck has no footnote
+   * mechanism to attach it to, so a non-blank note gets its own whole
+   * "Acknowledgements" slide instead (`slideSerializer.ts`'s
+   * `renderAcknowledgementsSlide`), inserted right before the deck's own
+   * closing References slide. Absent or blank means no such slide at all.
+   */
+  authorNote?: string
   doc: unknown
   createdAt: number
   updatedAt: number

@@ -1,6 +1,7 @@
 import type { Node as PMNode } from 'prosemirror-model'
 import { citationLabel, formatCitation } from '../../lib/bibtex'
 import { attributionDateText } from '../../lib/renderDate'
+import { inlineMarkdownToHtml } from '../../lib/export'
 import type { Source } from '../../models/types'
 
 /**
@@ -280,6 +281,34 @@ function renderTitleSlide(deckTitle: string, deckSubtitle: string, authorName: s
   }
 }
 
+/**
+ * A dedicated slide for `Slideshow.authorNote` — generated fresh (never
+ * stored as real document content) and inserted right before the closing
+ * References slide, only when the note is actually non-blank. Each line
+ * runs through the same `inlineMarkdownToHtml` (`lib/export.ts`) the
+ * essay-side footnote version of this same note already uses, rejoined
+ * with `<br>` — a literal `\n` the author typed into `AuthorNoteDialog`'s
+ * plain `<textarea>` is otherwise just whitespace HTML collapses away,
+ * same reasoning that function's own doc comment gives.
+ */
+function renderAcknowledgementsSlide(authorNote: string): SerializedSlide {
+  const body = authorNote
+    .split('\n')
+    .map((line) => inlineMarkdownToHtml(line))
+    .join('<br>')
+  return {
+    html: `<div class="slide-inner slide-layout-content">
+      <div class="slide-eyebrow"></div>
+      <h2 class="slide-title-display">Acknowledgements</h2>
+      <hr class="title-rule-thin" />
+      <div class="slide-body-wrap">
+        <div class="slide-body acknowledgements-body"><p>${body}</p></div>
+      </div>
+    </div>`,
+    notes: '',
+  }
+}
+
 /** The deck's own fixed closing slide — generated fresh every time from every citation used anywhere in the deck (`collectCitedSourceIds`), never stored as real document content. */
 function renderBibliographySlide(citedIds: string[], sources: Map<string, Source>): SerializedSlide {
   const entries = citedIds
@@ -336,7 +365,7 @@ export function serializeDeck(
   deckTitle: string,
   authorName: string,
   deckSubtitle = '',
-  opts: { affiliation?: string; date?: string } = {},
+  opts: { affiliation?: string; date?: string; authorNote?: string } = {},
 ): SerializedSlide[] {
   const citedIds = collectCitedSourceIds(doc)
   const slides: SerializedSlide[] = [renderTitleSlide(deckTitle, deckSubtitle, authorName, opts.affiliation, opts.date)]
@@ -421,6 +450,8 @@ export function serializeDeck(
   walkSection(doc.firstChild!, null, true)
   flush()
 
+  const authorNote = opts.authorNote?.trim()
+  if (authorNote) slides.push(renderAcknowledgementsSlide(authorNote))
   slides.push(renderBibliographySlide(citedIds, sources))
   return slides
 }

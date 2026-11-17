@@ -44,7 +44,7 @@ export function exportSlideshowPdf(
   deckTitle: string,
   authorName: string,
   deckSubtitle = '',
-  opts: { affiliation?: string; date?: string } = {},
+  opts: { affiliation?: string; date?: string; authorNote?: string } = {},
 ): void {
   const slides = serializeDeck(doc, sources, deckTitle, authorName, deckSubtitle, opts)
   const win = window.open('', '_blank')

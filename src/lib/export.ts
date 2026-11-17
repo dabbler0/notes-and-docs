@@ -546,7 +546,7 @@ export function pmReferencesHtml(doc: PMNode, sources: Map<string, Source>, styl
 
 // ---- Markdown -> printable HTML (for "export to PDF") ----------------
 
-function inlineMarkdownToHtml(text: string): string {
+export function inlineMarkdownToHtml(text: string): string {
   // `<u>...</u>` is inlineHtmlToMarkdown's own raw-HTML passthrough for
   // underline (Markdown has no native syntax for it) — pulled out and
   // recursively re-rendered (so bold/italic/etc. can still nest inside an

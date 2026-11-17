@@ -21,6 +21,7 @@ export function SlidePresenter({
   authorName,
   deckAffiliation,
   deckDate,
+  deckAuthorNote,
   onClose,
 }: {
   doc: PMNode
@@ -31,6 +32,8 @@ export function SlidePresenter({
   /** Already resolved by the caller (`SlideshowWorkspace.tsx`'s own "include affiliation" checkbox) — omitted entirely when that's unchecked, not merely passed-but-ignored. */
   deckAffiliation?: string
   deckDate?: string
+  /** `Slideshow.authorNote` — a non-blank value gets its own Acknowledgements slide, right before References (`slideSerializer.ts`'s own doc comment). */
+  deckAuthorNote?: string
   onClose: () => void
 }) {
   const revealRootRef = useRef<HTMLDivElement>(null)
@@ -38,7 +41,7 @@ export function SlidePresenter({
 
   useEffect(() => {
     if (!revealRootRef.current || !slidesRef.current) return
-    const slides = serializeDeck(doc, sources, deckTitle, authorName, deckSubtitle, { affiliation: deckAffiliation, date: deckDate })
+    const slides = serializeDeck(doc, sources, deckTitle, authorName, deckSubtitle, { affiliation: deckAffiliation, date: deckDate, authorNote: deckAuthorNote })
     slidesRef.current.innerHTML = slides.map((s) => `<section>${s.html}</section>`).join('')
 
     const deck = new Reveal(revealRootRef.current, {

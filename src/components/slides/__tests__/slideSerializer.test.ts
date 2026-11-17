@@ -69,6 +69,40 @@ describe('serializeDeck — title slide', () => {
   })
 })
 
+describe('serializeDeck — acknowledgements slide', () => {
+  it('inserts no acknowledgements slide at all when authorNote is absent or blank', () => {
+    expect(serializeDeck(minimalDoc(), noSources, 'My Deck', 'Jane Author').some((s) => s.html.includes('Acknowledgements'))).toBe(false)
+    expect(serializeDeck(minimalDoc(), noSources, 'My Deck', 'Jane Author', '', { authorNote: '   ' }).some((s) => s.html.includes('Acknowledgements'))).toBe(false)
+  })
+
+  it('inserts exactly one acknowledgements slide, right before the closing References slide, when authorNote is non-blank', () => {
+    const slides = serializeDeck(minimalDoc(), noSources, 'My Deck', 'Jane Author', '', { authorNote: 'Thanks to A and B.' })
+    expect(slides).toHaveLength(4) // title, body, acknowledgements, references
+    expect(slides[2].html).toContain('Acknowledgements')
+    expect(slides[2].html).toContain('Thanks to A and B.')
+    expect(slides[3].html).toContain('References')
+  })
+
+  it('applies inline Markdown (bold/italic/links) the same way the essay-side footnote version does', () => {
+    const slides = serializeDeck(minimalDoc(), noSources, 'My Deck', 'Jane Author', '', { authorNote: '*Thanks* to [Jane](https://example.com).' })
+    const ack = slides.find((s) => s.html.includes('Acknowledgements'))!
+    expect(ack.html).toContain('<em>Thanks</em>')
+    expect(ack.html).toContain('<a href="https://example.com" target="_blank" rel="noopener">Jane</a>')
+  })
+
+  it('turns a literal line break in the note into a real <br>, rather than collapsing it', () => {
+    const slides = serializeDeck(minimalDoc(), noSources, 'My Deck', 'Jane Author', '', { authorNote: 'Line one.\nLine two.' })
+    const ack = slides.find((s) => s.html.includes('Acknowledgements'))!
+    expect(ack.html).toContain('Line one.<br>Line two.')
+  })
+
+  it('escapes HTML in the note', () => {
+    const slides = serializeDeck(minimalDoc(), noSources, 'My Deck', 'Jane Author', '', { authorNote: '<b>bold</b> & more' })
+    const ack = slides.find((s) => s.html.includes('Acknowledgements'))!
+    expect(ack.html).toContain('&lt;b&gt;bold&lt;/b&gt; &amp; more')
+  })
+})
+
 describe('serializeDeck — inline quotes', () => {
   /** `insertQuoteInline` (pmCommands.ts) bakes the surrounding quote characters into the text itself before applying the mark — curly quotes here specifically (rather than the straight `"` it actually inserts today, or a plain `'Quoted text'` with no quote characters at all) since the bug this guards against — a `<q>` element doubling up whatever quote characters are already in the text — never cared which quote character it was; a curly pair catches it (and the regression, if `<q>` ever came back) just as well as a straight one, and this doc predates the straight-quote change. */
   function quoteInlineDoc(): PMNode {

@@ -239,6 +239,14 @@
   margin-top: 2px;
 }
 
+/* ---- Acknowledgements layout ---- */
+
+/** `Slideshow.authorNote`'s own dedicated slide (`slideSerializer.ts`'s `renderAcknowledgementsSlide`) — plain prose, so just a comfortable reading size/line-height, same register as the bibliography slide right after it rather than the tighter default body text. */
+.acknowledgements-body {
+  font-size: 18px;
+  line-height: 1.5;
+}
+
 /* ---- Bibliography layout ---- */
 
 .bibliography-body {
