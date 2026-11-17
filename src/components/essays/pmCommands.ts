@@ -64,7 +64,7 @@ export function preventJoinIntoSectionTitle(state: EditorState): boolean {
   return false
 }
 
-/** `citationHtml`'s own `note` formatting (`lib/bibtex.ts`) — an explicit note wins, otherwise `pageNote` derives "p. N" from a page number (empty if the source has no page numbers at all). Shared by every insertion command below, same as the old HTML-chip path shared it through `citationHtml` itself. */
+/** `citationHtml`'s own `note` formatting (`lib/bibtex.ts`) — an explicit note wins, otherwise `pageNote` derives "pN" from a page number (empty if the source has no page numbers at all). Shared by every insertion command below, same as the old HTML-chip path shared it through `citationHtml` itself. */
 function resolveNote(source: Source, opts: { note?: string; page?: number; pageEnd?: number }): string | null {
   const note = opts.note?.trim() || pageNote(source, opts.page, opts.pageEnd)
   return note || null

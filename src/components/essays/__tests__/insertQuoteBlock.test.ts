@@ -138,7 +138,7 @@ describe('insertQuoteBlock', () => {
     expect(secondSection!.childCount).toBe(2)
   })
 
-  it('cites a "pp. N–M" page range when pageEnd is given, not just the starting page', () => {
+  it('cites a "ppN–M" page range when pageEnd is given, not just the starting page', () => {
     const doc = parse({ type: 'doc', content: [section('root', 'Essay', [paragraph('before')])] })
     const pos = doc.content.size - 1
     const { view, getTransaction } = fakeView(doc, pos)
@@ -150,6 +150,6 @@ describe('insertQuoteBlock', () => {
     bq.node.child(1).forEach((n) => {
       if (n.type.name === 'citation') citationNote = n.attrs.note
     })
-    expect(citationNote).toBe('pp. 42–45')
+    expect(citationNote).toBe('pp42–45')
   })
 })

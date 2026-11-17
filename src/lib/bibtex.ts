@@ -348,7 +348,7 @@ export function extractLegacyCitationNote(text: string, year: string | undefined
 export type CitationStyle = 'author-date'
 
 /**
- * Turns a `BibtexEntry` plus an optional freeform note ("p. 5", "ch. 3",
+ * Turns a `BibtexEntry` plus an optional freeform note ("p5", "ch. 3",
  * "forthcoming", …) into a citation's actual display text. The one
  * function a future citation-style setting would extend — see
  * `CitationStyle`'s own doc comment.
@@ -384,9 +384,9 @@ export function pageNote(source: Source, page: number | undefined, pageEnd?: num
   if (!p) return ''
   if (pageEnd && page !== undefined && pageEnd > page) {
     const end = citationPage(source, pageEnd)
-    if (end && end > p) return `pp. ${p}–${end}`
+    if (end && end > p) return `pp${p}–${end}`
   }
-  return `p. ${p}`
+  return `p${p}`
 }
 
 /**

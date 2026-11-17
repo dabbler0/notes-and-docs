@@ -60,16 +60,16 @@ describe('citationPage', () => {
 
 describe('citationHtml page display', () => {
   it('shows the raw page by default', () => {
-    expect(citationHtml(source(), { page: 12 })).toContain('p. 12')
+    expect(citationHtml(source(), { page: 12 })).toContain('p12')
   })
 
   it('shows the offset-adjusted page', () => {
-    expect(citationHtml(source({ pageOffset: 3 }), { page: 12 })).toContain('p. 9')
+    expect(citationHtml(source({ pageOffset: 3 }), { page: 12 })).toContain('p9')
   })
 
   it('omits the page entirely for a no-page-numbers source', () => {
     const html = citationHtml(source({ noPageNumbers: true }), { page: 12 })
-    expect(html).not.toContain('p.')
+    expect(html).not.toContain('data-note')
   })
 
   it('omits the page when no page was given at all', () => {
@@ -79,9 +79,9 @@ describe('citationHtml page display', () => {
 })
 
 describe('pageNote', () => {
-  it('formats the offset-adjusted page as "p. N"', () => {
-    expect(pageNote(source(), 12)).toBe('p. 12')
-    expect(pageNote(source({ pageOffset: 3 }), 12)).toBe('p. 9')
+  it('formats the offset-adjusted page as "pN"', () => {
+    expect(pageNote(source(), 12)).toBe('p12')
+    expect(pageNote(source({ pageOffset: 3 }), 12)).toBe('p9')
   })
 
   it('is the empty string, not null, when there is nothing to show', () => {
@@ -89,18 +89,18 @@ describe('pageNote', () => {
     expect(pageNote(source({ noPageNumbers: true }), 12)).toBe('')
   })
 
-  it('formats a page range as "pp. N–M" when pageEnd is strictly past page', () => {
-    expect(pageNote(source(), 42, 45)).toBe('pp. 42–45')
+  it('formats a page range as "ppN–M" when pageEnd is strictly past page', () => {
+    expect(pageNote(source(), 42, 45)).toBe('pp42–45')
   })
 
   it('applies the same offset to both ends of a range', () => {
-    expect(pageNote(source({ pageOffset: 3 }), 42, 45)).toBe('pp. 39–42')
+    expect(pageNote(source({ pageOffset: 3 }), 42, 45)).toBe('pp39–42')
   })
 
   it('falls back to a plain single page when pageEnd is not actually past page', () => {
-    expect(pageNote(source(), 42, 42)).toBe('p. 42')
-    expect(pageNote(source(), 42, 40)).toBe('p. 42')
-    expect(pageNote(source(), 42, undefined)).toBe('p. 42')
+    expect(pageNote(source(), 42, 42)).toBe('p42')
+    expect(pageNote(source(), 42, 40)).toBe('p42')
+    expect(pageNote(source(), 42, undefined)).toBe('p42')
   })
 
   it('omits the page entirely for a no-page-numbers source, even with a range given', () => {
@@ -183,7 +183,7 @@ describe('citationHtml structured data', () => {
 
   it('derives data-note from a raw page via the same pageNote formatting, when note is not given directly', () => {
     const html = citationHtml(source({ pageOffset: 3 }), { page: 12 })
-    expect(html).toContain('data-note="p. 9"')
+    expect(html).toContain('data-note="p9"')
   })
 
   it('omits data-note entirely when there is nothing to show, rather than an empty attribute', () => {
@@ -193,7 +193,7 @@ describe('citationHtml structured data', () => {
   it('prefers an explicit note over a page when both are given', () => {
     const html = citationHtml(source(), { page: 12, note: 'ch. 3' })
     expect(html).toContain('data-note="ch. 3"')
-    expect(html).not.toContain('p. 12')
+    expect(html).not.toContain('p12')
   })
 
   it('HTML-escapes a freeform note that contains markup, rather than splicing it in raw', () => {
