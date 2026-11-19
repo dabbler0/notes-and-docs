@@ -245,28 +245,37 @@ export interface SerializedSlide {
 /**
  * The deck's own fixed opening slide — generated fresh every time from
  * `Slideshow.title`/`Slideshow.subtitle`, the globally configured author
- * name (`lib/authorPreference.ts`), and optionally an affiliation/date,
- * never stored as real document content.
+ * name (`lib/authorPreference.ts`), and optionally an affiliation/venue/
+ * date, never stored as real document content.
  *
  * `affiliation`, when given, is appended to the author line itself
  * ("Jane Author, Some University") — `SlideshowWorkspace.tsx` resolves
  * whether to pass one at all (the global affiliation, or nothing) via its
- * own per-present/-export "include affiliation" checkbox. `date` renders
- * on its own line right beneath, via `attributionDateText`
- * (`lib/renderDate.ts`) — a specific picked date, or, when absent, today's
- * own date at render time — so that line always renders whenever the
- * author line does, same as the essay print export's `.print-date`.
+ * own per-present/-export "include affiliation" checkbox. `venue`, when
+ * non-blank, renders on its own `.deck-venue` line right after the author
+ * line and right before the date (`Slideshow.venue`'s own doc comment) —
+ * absent entirely when there's none set, same as `.print-venue` on the
+ * essay side. `date` renders on its own line right beneath whichever of
+ * those two ends up last, via `attributionDateText` (`lib/renderDate.ts`)
+ * — a specific picked date, or, when absent, today's own date at render
+ * time — so that line always renders whenever the author line does, same
+ * as the essay print export's `.print-date`.
  */
-function renderTitleSlide(deckTitle: string, deckSubtitle: string, authorName: string, affiliation?: string, date?: string): SerializedSlide {
+function renderTitleSlide(deckTitle: string, deckSubtitle: string, authorName: string, affiliation?: string, venue?: string, date?: string): SerializedSlide {
   const trimmedAffiliation = affiliation?.trim()
   const authorLine = trimmedAffiliation ? `${authorName}, ${trimmedAffiliation}` : authorName
+  const trimmedVenue = venue?.trim()
   return {
     html: `<div class="slide-inner slide-layout-title">
       <div class="title-rule"></div>
       <h1 class="deck-title">${escapeHtml(deckTitle)}</h1>
       ${deckSubtitle.trim() ? `<div class="deck-subtitle">${escapeHtml(deckSubtitle.trim())}</div>` : ''}
       <div class="title-rule"></div>
-      ${authorName ? `<div class="deck-authors">${escapeHtml(authorLine)}</div><div class="deck-date">${escapeHtml(attributionDateText(date))}</div>` : ''}
+      ${
+        authorName
+          ? `<div class="deck-authors">${escapeHtml(authorLine)}</div>${trimmedVenue ? `<div class="deck-venue">${escapeHtml(trimmedVenue)}</div>` : ''}<div class="deck-date">${escapeHtml(attributionDateText(date))}</div>`
+          : ''
+      }
     </div>`,
     notes: '',
   }
@@ -356,10 +365,10 @@ export function serializeDeck(
   deckTitle: string,
   authorName: string,
   deckSubtitle = '',
-  opts: { affiliation?: string; date?: string; authorNote?: string } = {},
+  opts: { affiliation?: string; venue?: string; date?: string; authorNote?: string } = {},
 ): SerializedSlide[] {
   const citedIds = collectCitedSourceIds(doc)
-  const slides: SerializedSlide[] = [renderTitleSlide(deckTitle, deckSubtitle, authorName, opts.affiliation, opts.date)]
+  const slides: SerializedSlide[] = [renderTitleSlide(deckTitle, deckSubtitle, authorName, opts.affiliation, opts.venue, opts.date)]
 
   let acc: SlideAccumulator | null = null
   let fragmentIndex = -1

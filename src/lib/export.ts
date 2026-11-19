@@ -841,14 +841,17 @@ export function addPrintChrome(bodyHtml: string): string {
  * `lib/authorPreference.ts` value, or nothing) via its own per-export
  * "include affiliation" checkbox, so this function itself doesn't need
  * to know that setting exists at all; it just renders whatever string
- * it's handed, or nothing. `opts.date` adds a second `.print-date` line
- * right beneath the author line — `attributionDateText`
- * (`lib/renderDate.ts`) resolves a specific picked date, or (when
- * `opts.date` is absent — the essay's own "no specific date chosen"
- * state) today's date at render time, so this line always renders
- * whenever the author line does.
+ * it's handed, or nothing. `opts.venue`, when non-blank, adds its own
+ * `.print-venue` line right after the author line and right before the
+ * date — a conference/journal name (`Essay.venue`'s own doc comment),
+ * absent entirely (not even a blank line) when there's none set. `opts.date`
+ * adds a final `.print-date` line right beneath whichever of those two
+ * ends up last — `attributionDateText` (`lib/renderDate.ts`) resolves a
+ * specific picked date, or (when `opts.date` is absent — the essay's own
+ * "no specific date chosen" state) today's date at render time, so this
+ * line always renders whenever the author line does.
  */
-export function addAuthorAttribution(bodyHtml: string, authorName: string, opts: { authorNote?: string; affiliation?: string; date?: string } = {}): string {
+export function addAuthorAttribution(bodyHtml: string, authorName: string, opts: { authorNote?: string; affiliation?: string; venue?: string; date?: string } = {}): string {
   const doc = new DOMParser().parseFromString(bodyHtml, 'text/html')
   const h1 = doc.body.querySelector('h1')
   if (!h1) return bodyHtml
@@ -881,10 +884,19 @@ export function addAuthorAttribution(bodyHtml: string, authorName: string, opts:
     list.insertBefore(li, list.firstChild)
   }
   h1.after(p)
+  let lastLine = p
+  const venue = opts.venue?.trim()
+  if (venue) {
+    const venueP = doc.createElement('p')
+    venueP.className = 'print-venue'
+    venueP.appendChild(doc.createTextNode(venue))
+    lastLine.after(venueP)
+    lastLine = venueP
+  }
   const dateP = doc.createElement('p')
   dateP.className = 'print-date'
   dateP.appendChild(doc.createTextNode(attributionDateText(opts.date)))
-  p.after(dateP)
+  lastLine.after(dateP)
   return doc.body.innerHTML
 }
 

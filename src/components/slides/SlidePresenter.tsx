@@ -20,6 +20,7 @@ export function SlidePresenter({
   deckSubtitle,
   authorName,
   deckAffiliation,
+  deckVenue,
   deckDate,
   deckAuthorNote,
   onClose,
@@ -31,6 +32,8 @@ export function SlidePresenter({
   authorName: string
   /** Already resolved by the caller (`SlideshowWorkspace.tsx`'s own "include affiliation" checkbox) — omitted entirely when that's unchecked, not merely passed-but-ignored. */
   deckAffiliation?: string
+  /** `Slideshow.venue` — shown right before `deckDate` on the title slide. */
+  deckVenue?: string
   deckDate?: string
   /** `Slideshow.authorNote` — a non-blank value gets its own Acknowledgements slide, right before References (`slideSerializer.ts`'s own doc comment). */
   deckAuthorNote?: string
@@ -41,7 +44,7 @@ export function SlidePresenter({
 
   useEffect(() => {
     if (!revealRootRef.current || !slidesRef.current) return
-    const slides = serializeDeck(doc, sources, deckTitle, authorName, deckSubtitle, { affiliation: deckAffiliation, date: deckDate, authorNote: deckAuthorNote })
+    const slides = serializeDeck(doc, sources, deckTitle, authorName, deckSubtitle, { affiliation: deckAffiliation, venue: deckVenue, date: deckDate, authorNote: deckAuthorNote })
     slidesRef.current.innerHTML = slides.map((s) => `<section>${s.html}</section>`).join('')
 
     const deck = new Reveal(revealRootRef.current, {

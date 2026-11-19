@@ -59,6 +59,19 @@ describe('serializeDeck — title slide', () => {
     expect(slides[0].html).toContain('<div class="deck-date">March 7, 2024</div>')
   })
 
+  it('renders the venue on its own div, right after the author line and right before the date', () => {
+    const slides = serializeDeck(minimalDoc(), noSources, 'My Deck', 'Jane Author', '', { venue: 'Some Conference 2024', date: '2024-03-07' })
+    const html = slides[0].html
+    expect(html).toContain('<div class="deck-venue">Some Conference 2024</div>')
+    expect(html.indexOf('deck-authors')).toBeLessThan(html.indexOf('deck-venue'))
+    expect(html.indexOf('deck-venue')).toBeLessThan(html.indexOf('deck-date'))
+  })
+
+  it('omits the venue div entirely when not given, or blank', () => {
+    expect(serializeDeck(minimalDoc(), noSources, 'My Deck', 'Jane Author')[0].html).not.toContain('deck-venue')
+    expect(serializeDeck(minimalDoc(), noSources, 'My Deck', 'Jane Author', '', { venue: '   ' })[0].html).not.toContain('deck-venue')
+  })
+
   it("falls back to today's own date when none is picked, but only alongside an author name", () => {
     const withAuthor = serializeDeck(minimalDoc(), noSources, 'My Deck', 'Jane Author')[0].html
     const today = new Date().toLocaleDateString(undefined, { year: 'numeric', month: 'long', day: 'numeric' })

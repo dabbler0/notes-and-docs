@@ -81,6 +81,7 @@ export function EssayWorkspace({
 }) {
   const [essay, setEssay] = useState<Essay | null>(null)
   const [essayTitle, setEssayTitle] = useState('')
+  const [venue, setVenue] = useState('')
   const [doc, setDoc] = useState<PMNode | null>(null)
   // Lets `window.__marginalDumpComments()` in the browser console inspect
   // this essay's comment data live — see `debugComments.ts`'s own doc
@@ -142,6 +143,7 @@ export function EssayWorkspace({
     for (const s of list) sources.set(s.id, s)
     setEssay(e)
     setEssayTitle(e.title)
+    setVenue(e.venue ?? '')
   }
 
   useEffect(() => {
@@ -225,6 +227,13 @@ export function EssayWorkspace({
     essay.authorNote = note || undefined
     await saveEssay(essay)
     setEssay({ ...essay })
+  }
+
+  /** Commits `venue`'s own current state — same deferred-to-blur shape `saveEssayTitle` uses, rather than writing on every keystroke. */
+  async function saveVenue() {
+    if (!essay) return
+    essay.venue = venue.trim() || undefined
+    await saveEssay(essay)
   }
 
   /** `date`: an `<input type="date">`'s own "YYYY-MM-DD" value, or `''` to clear it back to "no specific date — default to the render date" (see `Essay.date`'s own doc comment). */
@@ -578,6 +587,19 @@ export function EssayWorkspace({
               >
                 <Icon name="footnote" size={13} /> {getAuthorName() || 'No author name set'}
               </button>
+              {/* Where this was/will be presented or published (a
+                  conference or journal name) — shown right before the date
+                  in a print/PDF export (Essay.venue's own doc comment). */}
+              <input
+                type="text"
+                className="date-pill-input"
+                style={{ width: 150 }}
+                value={venue}
+                onInput={(e) => setVenue((e.target as HTMLInputElement).value)}
+                onBlur={saveVenue}
+                placeholder="Venue (optional)"
+                title="Venue shown right before the date in print/PDF exports"
+              />
               {/* The date shown beneath the author line in a print/PDF
                   export (lib/export.ts's addAuthorAttribution) — left
                   blank, it defaults to the date of the render itself

@@ -988,6 +988,16 @@ describe('addAuthorAttribution', () => {
     expect(addAuthorAttribution(renderedTitleAndRule(), 'Jane Author', { affiliation: '   ' })).toContain('<p class="print-author">Jane Author</p>')
   })
 
+  it('renders the venue on its own line, right after the author line and right before the date', () => {
+    const html = addAuthorAttribution(renderedTitleAndRule(), 'Jane Author', { venue: 'Some Conference 2024' })
+    expect(html).toMatch(/<p class="print-author">Jane Author<\/p><p class="print-venue">Some Conference 2024<\/p><p class="print-date">[^<]+<\/p>/)
+  })
+
+  it('omits the venue line entirely when not given, or blank', () => {
+    expect(addAuthorAttribution(renderedTitleAndRule(), 'Jane Author')).not.toContain('print-venue')
+    expect(addAuthorAttribution(renderedTitleAndRule(), 'Jane Author', { venue: '   ' })).not.toContain('print-venue')
+  })
+
   it('renders a specific picked date exactly, rather than falling back to today', () => {
     const html = addAuthorAttribution(renderedTitleAndRule(), 'Jane Author', { date: '2024-03-07' })
     expect(html).toContain('<p class="print-date">March 7, 2024</p>')

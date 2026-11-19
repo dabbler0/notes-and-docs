@@ -40,6 +40,7 @@ export function SlideshowWorkspace({ slideshowId, onBack, embedded = false }: { 
   const [deck, setDeck] = useState<Slideshow | null>(null)
   const [title, setTitle] = useState('')
   const [subtitle, setSubtitle] = useState('')
+  const [venue, setVenue] = useState('')
   const [date, setDate] = useState('')
   const [showAuthorNote, setShowAuthorNote] = useState(false)
   // Per-present/-export, not persisted on the deck itself — same "checked
@@ -73,6 +74,7 @@ export function SlideshowWorkspace({ slideshowId, onBack, embedded = false }: { 
       setDeck(d)
       setTitle(d.title)
       setSubtitle(d.subtitle ?? '')
+      setVenue(d.venue ?? '')
       setDate(d.date ?? '')
     }
     load()
@@ -87,6 +89,13 @@ export function SlideshowWorkspace({ slideshowId, onBack, embedded = false }: { 
   async function saveSubtitle() {
     if (!deck) return
     deck.subtitle = subtitle
+    await saveSlideshow(deck)
+  }
+
+  /** Commits `venue`'s own current state on blur — same deferred shape `saveSubtitle` uses, rather than writing on every keystroke. */
+  async function saveVenue() {
+    if (!deck) return
+    deck.venue = venue.trim() || undefined
     await saveSlideshow(deck)
   }
 
@@ -175,7 +184,7 @@ export function SlideshowWorkspace({ slideshowId, onBack, embedded = false }: { 
           className="btn btn-sm"
           disabled={!doc}
           title="Open every slide as its own printable page in a new tab, then open the browser's print dialog — choose “Save as PDF.”"
-          onClick={() => doc && exportSlideshowPdf(doc, sources.current, title, getAuthorName(), subtitle, { affiliation: includeAffiliation ? getAuthorAffiliation() : undefined, date, authorNote: deck.authorNote })}
+          onClick={() => doc && exportSlideshowPdf(doc, sources.current, title, getAuthorName(), subtitle, { affiliation: includeAffiliation ? getAuthorAffiliation() : undefined, venue, date, authorNote: deck.authorNote })}
         >
           ⬇ <span className="btn-label">Export PDF</span>
         </button>
@@ -212,6 +221,22 @@ export function SlideshowWorkspace({ slideshowId, onBack, embedded = false }: { 
         <button className="chip" style={{ border: 'none', cursor: 'pointer' }} title="Thanks/acknowledgements/disclosures — shown on their own Acknowledgements slide, right before References — click to edit" onClick={() => setShowAuthorNote(true)}>
           <Icon name="footnote" size={13} /> {getAuthorName() || 'No author name set'}
         </button>
+        {/* Where this was/will be presented (a conference or workshop
+            name) — shown right before the date on the title slide
+            (Slideshow.venue's own doc comment). */}
+        <label className="muted" style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12.5 }}>
+          Venue
+          <input
+            type="text"
+            className="date-pill-input"
+            style={{ width: 150 }}
+            value={venue}
+            onInput={(e) => setVenue((e.target as HTMLInputElement).value)}
+            onBlur={saveVenue}
+            placeholder="e.g. NeurIPS 2024"
+            title="Venue shown right before the date on the title slide"
+          />
+        </label>
         <label className="muted" style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12.5 }}>
           Date
           <input
@@ -323,6 +348,7 @@ export function SlideshowWorkspace({ slideshowId, onBack, embedded = false }: { 
           deckSubtitle={subtitle}
           authorName={getAuthorName()}
           deckAffiliation={includeAffiliation ? getAuthorAffiliation() : undefined}
+          deckVenue={venue}
           deckDate={date}
           deckAuthorNote={deck.authorNote}
           onClose={() => setPresenting(false)}

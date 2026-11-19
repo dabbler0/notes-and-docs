@@ -227,7 +227,14 @@
   line-height: 1.6;
 }
 
-/** Right beneath `.deck-authors` — see `renderTitleSlide`'s own doc comment (`slideSerializer.ts`) for when this renders (always, alongside the author line) and where its text comes from. */
+/** Right after `.deck-authors`, right before `.deck-date` — see `renderTitleSlide`'s own doc comment (`slideSerializer.ts`) for when this renders (only when `Slideshow.venue` is actually set) and where its text comes from. */
+.slide-layout-title .deck-venue {
+  font-size: 14px;
+  color: var(--slide-muted);
+  margin-top: 2px;
+}
+
+/** Right beneath `.deck-authors`/`.deck-venue` (whichever is last) — see `renderTitleSlide`'s own doc comment (`slideSerializer.ts`) for when this renders (always, alongside the author line) and where its text comes from. */
 .slide-layout-title .deck-date {
   font-size: 14px;
   color: var(--slide-muted);

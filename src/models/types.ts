@@ -400,6 +400,17 @@ export interface Essay {
    */
   date?: string
   /**
+   * A short "where this was/will be presented or published" line — a
+   * conference, journal, or workshop name ("NeurIPS 2024", "Journal of
+   * Examples") — shown right before the date beneath the author line in a
+   * print/PDF export (`lib/export.ts`'s `addAuthorAttribution`), same
+   * "shown only alongside a set author name, in every print mode but
+   * Substack" treatment as `date`/`authorNote`. Edited from
+   * `EssayWorkspace`'s own venue field, sitting right before the date
+   * field. Absent or blank means no venue line at all.
+   */
+  venue?: string
+  /**
    * A short line of text shown centered at the bottom of every page in a
    * paginated print/PDF export (`ExportDialog.tsx`'s own `exportPdf`,
    * every print mode but Substack — Substack has no real pages to put a
@@ -510,6 +521,15 @@ export interface Slideshow {
    * indistinguishable from one where a subtitle was typed in and then
    * cleared back out. */
   subtitle?: string
+  /**
+   * A short "where this was/will be presented" line — a conference or
+   * workshop name ("NeurIPS 2024") — shown right before the date on the
+   * deck's own title slide (`slideSerializer.ts`'s `renderTitleSlide`),
+   * same "no venue line at all when absent or blank" convention as
+   * `Essay.venue`. Picked from `SlideshowWorkspace`'s own venue field,
+   * sitting right before the date field.
+   */
+  venue?: string
   /**
    * A specific date to show beneath the author line on the deck's own
    * title slide — same "YYYY-MM-DD", same default-to-render-date-when-

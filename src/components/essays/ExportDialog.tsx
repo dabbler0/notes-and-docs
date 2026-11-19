@@ -216,7 +216,8 @@ export function ExportDialog({ essay, nodeMap, doc, onClose }: { essay: Essay; n
       let rawBodyHtml = addPrintChrome(markdownToHtml(md))
       if (citationPlacement === 'footnote') rawBodyHtml = moveFootnoteCitationsPastPeriod(rawBodyHtml)
       rawBodyHtml = ensureCitationSpacing(rawBodyHtml)
-      if (!substack && authorName) rawBodyHtml = addAuthorAttribution(rawBodyHtml, authorName, { authorNote: essay.authorNote, affiliation: includeAffiliation ? getAuthorAffiliation() : undefined, date: essay.date })
+      if (!substack && authorName)
+        rawBodyHtml = addAuthorAttribution(rawBodyHtml, authorName, { authorNote: essay.authorNote, affiliation: includeAffiliation ? getAuthorAffiliation() : undefined, venue: essay.venue, date: essay.date })
       rawBodyHtml += doc ? pmReferencesHtml(doc, sources, bibliographyStyle, numberedReferences, { includeUrlWhenDoi }) : referencesHtml(nodeMap!, sources, bibliographyStyle, numberedReferences, { includeUrlWhenDoi })
       if (mathlikeMode) rawBodyHtml = applyMathlikeHeadings(rawBodyHtml)
       const bodyHtml = substack ? rawBodyHtml : floatPrintFootnotes(rawBodyHtml)
@@ -256,16 +257,18 @@ export function ExportDialog({ essay, nodeMap, doc, onClose }: { essay: Essay; n
            next paragraph's own top one. */
         p { margin: 0 0 ${paragraphMargin}; }
         h3, h4, h5, h6 { margin-top: 1.4em; margin-bottom: 0.3em; }
-        /* The author line, and the date line right beneath it,
+        /* The author line, an optional venue line right after it, and the
+           date line right beneath whichever of those two ends up last,
            addAuthorAttribution() (lib/export.ts) inserts between the
            title and its own rule — their own margins here (not the
-           shared p rule above) keep the pair snug against the title and
+           shared p rule above) keep the group snug against the title and
            the rule on either side rather than each taking on a whole
-           paragraph's own spacing; the 20px gap down to the rule moves
-           onto whichever of the two actually ends up last (always
-           .print-date, since it's only ever added alongside .print-author,
-           never on its own). */
+           paragraph's own spacing; the 20px gap down to the rule always
+           sits on .print-date, since it's the one line addAuthorAttribution
+           always adds last, directly after whichever of .print-author/
+           .print-venue precedes it. */
         .print-author { margin: 2px 0 2px; font-style: italic; color: #444; }
+        .print-venue { margin: 2px 0 2px; font-style: italic; color: #444; font-size: 0.92em; }
         .print-date { margin: 0 0 20px; font-style: italic; color: #444; font-size: 0.92em; }
         .print-title-rule { border: none; border-top: 4px solid #1a1a1a; margin: 0 0 32px; }
         .print-section-rule { border: none; border-top: 1px solid #bbb; margin: 0 0 28px; }
