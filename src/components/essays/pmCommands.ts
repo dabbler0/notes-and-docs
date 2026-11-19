@@ -269,10 +269,16 @@ function insertEmptySection(state: EditorState, dispatch?: (tr: Transaction) => 
  * ever the split point — plus every block after it, nested subsections
  * included) is lifted out into a brand-new section of its own, inserted
  * right after the original; everything before the empty line stays
- * exactly where it was. A trailing empty paragraph splits the same way,
- * just landing on an empty second section rather than a populated one —
- * still a split, same as pressing Enter at the very end of an ordinary
- * document "splits" it into the existing text plus an empty line after.
+ * exactly where it was.
+ *
+ * One exception: an empty paragraph that's already the section's own
+ * *last* block (nothing after it at all, not even a nested subsection) —
+ * see `escapeTrailingEmptyParagraph`, below, for what happens instead.
+ * Every other empty paragraph, trailing or not, splits as described
+ * above — including one with only nested subsections after it (those get
+ * lifted into the new sibling along with everything else past the split
+ * point, same as any other mid-section content); "last block" means
+ * genuinely nothing follows, not merely no plain text.
  *
  * Declines (returning `false`, so the key falls through to whatever
  * `keymap(baseKeymap)`'s own default Enter chain would otherwise do —
@@ -292,7 +298,10 @@ function insertEmptySection(state: EditorState, dispatch?: (tr: Transaction) => 
  * section — the same "a sibling of the root doesn't exist, so a request
  * for one becomes a child of it instead" fallback `insertEmptySection`
  * above (and the schema's own doc comment) already establish for "new
- * section" from the root's own body text.
+ * section" from the root's own body text. The root has no *parent*
+ * section either, for the same structural reason, so its own trailing
+ * empty line has nowhere to "escape" to — it keeps splitting into a new
+ * child section instead, same as ever.
  */
 export function splitSectionIntoSiblings(state: EditorState, dispatch?: (tr: Transaction) => void): boolean {
   const { $from, empty } = state.selection
@@ -303,11 +312,14 @@ export function splitSectionIntoSiblings(state: EditorState, dispatch?: (tr: Tra
   if (sectionDepth < 1 || $from.node(sectionDepth).type.name !== 'section') return false
   if ($from.index(sectionDepth) < 2) return false // the first body block right after the title — nothing to keep before it
 
+  const isRoot = sectionDepth === 1
+  const isLastBlock = $from.index(sectionDepth) === $from.node(sectionDepth).childCount - 1
+  if (isLastBlock && !isRoot) return escapeTrailingEmptyParagraph(state, dispatch)
+
   if (dispatch) {
     const pStart = $from.before(paragraphDepth)
     const pEnd = $from.after(paragraphDepth)
     const sectionContentEnd = $from.end(sectionDepth)
-    const isRoot = sectionDepth === 1
 
     const tailSlice = state.doc.slice(pEnd, sectionContentEnd)
     const titleNode = essaySchema.nodes.section_title.create()
@@ -324,6 +336,50 @@ export function splitSectionIntoSiblings(state: EditorState, dispatch?: (tr: Tra
     tr.insert(insertPos, newSection)
     // Inside the new section (+1) and inside its own (empty) title (+1) — ready to type a name for it right away, same convention `insertEmptySection` above uses.
     tr.setSelection(TextSelection.near(tr.doc.resolve(insertPos + 2), 1))
+    dispatch(tr)
+  }
+  return true
+}
+
+/**
+ * `splitSectionIntoSiblings`'s own exception for a non-root section's
+ * trailing empty line: rather than splitting into a new sibling *section*
+ * with an empty body (all that would be left to put in it), this drops
+ * the empty paragraph and opens a fresh one right after the *current*
+ * section instead — a plain paragraph landing as the enclosing (parent)
+ * section's own next block, exactly as if the cursor had been moved
+ * "up and out" one level before pressing Enter. Reads as "Enter on a
+ * section's last blank line exits the section," the same shape plenty of
+ * nested-list editors give "Enter on an empty list item at the end of a
+ * sublist."
+ *
+ * Always structurally valid: a section's own parent is either another
+ * section or the document's single root section, and either one's own
+ * content model (`section_title block+`) already allows an ordinary
+ * paragraph as a block right after a nested section — never the
+ * document itself (content `"section"` only, no loose paragraphs at the
+ * very top level), which is exactly why `splitSectionIntoSiblings` above
+ * only ever calls this for a non-root section, one that's guaranteed to
+ * have a real section as its own parent.
+ */
+function escapeTrailingEmptyParagraph(state: EditorState, dispatch?: (tr: Transaction) => void): boolean {
+  if (dispatch) {
+    const $from = state.selection.$from
+    const paragraphDepth = $from.depth
+    const sectionDepth = paragraphDepth - 1
+    const pStart = $from.before(paragraphDepth)
+    const sectionContentEnd = $from.end(sectionDepth)
+    // The paragraph being removed is already the section's own last child
+    // (checked by the caller), so this delete's own end (the section's
+    // content end) lands exactly on the paragraph's own end too — nothing
+    // else in the section is touched.
+    const tr = state.tr.delete(pStart, sectionContentEnd)
+    // `pStart + 1`: right after the now-shortened section's own closing
+    // token — its own next-sibling slot in the parent, same position
+    // `splitSectionIntoSiblings` computes a new sibling *section* at.
+    const insertPos = pStart + 1
+    tr.insert(insertPos, essaySchema.nodes.paragraph.create())
+    tr.setSelection(TextSelection.near(tr.doc.resolve(insertPos + 1), 1))
     dispatch(tr)
   }
   return true

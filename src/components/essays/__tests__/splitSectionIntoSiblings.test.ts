@@ -91,7 +91,7 @@ describe('splitSectionIntoSiblings', () => {
     expect(selectionFrom).toBe(titlePos + 1)
   })
 
-  it('still produces a (now-empty) second section when nothing follows the empty line', () => {
+  it("escapes to the parent section instead of splitting, when the empty line is the section's own last block", () => {
     const doc = parse({
       type: 'doc',
       content: [section('root', '', [{ type: 'section', attrs: { id: 'mid' }, content: [{ type: 'section_title', content: [{ type: 'text', text: 'Middle' }] }, paragraph('before'), paragraph()] }])],
@@ -101,11 +101,110 @@ describe('splitSectionIntoSiblings', () => {
     expect(handled).toBe(true)
 
     const root = result.firstChild!
+    // No new section at all — still just [root_title, the "Middle" section], plus a new plain paragraph as root's own next block.
     expect(root.childCount).toBe(3)
+    const mid = root.child(1)
+    expect(mid.type.name).toBe('section')
+    expect(mid.attrs.id).toBe('mid')
+    expect(mid.childCount).toBe(2) // title + "before" — the trailing empty paragraph is gone, not kept
+    expect(mid.child(1).textContent).toBe('before')
+    const escaped = root.child(2)
+    expect(escaped.type.name).toBe('paragraph')
+    expect(escaped.content.size).toBe(0)
+  })
+
+  it('places the selection inside the newly-escaped paragraph', () => {
+    const doc = parse({
+      type: 'doc',
+      content: [section('root', '', [{ type: 'section', attrs: { id: 'mid' }, content: [{ type: 'section_title', content: [{ type: 'text', text: 'Middle' }] }, paragraph('before'), paragraph()] }])],
+    })
+    const pos = posOfEmptyParagraph(doc, 1)
+    const { doc: result, selectionFrom } = apply(doc, pos)
+
+    const root = result.firstChild!
+    const escaped = root.child(2)
+    let escapedPos = -1
+    result.descendants((node, nodePos) => {
+      if (escapedPos !== -1) return false
+      if (node === escaped) escapedPos = nodePos
+      return true
+    })
+    expect(selectionFrom).toBe(escapedPos + 1)
+  })
+
+  it('escapes to the nearest enclosing section specifically, not all the way out to the root, for a doubly-nested section', () => {
+    const doc = parse({
+      type: 'doc',
+      content: [
+        section('root', '', [
+          {
+            type: 'section',
+            attrs: { id: 'outer' },
+            content: [
+              { type: 'section_title', content: [{ type: 'text', text: 'Outer' }] },
+              paragraph('outer body'),
+              { type: 'section', attrs: { id: 'inner' }, content: [{ type: 'section_title', content: [{ type: 'text', text: 'Inner' }] }, paragraph('before'), paragraph()] },
+            ],
+          },
+        ]),
+      ],
+    })
+    const pos = posOfEmptyParagraph(doc, 1)
+    const { doc: result } = apply(doc, pos)
+
+    const root = result.firstChild!
+    const outer = root.child(1)
+    expect(outer.attrs.id).toBe('outer')
+    // outer: [title, "outer body", the (now-shortened) inner section, the escaped paragraph] — landed right after "inner," still inside "outer," not at the document root.
+    expect(outer.childCount).toBe(4)
+    const inner = outer.child(2)
+    expect(inner.attrs.id).toBe('inner')
+    expect(inner.childCount).toBe(2) // title + "before" only
+    const escaped = outer.child(3)
+    expect(escaped.type.name).toBe('paragraph')
+    expect(escaped.content.size).toBe(0)
+  })
+
+  it("still splits into a new sibling section when something follows the empty line — even just a nested subsection with no plain-text body of its own", () => {
+    const doc = parse({
+      type: 'doc',
+      content: [
+        section('root', '', [
+          {
+            type: 'section',
+            attrs: { id: 'mid' },
+            content: [
+              { type: 'section_title', content: [{ type: 'text', text: 'Middle' }] },
+              paragraph('before'),
+              paragraph(),
+              { type: 'section', attrs: { id: 'nested' }, content: [{ type: 'section_title', content: [] }] },
+            ],
+          },
+        ]),
+      ],
+    })
+    const pos = posOfEmptyParagraph(doc, 1)
+    const { doc: result } = apply(doc, pos)
+
+    const root = result.firstChild!
+    expect(root.childCount).toBe(3) // unchanged — no escape happened
     const sibling = root.child(2)
-    expect(sibling.childCount).toBe(2) // title + one (fresh) empty paragraph body
-    expect(sibling.child(1).type.name).toBe('paragraph')
-    expect(sibling.child(1).content.size).toBe(0)
+    expect(sibling.type.name).toBe('section')
+    expect(sibling.child(1).attrs.id).toBe('nested')
+  })
+
+  it("still produces a new child section for the document root's own trailing empty line — the root has no parent to escape to", () => {
+    const doc = parse({ type: 'doc', content: [section('root', '', [paragraph('before'), paragraph()])] })
+    const pos = posOfEmptyParagraph(doc, 1)
+    const { handled, doc: result } = apply(doc, pos)
+    expect(handled).toBe(true)
+
+    expect(result.childCount).toBe(1) // still exactly one top-level doc child
+    const root = result.firstChild!
+    expect(root.childCount).toBe(3) // root_title + "before" + the new empty child section
+    const child = root.child(2)
+    expect(child.type.name).toBe('section')
+    expect(child.childCount).toBe(2) // empty title + one fresh empty paragraph body
   })
 
   it('moves nested subsections that came after the split point wholesale into the new sibling', () => {
