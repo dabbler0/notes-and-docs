@@ -473,6 +473,28 @@ describe('migrateCommentThreadsIntoDoc', () => {
     expect(result.doc).toEqual(doc)
   })
 
+  it("still migrates every other essay when one essay's own live doc fails to parse at all (not just a broken history chain), since the whole per-essay body is one try/catch", async () => {
+    const { docs } = createFakeBackend()
+    const goodDoc = docWithAnchor('c1')
+    const goodEssay = essay({ id: 'good', title: 'Good Essay', rootNodeId: 'root', doc: goodDoc })
+    goodEssay.comments = [{ id: 'c1', parentId: null, sectionId: 'root', anchorKind: 'text', anchorText: 'Some text.', body: '<p>A note.</p>', resolved: false, createdAt: 1, updatedAt: 2 }]
+    await docs.put('essays', goodEssay)
+
+    // An unknown node type makes essayDocFromJSON throw outright — the
+    // literal "comment_text" substring is just what gets this essay past
+    // this migration's own "does it need folding at all" gate.
+    const badEssay = essay({ id: 'bad', title: 'Bad Essay', rootNodeId: 'root', doc: { type: 'doc', content: [{ type: 'not_a_real_node_type', comment_text: true }] } })
+    await docs.put('essays', badEssay)
+
+    await expect(migrateCommentThreadsIntoDoc.run(docs)).resolves.toBeUndefined() // doesn't throw
+
+    const goodResult = (await docs.list<Essay>('essays')).find((e) => e.id === 'good')!
+    expect(goodResult.comments).toBeUndefined()
+    // The bad essay's own doc is left exactly as it was — not silently corrupted further.
+    const badResult = (await docs.list<Essay>('essays')).find((e) => e.id === 'bad')!
+    expect(badResult.doc).toEqual(badEssay.doc)
+  })
+
   it('skips an essay that was never migrated to doc at all', async () => {
     const { docs } = createFakeBackend()
     await docs.put('essays', essay({ id: 'e1', title: 'My Essay', rootNodeId: 'root' }))

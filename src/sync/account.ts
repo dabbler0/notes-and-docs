@@ -26,8 +26,13 @@ function loadAll(): StoredKeys {
   try {
     const raw = localStorage.getItem(STORAGE_KEY)
     if (raw) return JSON.parse(raw)
-  } catch {
-    /* corrupt value — treat as empty */
+  } catch (err) {
+    // Treating this as "no key cached" is the safe fallback (worst case,
+    // syncing needs a re-import of the key from another device — nothing
+    // is deleted or overwritten), but losing every locally-cached key at
+    // once is exactly the kind of thing that should leave a trace rather
+    // than silently looking like "this device just isn't signed in."
+    console.warn('Sync: stored local encryption keys were corrupt — treating as none cached', err)
   }
   return {}
 }

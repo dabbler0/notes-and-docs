@@ -208,8 +208,13 @@ function loadCursors(): Cursors {
   try {
     const raw = localStorage.getItem(CURSORS_KEY)
     if (raw) return JSON.parse(raw)
-  } catch {
-    /* corrupt value — resync from scratch */
+  } catch (err) {
+    // Safe either way — falling back to a full resync below can't lose
+    // data, just costs a wider re-check — but still logged rather than
+    // silently resetting with no trace, on the chance this is a symptom
+    // of something worth noticing (every other sync-state reset in this
+    // module logs the same way).
+    console.warn('Sync: stored cursors were corrupt — resyncing from scratch', err)
   }
   return { pushedAt: 0, pulledAt: 0 }
 }
@@ -222,8 +227,11 @@ function loadPushedBlobIds(): Set<string> {
   try {
     const raw = localStorage.getItem(PUSHED_BLOBS_KEY)
     if (raw) return new Set(JSON.parse(raw))
-  } catch {
-    /* corrupt value */
+  } catch (err) {
+    // Safe either way (just means a handful of already-pushed PDFs get
+    // redundantly re-uploaded once, harmlessly) — logged for the same
+    // reason `loadCursors`' own identical fallback is, just above.
+    console.warn('Sync: stored pushed-blob-ids were corrupt — treating as empty', err)
   }
   return new Set()
 }
@@ -1228,10 +1236,17 @@ async function runSyncPassNow(onProgress?: (message: string) => void): Promise<S
       const plain = await decryptBytes(cryptoKey, iv, b64ToBuf(base64))
       await backend.blobs.put(source.pdfBlobId!, new Blob([plain], { type: 'application/pdf' }))
       result.pulled.blobs++
-    } catch {
-      // Not uploaded from anywhere yet, or a transient network error —
-      // the next pass will pick it up; a source without its PDF yet is
-      // still usable (bibtex/notes are already there).
+    } catch (err) {
+      // The one truly expected case — nothing uploaded there yet — already
+      // takes the `continue` above instead of reaching here; by the time
+      // this fires it's a real failure (timeout, a corrupt/undecryptable
+      // chunk, …), just one this pass deliberately doesn't fail over: a
+      // source without its PDF yet is still usable (bibtex/notes are
+      // already there), and the next pass retries it on its own. Still
+      // logged, not swallowed outright, so a *persistent* failure here is
+      // at least visible in the console instead of silently never
+      // finishing for this PDF.
+      console.error(`Sync: failed downloading ${source.pdfFileName || source.pdfBlobId}`, err)
     }
   }
 

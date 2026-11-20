@@ -66,7 +66,11 @@ export function getStoredFirebaseConfig(): StoredFirebaseConfig | null {
     // 'manual' so auto-detection never overwrites a config someone
     // already deliberately pasted in under the old version of this file.
     return validateFirebaseConfig(parsed) ? null : { config: parsed as FirebaseWebConfig, source: 'manual' }
-  } catch {
+  } catch (err) {
+    // Treated as "nothing stored" (falls back to auto-detecting the
+    // hosting project's own config) — safe, but still worth a trace
+    // rather than silently looking like this was never configured.
+    console.warn('Sync: stored Firebase config was corrupt — falling back to auto-detection', err)
     return null
   }
 }

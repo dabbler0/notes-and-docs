@@ -8,7 +8,7 @@ import { createLocalKey, exportBundleFor, forgetLocalKey, getLocalKey, importLoc
 import { onAuthChange, signInWithGoogle, signOutOfGoogle } from '../../sync/firebaseClient'
 import { getAccountMeta, setAccountMeta, wipeRemoteAccountData, type AccountMeta } from '../../sync/accountMeta'
 import { computeKeyFingerprint, importKeyFromBundle, isKeyBundle, type KeyBundle } from '../../lib/crypto'
-import { isAutoSyncEnabled, setAutoSyncEnabled, syncNow } from '../../sync/autoSync'
+import { getLastAutoSyncStatus, isAutoSyncEnabled, onAutoSyncStatus, setAutoSyncEnabled, syncNow } from '../../sync/autoSync'
 import { discardLocalChanges, listCorruptedRemoteEssayHistories, repairRemoteEssayHistory, resetSyncState, sweepOrphanedRemoteBlobs, type SyncResult } from '../../sync/syncEngine'
 import { bundleToQrDataUrl } from '../../sync/qr'
 import { downloadBlob } from '../../lib/download'
@@ -545,8 +545,15 @@ function safeParse(text: string): unknown {
   }
 }
 
+/** Seeds the dialog's own status with whatever the background auto-sync loop already knows, rather than always opening to a blank "idle" state that hides an already-failing background pass until the user happens to click "Sync now" themselves. */
+function initialStatusFromAutoSync(): SyncStatus {
+  const last = getLastAutoSyncStatus()
+  if (!last) return { kind: 'idle', message: '' }
+  return { kind: last.ok ? 'ok' : 'error', message: last.message }
+}
+
 function AccountPanel({ uid, onKeyForgotten }: { uid: string; onKeyForgotten: () => void }) {
-  const [status, setStatus] = useState<SyncStatus>({ kind: 'idle', message: '' })
+  const [status, setStatus] = useState<SyncStatus>(initialStatusFromAutoSync)
   const [autoSync, setAutoSync] = useState(isAutoSyncEnabled())
   const [showQr, setShowQr] = useState(false)
   const [qrDataUrl, setQrDataUrl] = useState('')
@@ -570,6 +577,20 @@ function AccountPanel({ uid, onKeyForgotten }: { uid: string; onKeyForgotten: ()
     const timer = setInterval(() => setElapsedSec(Math.round((Date.now() - syncStartRef.current) / 1000)), 1000)
     return () => clearInterval(timer)
   }, [status.kind])
+
+  // Keeps this dialog's own status current with the background auto-sync
+  // loop even while it's open — a tick every 30s that this dialog would
+  // otherwise have no way to know happened, success or failure. Never
+  // overwrites a manual "Sync now"/repair/sweep actually in flight right
+  // now (`handleSync` etc. already set `status` themselves, synchronously
+  // around their own await).
+  useEffect(
+    () =>
+      onAutoSyncStatus((autoStatus) => {
+        setStatus((prev) => (prev.kind === 'running' ? prev : { kind: autoStatus.ok ? 'ok' : 'error', message: autoStatus.message }))
+      }),
+    [],
+  )
 
   async function handleSync() {
     syncStartRef.current = Date.now()

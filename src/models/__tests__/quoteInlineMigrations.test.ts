@@ -136,6 +136,23 @@ describe('removeQuoteInlineMarks — essays', () => {
     expect(badCommits).toHaveLength(2)
     expect(badCommits.find((c) => c.id === 'bc0')!.patch).toContain('original text')
   })
+
+  it("still migrates every other essay when one essay's own live doc itself throws (not just its history), since the whole per-essay body is one try/catch", async () => {
+    const { docs } = createFakeBackend()
+    await docs.put('essays', essay({ id: 'good', title: 'Good Essay', rootNodeId: 'root', doc: docWithQuoteInline() }))
+    // A BigInt anywhere inside the doc makes JSON.stringify throw — the
+    // same failure mode a genuinely malformed stored doc could hit, with
+    // no need to actually reproduce real-world corruption to exercise it.
+    await docs.put('essays', essay({ id: 'bad', title: 'Bad Essay', rootNodeId: 'root', doc: { type: 'doc', content: [{ type: 'paragraph', weird: 1n }] } }))
+
+    await expect(removeQuoteInlineMarks.run(docs)).resolves.toBeUndefined() // doesn't throw
+
+    const goodResult = (await docs.list<Essay>('essays')).find((e) => e.id === 'good')!
+    expect(JSON.stringify(goodResult.doc)).not.toContain('quote_inline')
+    // The bad essay's own doc is left exactly as it was — not silently corrupted further.
+    const badResult = (await docs.list<Essay>('essays')).find((e) => e.id === 'bad')!
+    expect((badResult.doc as { content: [{ weird: bigint }] }).content[0].weird).toBe(1n)
+  })
 })
 
 describe('removeQuoteInlineMarks — slideshows', () => {

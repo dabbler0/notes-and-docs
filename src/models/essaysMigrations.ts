@@ -207,29 +207,29 @@ async function migratePMDocumentsRun(ctx: DocStore): Promise<void> {
 
   for (const essay of essays) {
     if (essay.deleted || essay.doc) continue
-    const nodes = nodesByEssay.get(essay.id) ?? []
-    const migrated = migrateEssay(essay, nodes, sources)
-    essay.doc = migrated.doc
-    essay.comments = migrated.comments
-    await ctx.put(ESSAYS, essay)
+    // The *whole* per-essay body — not just the history-reconstruction
+    // part below — is wrapped in one try/catch: anything about one
+    // essay's own already-corrupted data (a malformed node tree, just as
+    // much as an unreconstructable `essayHistory` chain) must never take
+    // the whole account's migration down with it, or block every other
+    // essay — and every other collection/device — from migrating and
+    // syncing behind it. See `models/essayHistoryRepair.ts` for the
+    // manual "reset this essay's history and move on" recovery this
+    // leaves for the history case specifically.
+    try {
+      const nodes = nodesByEssay.get(essay.id) ?? []
+      const migrated = migrateEssay(essay, nodes, sources)
+      essay.doc = migrated.doc
+      essay.comments = migrated.comments
+      await ctx.put(ESSAYS, essay)
 
-    const oldCommits = (await ctx.list<EssayCommitEntry>(ESSAY_HISTORY)).filter((c) => c.essayId === essay.id)
-    if (oldCommits.length > 0) {
-      // A commit chain that's already corrupted (a patch that doesn't
-      // apply — `lib/essayHistory.ts`'s own `applyPatch`) must never take
-      // the whole account's migration down with it: this essay's own live
-      // `doc` above is already safely migrated and written by this point,
-      // so skipping just its unreconstructable history (left in its old,
-      // pre-migration shape — unreadable either way, nothing lost by
-      // leaving it alone) lets every other essay still go through. See
-      // `models/essayHistoryRepair.ts` for the manual "reset this essay's
-      // history and move on" recovery this leaves for the user.
-      try {
+      const oldCommits = (await ctx.list<EssayCommitEntry>(ESSAY_HISTORY)).filter((c) => c.essayId === essay.id)
+      if (oldCommits.length > 0) {
         const { commits } = migrateEssayHistory(essay.title, oldCommits, sources)
         for (const commit of commits) await ctx.put(ESSAY_HISTORY, commit)
-      } catch (err) {
-        console.error(`migratePMDocuments: skipping essay history for "${essay.title}" (${essay.id}) — its commit chain failed to reconstruct`, err)
       }
+    } catch (err) {
+      console.error(`migratePMDocuments: skipping essay "${essay.title}" (${essay.id}) — failed to migrate`, err)
     }
   }
 }
@@ -295,27 +295,27 @@ async function migrateCommentThreadsIntoDocRun(ctx: DocStore): Promise<void> {
     const hasLegacyCommentText = JSON.stringify(essay.doc).includes('"comment_text"')
     if (!hadComments && !hasLegacyCommentText) continue
 
-    let liveDoc = essayDocFromJSON(essay.doc)
-    if (hadComments) {
-      const { doc: folded } = foldCommentsIntoDoc(liveDoc, essay.comments!)
-      liveDoc = folded
-    }
-    essay.doc = liveDoc.toJSON()
-    delete essay.comments
-    await ctx.put(ESSAYS, essay)
+    // The *whole* per-essay body is wrapped in one try/catch, same
+    // "never let one essay's already-corrupted data (its doc, or its
+    // history) block everyone else's migration" reasoning as
+    // `migratePMDocumentsRun`'s own identical try/catch above.
+    try {
+      let liveDoc = essayDocFromJSON(essay.doc)
+      if (hadComments) {
+        const { doc: folded } = foldCommentsIntoDoc(liveDoc, essay.comments!)
+        liveDoc = folded
+      }
+      essay.doc = liveDoc.toJSON()
+      delete essay.comments
+      await ctx.put(ESSAYS, essay)
 
-    const oldCommits = (await ctx.list<EssayCommitEntry>(ESSAY_HISTORY)).filter((c) => c.essayId === essay.id)
-    if (oldCommits.length > 0) {
-      // Same "never let one essay's already-corrupted chain block
-      // everyone else's migration" reasoning as `migratePMDocumentsRun`'s
-      // own identical try/catch, above — this essay's live `doc` is
-      // already folded and written by this point regardless.
-      try {
+      const oldCommits = (await ctx.list<EssayCommitEntry>(ESSAY_HISTORY)).filter((c) => c.essayId === essay.id)
+      if (oldCommits.length > 0) {
         const { commits } = refoldEssayHistoryComments(oldCommits)
         for (const commit of commits) await ctx.put(ESSAY_HISTORY, commit)
-      } catch (err) {
-        console.error(`migrateCommentThreadsIntoDoc: skipping essay history for "${essay.title}" (${essay.id}) — its commit chain failed to reconstruct`, err)
       }
+    } catch (err) {
+      console.error(`migrateCommentThreadsIntoDoc: skipping essay "${essay.title}" (${essay.id}) — failed to migrate`, err)
     }
   }
 }

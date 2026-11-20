@@ -61,35 +61,38 @@ async function removeQuoteInlineMarksRun(ctx: DocStore): Promise<void> {
   const allCommits = await ctx.list<EssayCommitEntry>(ESSAY_HISTORY)
   for (const essay of essays) {
     if (essay.deleted) continue
-    if (essay.doc) {
-      const stripped = stripQuoteInlineMark(essay.doc)
-      if (JSON.stringify(stripped) !== JSON.stringify(essay.doc)) {
-        essay.doc = stripped
-        await ctx.put(ESSAYS, essay)
-      }
-    }
-    // An already-corrupted commit chain (a patch that doesn't apply) must
-    // never block every other essay's migration, or the whole account's
-    // sync, with it — this essay's live `doc` above is already stripped
-    // and written by this point regardless; its own history is just left
-    // in its old, pre-migration shape (unreadable either way, nothing
-    // lost by leaving it alone). See `models/essayHistoryRepair.ts` for
-    // the manual "reset this essay's history and move on" recovery this
-    // leaves for the user.
+    // The *whole* per-essay body — not just the history reconstruction —
+    // is wrapped in one try/catch: an already-corrupted commit chain (a
+    // patch that doesn't apply), or anything else about one essay's own
+    // data, must never block every other essay's migration, or the whole
+    // account's sync, with it. See `models/essayHistoryRepair.ts` for the
+    // manual "reset this essay's history and move on" recovery the
+    // history case specifically leaves for the user.
     try {
+      if (essay.doc) {
+        const stripped = stripQuoteInlineMark(essay.doc)
+        if (JSON.stringify(stripped) !== JSON.stringify(essay.doc)) {
+          essay.doc = stripped
+          await ctx.put(ESSAYS, essay)
+        }
+      }
       await stripEssayHistory(ctx, essay.id, allCommits)
     } catch (err) {
-      console.error(`removeQuoteInlineMarks: skipping essay history for "${essay.title}" (${essay.id}) — its commit chain failed to reconstruct`, err)
+      console.error(`removeQuoteInlineMarks: skipping essay "${essay.title}" (${essay.id}) — failed to migrate`, err)
     }
   }
 
   const slideshows = await ctx.list<Slideshow>(SLIDESHOWS)
   for (const deck of slideshows) {
     if (deck.deleted || !deck.doc) continue
-    const stripped = stripQuoteInlineMark(deck.doc)
-    if (JSON.stringify(stripped) !== JSON.stringify(deck.doc)) {
-      deck.doc = stripped
-      await ctx.put(SLIDESHOWS, deck)
+    try {
+      const stripped = stripQuoteInlineMark(deck.doc)
+      if (JSON.stringify(stripped) !== JSON.stringify(deck.doc)) {
+        deck.doc = stripped
+        await ctx.put(SLIDESHOWS, deck)
+      }
+    } catch (err) {
+      console.error(`removeQuoteInlineMarks: skipping slideshow "${deck.title}" (${deck.id}) — failed to migrate`, err)
     }
   }
 }

@@ -36,8 +36,11 @@ export function loadPendingBlobDeletions(): Set<string> {
   try {
     const raw = localStorage.getItem(PENDING_KEY)
     if (raw) return new Set(JSON.parse(raw))
-  } catch {
-    /* corrupt value — nothing more to lose than retrying a sweep later */
+  } catch (err) {
+    // Safe either way (nothing more to lose than an orphaned remote blob
+    // that "Sweep orphaned PDFs" can still find and clean up later) — but
+    // still logged rather than silently starting over with no trace.
+    console.warn('Sync: stored pending-blob-deletions were corrupt — treating as none pending', err)
   }
   return new Set()
 }

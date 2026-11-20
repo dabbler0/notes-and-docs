@@ -55,6 +55,15 @@ async function tick() {
     await runSyncPass()
     lastStatus = { at: Date.now(), ok: true, message: 'Synced' }
   } catch (err) {
+    // This used to be silent beyond `lastStatus` itself — invisible unless
+    // something was actively subscribed via `onAutoSyncStatus` at the
+    // exact moment this ran (nothing was, until `App.tsx`'s own sync-
+    // status badge). A background tick failing every 30s with genuinely
+    // no trace anywhere (no console entry, no visible indicator) is
+    // exactly the kind of silent failure sync should never have — this
+    // is the floor: always at least in the console, regardless of
+    // whether any UI happens to be listening right now.
+    console.error('Auto-sync failed', err)
     lastStatus = { at: Date.now(), ok: false, message: err instanceof Error ? err.message : String(err) }
   }
   listeners.forEach((fn) => fn(lastStatus!))
