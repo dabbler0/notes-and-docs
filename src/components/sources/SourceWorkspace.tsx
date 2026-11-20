@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'preact/hooks'
 import { Modal } from '../Modal'
 import { ReaderMode } from './ReaderMode'
 import { displayAuthors, displayTitle, formatBibtex, formatCitation, parseBibtex, formatPageRangeInput, parsePageRangeInput, pageNote } from '../../lib/bibtex'
+import { inlineMarkdownToHtml } from '../../lib/export'
 import { downloadBlob, filenameFor } from '../../lib/download'
 import { EpubExportDialog } from './EpubExportDialog'
 import { loadPdf } from '../../lib/pdf'
@@ -537,7 +538,7 @@ export function SourceWorkspace({
         </>
       ) : (
         <p className="pane-content" style={{ margin: 0, fontSize: 13.5, lineHeight: 1.5 }}>
-          {formatCitation(source.bibtex)}
+          <span dangerouslySetInnerHTML={{ __html: inlineMarkdownToHtml(formatCitation(source.bibtex)) }} />
           {source.bibtex.fields.url && (
             <>
               {' '}

@@ -314,7 +314,7 @@ function renderBibliographySlide(citedIds: string[], sources: Map<string, Source
   const entries = citedIds
     .map((sid) => sources.get(sid))
     .filter((s): s is Source => !!s)
-    .map((s) => `<p class="bibliography-entry">${escapeHtml(formatCitation(s.bibtex))}</p>`)
+    .map((s) => `<p class="bibliography-entry">${inlineMarkdownToHtml(formatCitation(s.bibtex))}</p>`)
     .join('')
   return {
     html: `<div class="slide-inner slide-layout-content">

@@ -18,6 +18,14 @@ function minimalDoc(): PMNode {
 
 const noSources = new Map<string, Source>()
 
+function citationParagraph(sourceId: string) {
+  return { type: 'paragraph', content: [{ type: 'citation', attrs: { sourceId, note: null } }] }
+}
+
+function sourceWithUrl(id: string, url: string): Source {
+  return { id, bibtex: { type: 'misc', key: id, fields: { title: 'A Cited Work', url } }, comment: '', pageHtml: [], pageCount: 0, contentBytes: 0, createdAt: 0, updatedAt: 0 }
+}
+
 describe('serializeDeck — title slide', () => {
   it('renders the deck title and author, with no subtitle div at all when none is given', () => {
     const slides = serializeDeck(minimalDoc(), noSources, 'My Deck', 'Jane Author')
@@ -132,5 +140,17 @@ describe('serializeDeck — inline quotes', () => {
     expect(slideWithQuote.html).not.toContain('<span class="slide-quote-inline">')
     expect(slideWithQuote.html).not.toContain('<q>')
     expect(slideWithQuote.html).not.toContain('</q>')
+  })
+})
+
+describe('serializeDeck — references slide', () => {
+  it("renders a cited source's URL as a real clickable link, not literal Markdown link syntax", () => {
+    const sources = new Map<string, Source>([['s1', sourceWithUrl('s1', 'https://example.com/paper')]])
+    const doc = PMNode.fromJSON(essaySchema, { type: 'doc', content: [section('root', '', [citationParagraph('s1')])] })
+    const slides = serializeDeck(doc, sources, 'My Deck', 'Jane Author')
+    const references = slides[slides.length - 1]
+    expect(references.html).toContain('References')
+    expect(references.html).toContain('<a href="https://example.com/paper" target="_blank" rel="noopener">https://example.com/paper</a>')
+    expect(references.html).not.toContain('[https://example.com/paper](https://example.com/paper)')
   })
 })
