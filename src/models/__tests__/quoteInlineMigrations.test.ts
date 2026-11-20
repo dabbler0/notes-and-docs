@@ -108,6 +108,34 @@ describe('removeQuoteInlineMarks — essays', () => {
     await docs.put('essays', essay({ id: 'e1', rootNodeId: 'root' }))
     await expect(removeQuoteInlineMarks.run(docs)).resolves.toBeUndefined()
   })
+
+  it("still strips every other essay's history when one essay's own commit history is corrupted (unreconstructable), rather than throwing and blocking the whole run", async () => {
+    const { docs } = createFakeBackend()
+    const goodDoc = docWithQuoteInline()
+    const goodText = pmSnapshotText({ title: 'Good Essay', doc: goodDoc })
+    await docs.put('essayHistory', { id: 'gc0', essayId: 'good', seq: 0, createdAt: 0, kind: 'migrated' as const, patch: diffSnapshots('', goodText) })
+    await docs.put('essays', essay({ id: 'good', title: 'Good Essay', rootNodeId: 'root', doc: goodDoc }))
+
+    await docs.put('essays', essay({ id: 'bad', title: 'Bad Essay', rootNodeId: 'root', doc: docWithQuoteInline() }))
+    await docs.put('essayHistory', { id: 'bc0', essayId: 'bad', seq: 0, createdAt: 0, kind: 'commit', patch: diffSnapshots('', 'original text') })
+    await docs.put('essayHistory', { id: 'bc1', essayId: 'bad', seq: 1, createdAt: 1, kind: 'commit', patch: diffSnapshots('does not match', 'v2') })
+
+    await expect(removeQuoteInlineMarks.run(docs)).resolves.toBeUndefined() // doesn't throw
+
+    // The good essay's own live doc and history both still get the mark stripped.
+    const goodResult = (await docs.list<Essay>('essays')).find((e) => e.id === 'good')!
+    expect(JSON.stringify(goodResult.doc)).not.toContain('quote_inline')
+    const goodCommits = (await docs.list<EssayCommitEntry>('essayHistory')).filter((c) => c.essayId === 'good')
+    expect(reconstructSnapshotText(goodCommits, 0)).not.toContain('quote_inline')
+
+    // The bad essay's own live doc is still stripped (that part never touches history)...
+    const badResult = (await docs.list<Essay>('essays')).find((e) => e.id === 'bad')!
+    expect(JSON.stringify(badResult.doc)).not.toContain('quote_inline')
+    // ...but its history is left exactly as it was — still broken, not silently dropped.
+    const badCommits = (await docs.list<EssayCommitEntry>('essayHistory')).filter((c) => c.essayId === 'bad')
+    expect(badCommits).toHaveLength(2)
+    expect(badCommits.find((c) => c.id === 'bc0')!.patch).toContain('original text')
+  })
 })
 
 describe('removeQuoteInlineMarks — slideshows', () => {

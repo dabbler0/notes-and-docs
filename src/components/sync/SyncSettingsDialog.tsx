@@ -9,7 +9,7 @@ import { onAuthChange, signInWithGoogle, signOutOfGoogle } from '../../sync/fire
 import { getAccountMeta, setAccountMeta, wipeRemoteAccountData, type AccountMeta } from '../../sync/accountMeta'
 import { computeKeyFingerprint, importKeyFromBundle, isKeyBundle, type KeyBundle } from '../../lib/crypto'
 import { isAutoSyncEnabled, setAutoSyncEnabled, syncNow } from '../../sync/autoSync'
-import { discardLocalChanges, resetSyncState, sweepOrphanedRemoteBlobs, type SyncResult } from '../../sync/syncEngine'
+import { discardLocalChanges, listCorruptedRemoteEssayHistories, repairRemoteEssayHistory, resetSyncState, sweepOrphanedRemoteBlobs, type SyncResult } from '../../sync/syncEngine'
 import { bundleToQrDataUrl } from '../../sync/qr'
 import { downloadBlob } from '../../lib/download'
 import { confirmDialog } from '../../lib/confirm'
@@ -559,6 +559,11 @@ function AccountPanel({ uid, onKeyForgotten }: { uid: string; onKeyForgotten: ()
   // step's own messages are.
   const [elapsedSec, setElapsedSec] = useState(0)
   const syncStartRef = useRef(0)
+  // `null` — never scanned yet this session. `[]` — scanned, found none.
+  // Otherwise the essays whose own commit history is broken, as of the
+  // last scan — see `handleScanCorrupted`/`handleRepairEssayHistory`.
+  const [corruptedHistories, setCorruptedHistories] = useState<{ essayId: string; title: string }[] | null>(null)
+  const [repairingEssayId, setRepairingEssayId] = useState<string | null>(null)
 
   useEffect(() => {
     if (status.kind !== 'running') return
@@ -652,6 +657,55 @@ function AccountPanel({ uid, onKeyForgotten }: { uid: string; onKeyForgotten: ()
       if (hadErrors) parts.push(`${result.errors.length} failed — try again`)
       setStatus({ kind: hadErrors ? 'error' : 'ok', message: `${hadErrors ? '' : '✓ '}Sweep complete — ${parts.join(', ')}.` })
     } catch (err) {
+      setStatus({ kind: 'error', message: err instanceof Error ? err.message : String(err) })
+    }
+  }
+
+  /**
+   * "Failed migrating this account's remote data…" on "Sync now" — the
+   * one error a corrupted `essayHistory` chain can throw — now names the
+   * essay, but this is still the actual fix: a full remote scan for every
+   * essay whose own history is unreconstructable, so one can be picked
+   * and repaired below without needing to already know which essay it is.
+   */
+  async function handleScanCorrupted() {
+    setStatus({ kind: 'running', message: 'Scanning remote essay history for corruption…' })
+    try {
+      const found = await listCorruptedRemoteEssayHistories()
+      setCorruptedHistories(found)
+      setStatus({ kind: 'ok', message: found.length === 0 ? 'No corrupted essay history found.' : `Found ${found.length} essay${found.length === 1 ? '' : 's'} with corrupted history — see below.` })
+    } catch (err) {
+      setStatus({ kind: 'error', message: err instanceof Error ? err.message : String(err) })
+    }
+  }
+
+  /**
+   * Discards `essayId`'s own broken commit history and replaces it with a
+   * single fresh commit from its current content — `models/
+   * essayHistoryRepair.ts`'s own `resetEssayHistory`, run against this
+   * account's remote data specifically (`syncEngine.ts`'s own
+   * `repairRemoteEssayHistory`). There's no automatic merge to offer here
+   * (see that module's own doc comment on why) — this is the manual "give
+   * up on the old history, keep the essay, move on" call, made once per
+   * broken essay. Re-runs a normal sync afterward, since this was very
+   * possibly the exact thing that was blocking it.
+   */
+  async function handleRepairEssayHistory(essayId: string, title: string) {
+    if (
+      !(await confirmDialog(
+        `Reset the commit history for "${title}"? Its current content is completely untouched — only its history of past versions/undo points is discarded, replaced with a single fresh starting point from what it has right now. This can't be undone.`,
+        { confirmLabel: 'Reset history', danger: true },
+      ))
+    )
+      return
+    setRepairingEssayId(essayId)
+    try {
+      await repairRemoteEssayHistory(essayId)
+      setCorruptedHistories((prev) => prev?.filter((e) => e.essayId !== essayId) ?? null)
+      setRepairingEssayId(null)
+      await handleSync()
+    } catch (err) {
+      setRepairingEssayId(null)
       setStatus({ kind: 'error', message: err instanceof Error ? err.message : String(err) })
     }
   }
@@ -761,6 +815,28 @@ function AccountPanel({ uid, onKeyForgotten }: { uid: string; onKeyForgotten: ()
         <button className="btn btn-sm btn-ghost btn-danger" disabled={status.kind === 'running'} onClick={handleSweep}>
           Sweep orphaned PDFs from the cloud
         </button>
+      </div>
+
+      <div className="sync-reset-box" style={{ marginTop: 12 }}>
+        <p className="muted" style={{ marginTop: 0 }}>
+          If "Sync now" ever fails with "Failed migrating this account's remote data… patch does not apply…", one essay's own commit history has become unreadable (a historical bug, or two devices racing on the same essay)
+          — there's no way to automatically reconcile it, but you can scan for it and reset just that essay's history (its actual content is never touched, only its past versions/undo points):
+        </p>
+        <button className="btn btn-sm btn-ghost btn-danger" disabled={status.kind === 'running'} onClick={handleScanCorrupted}>
+          Scan for corrupted essay history
+        </button>
+        {corruptedHistories && corruptedHistories.length > 0 && (
+          <div className="sync-row" style={{ marginTop: 8, flexDirection: 'column', alignItems: 'stretch', gap: 6 }}>
+            {corruptedHistories.map((e) => (
+              <div key={e.essayId} className="sync-row" style={{ justifyContent: 'space-between' }}>
+                <span>{e.title || 'Untitled essay'}</span>
+                <button className="btn btn-sm btn-ghost btn-danger" disabled={repairingEssayId === e.essayId} onClick={() => handleRepairEssayHistory(e.essayId, e.title)}>
+                  {repairingEssayId === e.essayId ? 'Resetting…' : 'Reset history'}
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
       </div>
     </div>
   )

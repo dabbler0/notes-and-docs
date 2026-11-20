@@ -93,6 +93,7 @@ import { backend } from '../storage'
 import { clearPendingBlobDeletions, loadPendingBlobDeletions } from '../storage/pendingBlobDeletions'
 import { notifySyncApplied } from './syncEvents'
 import type { Essay, Source } from '../models/types'
+import { findCorruptedEssayHistories, resetEssayHistory } from '../models/essayHistoryRepair'
 import { mergeEssayContent, deepEqual, type EssayMergeSnapshot } from '../lib/essayMerge'
 import { addToGraveyard } from '../models/graveyardRepo'
 import { essaySchema, essayDocFromJSON } from '../lib/pmSchema'
@@ -1002,7 +1003,16 @@ async function runSyncPassNow(onProgress?: (message: string) => void): Promise<S
       })
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err)
-      throw new Error(`Failed migrating this account's remote data to the current version: ${message}`, { cause: err })
+      // Every migration that rewrites a per-essay `essayHistory` chain now
+      // catches and skips a corrupted one internally rather than letting
+      // it reach here (see `models/essaysMigrations.ts`'s and `models/
+      // quoteInlineMigrations.ts`'s own try/catches around exactly this),
+      // so this should be rare — but if some other migration step still
+      // throws the same "patch does not apply" error, or an older,
+      // not-yet-updated build of this app is what hit it, point at the
+      // actual fix rather than leaving someone stuck on a bare message.
+      const hint = message.includes('patch does not apply') ? ' Open Sync settings and use "Scan for corrupted essay history" to find and reset the essay responsible.' : ''
+      throw new Error(`Failed migrating this account's remote data to the current version: ${message}${hint}`, { cause: err })
     }
   }
 
@@ -1322,4 +1332,55 @@ export async function sweepOrphanedRemoteBlobs(onProgress?: (message: string) =>
   clearPendingBlobDeletions(succeeded)
 
   return { deleted: succeeded.length, errors }
+}
+
+/** Same sign-in/key/fingerprint checks `runSyncPassNow` itself opens with — every exported function here that reads or writes remote data needs them, not just the main sync pass. */
+async function remoteDocStoreForCurrentUser(onProgress?: (message: string) => void): Promise<DocStore> {
+  const user = currentUser()
+  if (!user) throw new Error('Sign in with Google first — open Sync settings.')
+  const uid = user.uid
+  const localKey = await getLocalKey(uid)
+  if (!localKey) throw new Error('No encryption key set up for this Google account on this device yet — open Sync settings.')
+  const meta = await getAccountMeta(uid)
+  if (meta && meta.keyFingerprint !== localKey.fingerprint) {
+    throw new Error(
+      "The encryption key on this device doesn't match the one this account was already set up with elsewhere. Re-import the correct key (QR code or key file) from Sync settings — or, only as a last resort, reset the account there.",
+    )
+  }
+  return createFirestoreDocStore(firestoreDb(), uid, localKey.cryptoKey, onProgress)
+}
+
+/**
+ * Scans this account's *remote* essays for one whose own `essayHistory`
+ * commit chain is broken (`models/essayHistoryRepair.ts`'s own
+ * `findCorruptedEssayHistories`) — the thing that otherwise makes
+ * `runSyncPassNow`'s own migration step above throw "patch does not apply
+ * to the given text" and block every sync for this account from then on,
+ * for every device, until it's fixed. Read-only; pair with
+ * `repairRemoteEssayHistory` below to actually fix whatever this finds.
+ * A full scan (every essay, every commit), so meant to be run on demand
+ * from Sync settings, not as part of every ordinary pass — same "manual
+ * and occasional, not routine" cost tradeoff `sweepOrphanedRemoteBlobs`
+ * above already makes for the same reason (real, paid read volume on a
+ * large account).
+ */
+export async function listCorruptedRemoteEssayHistories(): Promise<{ essayId: string; title: string }[]> {
+  const remoteStore = await remoteDocStoreForCurrentUser()
+  return findCorruptedEssayHistories(remoteStore)
+}
+
+/**
+ * The actual fix for one essay `listCorruptedRemoteEssayHistories` found —
+ * discards its remote commit history entirely and replaces it with a
+ * single fresh commit from whatever its current remote content already
+ * is (`models/essayHistoryRepair.ts`'s own `resetEssayHistory`, run
+ * against the *remote* store specifically, which is where the corruption
+ * actually lives and where `runSyncPassNow`'s migration step reads from).
+ * Once this returns, the next "Sync now" no longer trips over this essay
+ * — its migration step can finally get past it, for this device and every
+ * other one.
+ */
+export async function repairRemoteEssayHistory(essayId: string): Promise<void> {
+  const remoteStore = await remoteDocStoreForCurrentUser()
+  await resetEssayHistory(remoteStore, essayId)
 }

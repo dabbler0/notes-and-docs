@@ -315,6 +315,31 @@ describe('migratePMDocuments', () => {
     const { docs } = createFakeBackend()
     await expect(migratePMDocuments.run(docs)).resolves.toBeUndefined()
   })
+
+  it("still migrates every other essay's doc/history when one essay's own commit history is corrupted (unreconstructable), rather than throwing and blocking the whole run", async () => {
+    const { docs } = createFakeBackend()
+    const rootGood = node({ id: 'rootGood', essayId: 'good', draftContent: '<p>v1</p>', versions: [] })
+    await docs.put('essays', essay({ id: 'good', title: 'Good Essay', rootNodeId: 'rootGood' }))
+    await docs.put('nodes', rootGood)
+
+    const rootBad = node({ id: 'rootBad', essayId: 'bad', draftContent: '<p>v1</p>', versions: [] })
+    await docs.put('essays', essay({ id: 'bad', title: 'Bad Essay', rootNodeId: 'rootBad' }))
+    await docs.put('nodes', rootBad)
+    await docs.put('essayHistory', { id: 'bc0', essayId: 'bad', seq: 0, createdAt: 0, kind: 'commit', patch: diffSnapshots('', 'original text') })
+    await docs.put('essayHistory', { id: 'bc1', essayId: 'bad', seq: 1, createdAt: 1, kind: 'commit', patch: diffSnapshots('does not match', 'v2') })
+
+    await expect(migratePMDocuments.run(docs)).resolves.toBeUndefined() // doesn't throw
+
+    const goodEssay = (await docs.list<Essay>('essays')).find((e) => e.id === 'good')!
+    expect(goodEssay.doc).toBeDefined()
+    const badEssay = (await docs.list<Essay>('essays')).find((e) => e.id === 'bad')!
+    expect(badEssay.doc).toBeDefined() // its own live doc still migrated fine
+
+    // Its history is left exactly as it was — still in its old (pre-migration) shape, still broken — not silently dropped or corrupted further.
+    const badCommits = (await docs.list<EssayCommitEntry>('essayHistory')).filter((c) => c.essayId === 'bad')
+    expect(badCommits).toHaveLength(2)
+    expect(badCommits.find((c) => c.id === 'bc0')!.patch).toContain('original text')
+  })
 })
 
 describe('migrateCommentThreadsIntoDoc', () => {
@@ -373,6 +398,41 @@ describe('migrateCommentThreadsIntoDoc', () => {
       if (n.type.name === 'comment_thread' && n.attrs.id === 'c1') found = true
     })
     expect(found).toBe(true)
+  })
+
+  it("still refolds every other essay's history when one essay's own commit history is corrupted (unreconstructable), rather than throwing and blocking the whole run", async () => {
+    const { docs } = createFakeBackend()
+    const goodDoc = docWithAnchor('c1')
+    const goodComments = [{ id: 'c1', parentId: null, sectionId: 'root', anchorKind: 'text' as const, anchorText: 'Some text.', body: 'A note.', resolved: false, createdAt: 1, updatedAt: 2 }]
+    const goodText = pmSnapshotText({ title: 'Good Essay', doc: goodDoc, comments: goodComments } as never)
+    await docs.put('essayHistory', { id: 'gc0', essayId: 'good', seq: 0, createdAt: 0, kind: 'migrated' as const, patch: diffSnapshots('', goodText) })
+    const goodEssay = essay({ id: 'good', title: 'Good Essay', rootNodeId: 'root', doc: goodDoc })
+    goodEssay.comments = goodComments
+    await docs.put('essays', goodEssay)
+
+    const badDoc = docWithAnchor('c2')
+    const badComments = [{ id: 'c2', parentId: null, sectionId: 'root', anchorKind: 'text' as const, anchorText: 'Some text.', body: 'Another note.', resolved: false, createdAt: 1, updatedAt: 2 }]
+    const badEssay = essay({ id: 'bad', title: 'Bad Essay', rootNodeId: 'root', doc: badDoc })
+    badEssay.comments = badComments
+    await docs.put('essays', badEssay)
+    await docs.put('essayHistory', { id: 'bc0', essayId: 'bad', seq: 0, createdAt: 0, kind: 'commit', patch: diffSnapshots('', 'original text') })
+    await docs.put('essayHistory', { id: 'bc1', essayId: 'bad', seq: 1, createdAt: 1, kind: 'commit', patch: diffSnapshots('does not match', 'v2') })
+
+    await expect(migrateCommentThreadsIntoDoc.run(docs)).resolves.toBeUndefined() // doesn't throw
+
+    // The good essay's own live doc and history both still get refolded.
+    const goodResult = (await docs.list<Essay>('essays')).find((e) => e.id === 'good')!
+    expect(goodResult.comments).toBeUndefined()
+    const goodCommits = (await docs.list<EssayCommitEntry>('essayHistory')).filter((c) => c.essayId === 'good')
+    expect(reconstructSnapshotText(goodCommits, 0)).not.toContain('"comments"')
+
+    // The bad essay's own live doc is still folded (that part never touches history)...
+    const badResult = (await docs.list<Essay>('essays')).find((e) => e.id === 'bad')!
+    expect(badResult.comments).toBeUndefined()
+    // ...but its history is left exactly as it was — still broken, not silently dropped.
+    const badCommits = (await docs.list<EssayCommitEntry>('essayHistory')).filter((c) => c.essayId === 'bad')
+    expect(badCommits).toHaveLength(2)
+    expect(badCommits.find((c) => c.id === 'bc0')!.patch).toContain('original text')
   })
 
   it("converts a stray legacy comment_text-marked span into a real comment_thread node, even when essay.comments is already empty (a document saved during that mark's own short-lived window, with no matching Comment record)", async () => {

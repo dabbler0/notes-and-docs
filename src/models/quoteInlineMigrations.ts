@@ -68,7 +68,19 @@ async function removeQuoteInlineMarksRun(ctx: DocStore): Promise<void> {
         await ctx.put(ESSAYS, essay)
       }
     }
-    await stripEssayHistory(ctx, essay.id, allCommits)
+    // An already-corrupted commit chain (a patch that doesn't apply) must
+    // never block every other essay's migration, or the whole account's
+    // sync, with it — this essay's live `doc` above is already stripped
+    // and written by this point regardless; its own history is just left
+    // in its old, pre-migration shape (unreadable either way, nothing
+    // lost by leaving it alone). See `models/essayHistoryRepair.ts` for
+    // the manual "reset this essay's history and move on" recovery this
+    // leaves for the user.
+    try {
+      await stripEssayHistory(ctx, essay.id, allCommits)
+    } catch (err) {
+      console.error(`removeQuoteInlineMarks: skipping essay history for "${essay.title}" (${essay.id}) — its commit chain failed to reconstruct`, err)
+    }
   }
 
   const slideshows = await ctx.list<Slideshow>(SLIDESHOWS)
