@@ -21,17 +21,18 @@ import { essaySchema } from '../../lib/pmSchema'
  * insertion point automatically whenever the replaced content needs to be
  * a block, exactly the way pressing Enter mid-paragraph does.
  */
+/** The raw rules themselves, not just the plugin wrapping them — exported so a test can exercise one directly (`rule.handler(state, match, start, end)`, the exact same call `prosemirror-inputrules`' own plugin makes) without needing a real `EditorView` to drive `handleTextInput` through. */
+export const mathInputRules: InputRule[] = [
+  new InputRule(/\$\$$/, (state, _match, start, end) => {
+    return state.tr.replaceWith(start, end, essaySchema.nodes.math_inline.create({ latex: '' }))
+  }),
+  new InputRule(/\\\[$/, (state, _match, start, end) => {
+    return state.tr.replaceWith(start, end, essaySchema.nodes.math_block.create({ latex: '' }))
+  }),
+]
+
 export function createMathInputRules(): Plugin {
-  return inputRules({
-    rules: [
-      new InputRule(/\$\$$/, (state, _match, start, end) => {
-        return state.tr.replaceWith(start, end, essaySchema.nodes.math_inline.create({ latex: '' }))
-      }),
-      new InputRule(/\\\[$/, (state, _match, start, end) => {
-        return state.tr.replaceWith(start, end, essaySchema.nodes.math_block.create({ latex: '' }))
-      }),
-    ],
-  })
+  return inputRules({ rules: mathInputRules })
 }
 
 /**
@@ -46,16 +47,17 @@ export function createMathInputRules(): Plugin {
  * instead of starting a new nested one, via its own join-predicate
  * argument.
  */
+/** Same reasoning as `mathInputRules`, above — the raw rules, for direct testing. */
+export const listInputRules: InputRule[] = [
+  wrappingInputRule(/^\s*([-+*])\s$/, essaySchema.nodes.bullet_list),
+  wrappingInputRule(
+    /^(\d+)\.\s$/,
+    essaySchema.nodes.ordered_list,
+    (match) => ({ order: Number(match[1]) }),
+    (match, node) => node.childCount + node.attrs.order === Number(match[1]),
+  ),
+]
+
 export function createListInputRules(): Plugin {
-  return inputRules({
-    rules: [
-      wrappingInputRule(/^\s*([-+*])\s$/, essaySchema.nodes.bullet_list),
-      wrappingInputRule(
-        /^(\d+)\.\s$/,
-        essaySchema.nodes.ordered_list,
-        (match) => ({ order: Number(match[1]) }),
-        (match, node) => node.childCount + node.attrs.order === Number(match[1]),
-      ),
-    ],
-  })
+  return inputRules({ rules: listInputRules })
 }

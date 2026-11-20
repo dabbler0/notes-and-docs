@@ -128,7 +128,15 @@ const nodes: Record<string, NodeSpec> = {
   },
 
   blockquote: {
-    content: 'paragraph+',
+    // `bullet_list`/`ordered_list` alongside `paragraph` — not the whole
+    // `block` group (no nested blockquotes/math/further sections inside a
+    // quote) — specifically so the "- "/"1. " list-input-rule shortcuts
+    // (`pmInputRules.ts`'s own `createListInputRules`) have somewhere
+    // valid to wrap a paragraph into when typed on a line that's already
+    // inside a blockquote; `insertQuoteBlock`/`insertQuoteInline`
+    // (pmCommands.ts) and every existing stored blockquote still fit this
+    // exactly as well as the old paragraph-only content did.
+    content: '(paragraph | bullet_list | ordered_list)+',
     group: 'block',
     defining: true,
     parseDOM: [{ tag: 'blockquote' }],

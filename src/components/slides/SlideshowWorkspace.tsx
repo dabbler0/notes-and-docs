@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'preact/hooks'
 import type { Node as PMNode } from 'prosemirror-model'
 import type { EditorState, Transaction } from 'prosemirror-state'
 import { toggleMark } from 'prosemirror-commands'
+import { wrapInList } from 'prosemirror-schema-list'
 import 'reveal.js/dist/reveal.css'
 import './slideTheme.css'
 import { cloneSlideshow, getSlideshow, saveSlideshow } from '../../models/slideshowsRepo'
@@ -269,6 +270,13 @@ export function SlideshowWorkspace({ slideshowId, onBack, embedded = false }: { 
             </button>
             <button className="btn btn-sm icon-btn-toolbar" title="Underline (Mod-U)" onMouseDown={(e) => e.preventDefault()} onClick={() => runCommand(toggleMark(essaySchema.marks.underline))}>
               <Icon name="underline" />
+            </button>
+            <span className="toolbar-divider" />
+            <button className="btn btn-sm icon-btn-toolbar" title="Bulleted list" onMouseDown={(e) => e.preventDefault()} onClick={() => runCommand(wrapInList(essaySchema.nodes.bullet_list))}>
+              <Icon name="list-ul" />
+            </button>
+            <button className="btn btn-sm icon-btn-toolbar" title="Numbered list" onMouseDown={(e) => e.preventDefault()} onClick={() => runCommand(wrapInList(essaySchema.nodes.ordered_list))}>
+              <Icon name="list-ol" />
             </button>
             <span className="toolbar-divider" />
             <button className="btn btn-sm icon-btn-toolbar" title="Cite a source (Mod-Shift-K)" onMouseDown={(e) => e.preventDefault()} onClick={() => setShowCitation(true)}>

@@ -465,9 +465,15 @@ function blockToMarkdownPm(node: PMNode, fnCtx: PmMarkdownFootnoteCtx): string {
     case 'paragraph':
       return inlineContentToMarkdownPm(node, fnCtx)
     case 'blockquote': {
-      const lines: string[] = []
-      node.forEach((para) => lines.push(inlineContentToMarkdownPm(para, fnCtx)))
-      return lines.map((l) => `> ${l}`).join('\n> \n')
+      // Each child is its own block (a plain paragraph, or — now that
+      // the schema allows it — a list typed via the "- "/"1. " shortcuts
+      // right inside the quote), recursed through this same function
+      // rather than assumed to always be a single-line paragraph; a
+      // list's own markdown is already multi-line, so every one of
+      // *those* lines needs the leading `> ` too, not just one per child.
+      const blocks: string[] = []
+      node.forEach((child) => blocks.push(blockToMarkdownPm(child, fnCtx)))
+      return blocks.map((block) => block.split('\n').map((l) => `> ${l}`).join('\n')).join('\n> \n')
     }
     case 'bullet_list':
     case 'ordered_list':
@@ -1466,9 +1472,15 @@ function blockToLatexPm(node: PMNode, ctx: PmLatexCtx): string {
     case 'paragraph':
       return inlineContentToLatexPm(node, ctx)
     case 'blockquote': {
-      const lines: string[] = []
-      node.forEach((para) => lines.push(inlineContentToLatexPm(para, ctx)))
-      return `\\begin{quote}\n${lines.join('\n\n')}\n\\end{quote}`
+      // Each child recursed through this same function, same reasoning
+      // as `blockToMarkdownPm`'s own identical change — a child can now
+      // be a list (the "- "/"1. " shortcuts work inside a quote), not
+      // only ever a paragraph. `quote` happily holds a nested `itemize`/
+      // `enumerate` as-is, no extra line-prefixing needed the way
+      // Markdown's own `> ` convention requires.
+      const blocks: string[] = []
+      node.forEach((child) => blocks.push(blockToLatexPm(child, ctx)))
+      return `\\begin{quote}\n${blocks.join('\n\n')}\n\\end{quote}`
     }
     case 'bullet_list':
     case 'ordered_list':
