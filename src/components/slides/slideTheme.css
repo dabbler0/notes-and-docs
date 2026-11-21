@@ -196,6 +196,7 @@
 /* ---- Title layout ---- */
 
 .slide-layout-title {
+  position: relative;
   align-items: center;
   justify-content: center;
   text-align: center;
@@ -239,6 +240,17 @@
   font-size: 14px;
   color: var(--slide-muted);
   margin-top: 2px;
+}
+
+/** `Slideshow.authorNote`, when `authorNotePlacement === 'title'` — pinned to the title slide's own bottom edge (`.slide-layout-title`'s own `position: relative`), small enough to read as a footnote-register aside rather than competing with the author/date block above it. See `renderTitleSlide`'s own doc comment (`slideSerializer.ts`) for when this renders instead of the dedicated Acknowledgements slide. */
+.slide-layout-title .deck-author-note {
+  position: absolute;
+  left: 64px;
+  right: 64px;
+  bottom: 32px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--slide-muted);
 }
 
 /* ---- Acknowledgements layout ---- */

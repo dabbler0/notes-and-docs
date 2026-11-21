@@ -260,8 +260,15 @@ export interface SerializedSlide {
  * — a specific picked date, or, when absent, today's own date at render
  * time — so that line always renders whenever the author line does, same
  * as the essay print export's `.print-date`.
+ *
+ * `authorNote`, when given (non-blank, and only ever passed at all when
+ * `Slideshow.authorNotePlacement === 'title'` — see `serializeDeck`),
+ * renders as small print pinned to the slide's own bottom edge
+ * (`.deck-author-note`), through the same `inlineMarkdownToHtml` every
+ * other rendering of this note already uses — the title-slide counterpart
+ * to `renderAcknowledgementsSlide`'s whole dedicated slide.
  */
-function renderTitleSlide(deckTitle: string, deckSubtitle: string, authorName: string, affiliation?: string, venue?: string, date?: string): SerializedSlide {
+function renderTitleSlide(deckTitle: string, deckSubtitle: string, authorName: string, affiliation?: string, venue?: string, date?: string, authorNote?: string): SerializedSlide {
   const trimmedAffiliation = affiliation?.trim()
   const authorLine = trimmedAffiliation ? `${authorName}, ${trimmedAffiliation}` : authorName
   const trimmedVenue = venue?.trim()
@@ -276,33 +283,43 @@ function renderTitleSlide(deckTitle: string, deckSubtitle: string, authorName: s
           ? `<div class="deck-authors">${escapeHtml(authorLine)}</div>${trimmedVenue ? `<div class="deck-venue">${escapeHtml(trimmedVenue)}</div>` : ''}<div class="deck-date">${escapeHtml(attributionDateText(date))}</div>`
           : ''
       }
+      ${authorNote ? `<div class="deck-author-note">${authorNoteLinesToHtml(authorNote)}</div>` : ''}
     </div>`,
     notes: '',
   }
 }
 
 /**
- * A dedicated slide for `Slideshow.authorNote` — generated fresh (never
- * stored as real document content) and inserted right before the closing
- * References slide, only when the note is actually non-blank. Each line
- * runs through the same `inlineMarkdownToHtml` (`lib/export.ts`) the
- * essay-side footnote version of this same note already uses, rejoined
- * with `<br>` — a literal `\n` the author typed into `AuthorNoteDialog`'s
- * plain `<textarea>` is otherwise just whitespace HTML collapses away,
- * same reasoning that function's own doc comment gives.
+ * A literal `\n` the author typed into `AuthorNoteDialog`'s plain
+ * `<textarea>` is otherwise just whitespace HTML collapses away — split on
+ * it and rejoin with `<br>`, each line run through the same
+ * `inlineMarkdownToHtml` (`lib/export.ts`) the essay-side footnote version
+ * of this same note already uses. Shared by both places a non-blank
+ * `Slideshow.authorNote` can render (`renderTitleSlide`,
+ * `renderAcknowledgementsSlide`), per `Slideshow.authorNotePlacement`.
  */
-function renderAcknowledgementsSlide(authorNote: string): SerializedSlide {
-  const body = authorNote
+function authorNoteLinesToHtml(authorNote: string): string {
+  return authorNote
     .split('\n')
     .map((line) => inlineMarkdownToHtml(line))
     .join('<br>')
+}
+
+/**
+ * A dedicated slide for `Slideshow.authorNote` — generated fresh (never
+ * stored as real document content) and inserted right before the closing
+ * References slide, only when the note is actually non-blank and
+ * `Slideshow.authorNotePlacement` is `'slide'` (the default) rather than
+ * `'title'` — see `serializeDeck`.
+ */
+function renderAcknowledgementsSlide(authorNote: string): SerializedSlide {
   return {
     html: `<div class="slide-inner slide-layout-content">
       <div class="slide-eyebrow"></div>
       <h2 class="slide-title-display">Acknowledgements</h2>
       <hr class="title-rule-thin" />
       <div class="slide-body-wrap">
-        <div class="slide-body acknowledgements-body"><p>${body}</p></div>
+        <div class="slide-body acknowledgements-body"><p>${authorNoteLinesToHtml(authorNote)}</p></div>
       </div>
     </div>`,
     notes: '',
@@ -365,10 +382,14 @@ export function serializeDeck(
   deckTitle: string,
   authorName: string,
   deckSubtitle = '',
-  opts: { affiliation?: string; venue?: string; date?: string; authorNote?: string } = {},
+  opts: { affiliation?: string; venue?: string; date?: string; authorNote?: string; authorNotePlacement?: 'slide' | 'title' } = {},
 ): SerializedSlide[] {
   const citedIds = collectCitedSourceIds(doc)
-  const slides: SerializedSlide[] = [renderTitleSlide(deckTitle, deckSubtitle, authorName, opts.affiliation, opts.venue, opts.date)]
+  const authorNote = opts.authorNote?.trim()
+  const notePlacedOnTitle = !!authorNote && opts.authorNotePlacement === 'title'
+  const slides: SerializedSlide[] = [
+    renderTitleSlide(deckTitle, deckSubtitle, authorName, opts.affiliation, opts.venue, opts.date, notePlacedOnTitle ? authorNote : undefined),
+  ]
 
   let acc: SlideAccumulator | null = null
   let fragmentIndex = -1
@@ -450,8 +471,7 @@ export function serializeDeck(
   walkSection(doc.firstChild!, null, true)
   flush()
 
-  const authorNote = opts.authorNote?.trim()
-  if (authorNote) slides.push(renderAcknowledgementsSlide(authorNote))
+  if (authorNote && !notePlacedOnTitle) slides.push(renderAcknowledgementsSlide(authorNote))
   slides.push(renderBibliographySlide(citedIds, sources))
   return slides
 }

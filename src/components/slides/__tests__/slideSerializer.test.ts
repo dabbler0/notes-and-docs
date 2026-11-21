@@ -122,6 +122,23 @@ describe('serializeDeck — acknowledgements slide', () => {
     const ack = slides.find((s) => s.html.includes('Acknowledgements'))!
     expect(ack.html).toContain('&lt;b&gt;bold&lt;/b&gt; &amp; more')
   })
+
+  it("renders the note as small print on the title slide instead, with no Acknowledgements slide at all, when authorNotePlacement is 'title'", () => {
+    const slides = serializeDeck(minimalDoc(), noSources, 'My Deck', 'Jane Author', '', { authorNote: 'Thanks to A and B.', authorNotePlacement: 'title' })
+    expect(slides).toHaveLength(3) // title, body, references — no acknowledgements slide
+    expect(slides[0].html).toContain('<div class="deck-author-note">Thanks to A and B.</div>')
+    expect(slides.some((s) => s.html.includes('Acknowledgements'))).toBe(false)
+  })
+
+  it("still renders the dedicated Acknowledgements slide, not the title slide, when authorNotePlacement is 'slide' or absent", () => {
+    const explicit = serializeDeck(minimalDoc(), noSources, 'My Deck', 'Jane Author', '', { authorNote: 'Thanks to A and B.', authorNotePlacement: 'slide' })
+    expect(explicit[0].html).not.toContain('deck-author-note')
+    expect(explicit.some((s) => s.html.includes('Acknowledgements'))).toBe(true)
+
+    const implicit = serializeDeck(minimalDoc(), noSources, 'My Deck', 'Jane Author', '', { authorNote: 'Thanks to A and B.' })
+    expect(implicit[0].html).not.toContain('deck-author-note')
+    expect(implicit.some((s) => s.html.includes('Acknowledgements'))).toBe(true)
+  })
 })
 
 describe('serializeDeck — inline quotes', () => {

@@ -115,6 +115,13 @@ export function SlideshowWorkspace({ slideshowId, onBack, embedded = false }: { 
     setDeck({ ...deck })
   }
 
+  async function saveAuthorNotePlacement(placement: 'slide' | 'title') {
+    if (!deck) return
+    deck.authorNotePlacement = placement
+    await saveSlideshow(deck)
+    setDeck({ ...deck })
+  }
+
   /** For `view`-taking commands (`insertCitation`, `insertSlideBreak`, …), which already manage focus/selection themselves. */
   function runView(command: (view: EditorView) => void) {
     const view = viewRef.current
@@ -185,7 +192,16 @@ export function SlideshowWorkspace({ slideshowId, onBack, embedded = false }: { 
           className="btn btn-sm"
           disabled={!doc}
           title="Open every slide as its own printable page in a new tab, then open the browser's print dialog — choose “Save as PDF.”"
-          onClick={() => doc && exportSlideshowPdf(doc, sources.current, title, getAuthorName(), subtitle, { affiliation: includeAffiliation ? getAuthorAffiliation() : undefined, venue, date, authorNote: deck.authorNote })}
+          onClick={() =>
+            doc &&
+            exportSlideshowPdf(doc, sources.current, title, getAuthorName(), subtitle, {
+              affiliation: includeAffiliation ? getAuthorAffiliation() : undefined,
+              venue,
+              date,
+              authorNote: deck.authorNote,
+              authorNotePlacement: deck.authorNotePlacement,
+            })
+          }
         >
           ⬇ <span className="btn-label">Export PDF</span>
         </button>
@@ -215,11 +231,22 @@ export function SlideshowWorkspace({ slideshowId, onBack, embedded = false }: { 
         {/* Shows the globally-configured author name (lib/authorPreference.ts)
             — not editable in place, just a launcher for the real editable
             field, this deck's own `authorNote` (AuthorNoteDialog). A
-            non-blank note gets its own Acknowledgements slide, right before
-            References (`slideSerializer.ts`'s own doc comment) — same chip,
-            same launcher pattern `EssayWorkspace.tsx` already uses, just
-            rendered differently once it actually reaches a slide. */}
-        <button className="chip" style={{ border: 'none', cursor: 'pointer' }} title="Thanks/acknowledgements/disclosures — shown on their own Acknowledgements slide, right before References — click to edit" onClick={() => setShowAuthorNote(true)}>
+            non-blank note renders per `authorNotePlacement` — its own
+            Acknowledgements slide, right before References, or small print
+            at the bottom of the title slide (`slideSerializer.ts`'s own doc
+            comment) — same chip, same launcher pattern `EssayWorkspace.tsx`
+            already uses, just rendered differently once it actually reaches
+            a slide. */}
+        <button
+          className="chip"
+          style={{ border: 'none', cursor: 'pointer' }}
+          title={
+            deck.authorNotePlacement === 'title'
+              ? 'Thanks/acknowledgements/disclosures — shown as small print at the bottom of the title slide — click to edit'
+              : 'Thanks/acknowledgements/disclosures — shown on their own Acknowledgements slide, right before References — click to edit'
+          }
+          onClick={() => setShowAuthorNote(true)}
+        >
           <Icon name="footnote" size={13} /> {getAuthorName() || 'No author name set'}
         </button>
         {/* Where this was/will be presented (a conference or workshop
@@ -359,6 +386,7 @@ export function SlideshowWorkspace({ slideshowId, onBack, embedded = false }: { 
           deckVenue={venue}
           deckDate={date}
           deckAuthorNote={deck.authorNote}
+          deckAuthorNotePlacement={deck.authorNotePlacement}
           onClose={() => setPresenting(false)}
         />
       )}
@@ -369,7 +397,9 @@ export function SlideshowWorkspace({ slideshowId, onBack, embedded = false }: { 
       {showAuthorNote && (
         <AuthorNoteDialog
           initialValue={deck.authorNote ?? ''}
-          description="Thanks, acknowledgements, or disclosures for this deck — shown on their own Acknowledgements slide, right before References. Leave blank for no such slide."
+          description="Thanks, acknowledgements, or disclosures for this deck. Leave blank for none."
+          placement={deck.authorNotePlacement ?? 'slide'}
+          onPlacementChange={saveAuthorNotePlacement}
           onSave={saveAuthorNote}
           onClose={() => setShowAuthorNote(false)}
         />

@@ -543,12 +543,24 @@ export interface Slideshow {
    * the same role, same inline-Markdown allowance (`*bold*`/`_italic_`/
    * `[text](url)`), and the same `AuthorNoteDialog` editor `Essay.authorNote`
    * already has, just rendered differently: a slide deck has no footnote
-   * mechanism to attach it to, so a non-blank note gets its own whole
-   * "Acknowledgements" slide instead (`slideSerializer.ts`'s
-   * `renderAcknowledgementsSlide`), inserted right before the deck's own
-   * closing References slide. Absent or blank means no such slide at all.
+   * mechanism to attach it to, so a non-blank note instead renders per
+   * `authorNotePlacement` below (`slideSerializer.ts`'s `serializeDeck`).
+   * Absent or blank means nothing is rendered at all, regardless of
+   * `authorNotePlacement`.
    */
   authorNote?: string
+  /**
+   * Where a non-blank `authorNote` (above) actually renders — `'slide'`
+   * (also the default when absent, so a deck saved before this field
+   * existed keeps its old behavior unchanged): its own dedicated
+   * "Acknowledgements" slide, right before the closing References slide
+   * (`slideSerializer.ts`'s `renderAcknowledgementsSlide`); `'title'`:
+   * small print at the bottom of the title slide instead
+   * (`renderTitleSlide`'s own `authorNote` parameter), with no separate
+   * Acknowledgements slide at all. Picked from `SlideshowWorkspace`'s own
+   * `AuthorNoteDialog` launch, alongside the note text itself.
+   */
+  authorNotePlacement?: 'slide' | 'title'
   /**
    * The `Project` (see its own doc comment) this deck is currently grouped
    * under, if any — same field, same meaning, same "drag one card onto

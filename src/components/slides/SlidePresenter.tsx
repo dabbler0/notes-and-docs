@@ -23,6 +23,7 @@ export function SlidePresenter({
   deckVenue,
   deckDate,
   deckAuthorNote,
+  deckAuthorNotePlacement,
   onClose,
 }: {
   doc: PMNode
@@ -35,8 +36,10 @@ export function SlidePresenter({
   /** `Slideshow.venue` — shown right before `deckDate` on the title slide. */
   deckVenue?: string
   deckDate?: string
-  /** `Slideshow.authorNote` — a non-blank value gets its own Acknowledgements slide, right before References (`slideSerializer.ts`'s own doc comment). */
+  /** `Slideshow.authorNote` — a non-blank value renders per `deckAuthorNotePlacement` below (`slideSerializer.ts`'s own doc comment). */
   deckAuthorNote?: string
+  /** `Slideshow.authorNotePlacement` — `'slide'` (its own Acknowledgements slide, right before References) or `'title'` (small print at the bottom of the title slide). */
+  deckAuthorNotePlacement?: 'slide' | 'title'
   onClose: () => void
 }) {
   const revealRootRef = useRef<HTMLDivElement>(null)
@@ -44,7 +47,13 @@ export function SlidePresenter({
 
   useEffect(() => {
     if (!revealRootRef.current || !slidesRef.current) return
-    const slides = serializeDeck(doc, sources, deckTitle, authorName, deckSubtitle, { affiliation: deckAffiliation, venue: deckVenue, date: deckDate, authorNote: deckAuthorNote })
+    const slides = serializeDeck(doc, sources, deckTitle, authorName, deckSubtitle, {
+      affiliation: deckAffiliation,
+      venue: deckVenue,
+      date: deckDate,
+      authorNote: deckAuthorNote,
+      authorNotePlacement: deckAuthorNotePlacement,
+    })
     slidesRef.current.innerHTML = slides.map((s) => `<section>${s.html}</section>`).join('')
 
     const deck = new Reveal(revealRootRef.current, {

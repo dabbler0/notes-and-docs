@@ -193,7 +193,7 @@ const SENSITIVE_FIELDS: Record<SyncedCollection, string[]> = {
   graveyard: ['html', 'nodeTitle'],
   bookmarks: ['label', 'page'],
   todos: ['text', 'deferredUntil'],
-  slideshows: ['title', 'doc'],
+  slideshows: ['title', 'authorNote', 'doc'],
 }
 
 const CURSORS_KEY = 'marginal.sync.cursors.v1'
